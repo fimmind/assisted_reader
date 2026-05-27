@@ -152,7 +152,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className={step === 'quiz' ? 'sm:max-w-[720px]' : 'sm:max-w-[500px]'}>
         {step === 'setup' ? (
           <>
             <DialogHeader>
@@ -201,24 +201,22 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
                 Batch {activeQuiz?.currentBatch ?? 1} of {getTotalBatches(activeQuiz?.totalWords ?? totalWords, activeQuiz?.batchSize ?? batchSize)}
               </DialogTitle>
             </DialogHeader>
-            <div className="py-4 max-h-[60vh] overflow-y-auto">
-              <div className="grid gap-4">
+            <div className="py-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                 {(activeQuiz?.currentWords ?? []).map((word) => (
-                  <div key={word} className="flex items-center space-x-3 p-3 rounded-md hover:bg-muted/50 transition-colors">
+                  <div key={word} className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors">
                     <Checkbox
                       id={`quiz-word-${word}`}
                       checked={checkedWords.has(word)}
                       onCheckedChange={() => toggleWord(word)}
                       className="border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
                     />
-                    <div className="grid gap-1.5 leading-none">
-                      <label
-                        htmlFor={`quiz-word-${word}`}
-                        className="text-lg font-serif font-medium leading-none cursor-pointer"
-                      >
-                        {word}
-                      </label>
-                    </div>
+                    <label
+                      htmlFor={`quiz-word-${word}`}
+                      className="text-sm font-serif font-medium leading-tight cursor-pointer break-words"
+                    >
+                      {word}
+                    </label>
                   </div>
                 ))}
               </div>
