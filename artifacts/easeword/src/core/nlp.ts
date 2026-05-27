@@ -84,6 +84,7 @@ function tagWithCompromise(sentence: string, nlp: NlpLike): TaggedTerm[] {
 }
 
 export function splitSentences(text: string): string[] {
+  SENTENCE_RE.lastIndex = 0;
   const sentences: string[] = [];
   const matches = text.matchAll(SENTENCE_RE);
   for (const match of matches) {
@@ -92,6 +93,7 @@ export function splitSentences(text: string): string[] {
       sentences.push(chunk);
     }
   }
+  SENTENCE_RE.lastIndex = 0;
   return sentences;
 }
 
@@ -271,12 +273,71 @@ function extractConjugatedAdjective(doc: ReturnType<NlpLike>): string {
   return values[0] ?? '';
 }
 
+function buildRuleBasedLemmaCandidates(normalized: string): string[] {
+  const candidates: string[] = [];
+  const esPluralSuffixes = ['ches', 'shes', 'xes', 'zes', 'sses', 'oes'];
+  const doubledDropAllowed = new Set(['b', 'd', 'g', 'l', 'm', 'n', 'p', 'r', 't']);
+
+  if (normalized.endsWith("'s") && normalized.length > 3) {
+    candidates.push(normalized.slice(0, -2));
+  }
+
+  if (normalized.endsWith('ies') && normalized.length > 4) {
+    candidates.push(`${normalized.slice(0, -3)}y`);
+  }
+
+  if (
+    normalized.endsWith('es')
+    && normalized.length > 4
+    && esPluralSuffixes.some((suffix) => normalized.endsWith(suffix))
+  ) {
+    candidates.push(normalized.slice(0, -2));
+  }
+
+  if (normalized.endsWith('s') && !normalized.endsWith('ss') && normalized.length > 3) {
+    candidates.push(normalized.slice(0, -1));
+  }
+
+  if (normalized.endsWith('ied') && normalized.length > 4) {
+    candidates.push(`${normalized.slice(0, -3)}y`);
+  }
+
+  if (normalized.endsWith('ed') && normalized.length > 3) {
+    const stem = normalized.slice(0, -2);
+    candidates.push(stem);
+    if (normalized.length > 4) {
+      candidates.push(normalized.slice(0, -1));
+    }
+    if (stem.length > 2) {
+      const tail = stem.slice(-2);
+      if (tail[0] === tail[1] && doubledDropAllowed.has(tail[1])) {
+        candidates.push(stem.slice(0, -1));
+      }
+    }
+  }
+
+  if (normalized.endsWith('ing') && normalized.length > 5) {
+    const stem = normalized.slice(0, -3);
+    candidates.push(stem);
+    candidates.push(`${stem}e`);
+    if (stem.length > 2) {
+      const tail = stem.slice(-2);
+      if (tail[0] === tail[1] && doubledDropAllowed.has(tail[1])) {
+        candidates.push(stem.slice(0, -1));
+      }
+    }
+  }
+
+  return candidates;
+}
+
 export function makeLemmaCandidates(term: TaggedTerm, lemmaDict: Record<string, string>, nlp: NlpLike | null): string[] {
   const normalized = normalizeToken(term.raw);
   const candidates: string[] = [];
 
-  const lemmaFromDict = lemmaDict[normalized];
-  if (lemmaFromDict) {
+  const hasOwnLemma = Object.prototype.hasOwnProperty.call(lemmaDict, normalized);
+  const lemmaFromDict = hasOwnLemma ? lemmaDict[normalized] : undefined;
+  if (typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0) {
     candidates.push(normalizeToken(lemmaFromDict));
   }
 
@@ -305,6 +366,7 @@ export function makeLemmaCandidates(term: TaggedTerm, lemmaDict: Record<string, 
     }
   }
 
+  candidates.push(...buildRuleBasedLemmaCandidates(normalized));
   candidates.push(normalized);
 
   const cleaned = candidates.filter((candidate) => candidate.length > 0 && WORD_TOKEN_RE.test(candidate));

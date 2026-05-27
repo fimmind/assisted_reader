@@ -12,6 +12,41 @@ function persistReaderSettingsWithoutEvent(settings: ReaderSettings): void {
   localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
 }
 
+function sanitizeNumeric(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  if (value < min) {
+    return min;
+  }
+  if (value > max) {
+    return max;
+  }
+  return value;
+}
+
+function sanitizeKnowledgeThreshold(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_READER_SETTINGS.knowledgeThreshold;
+  }
+
+  // Legacy payloads sometimes stored threshold on a 0..100 scale.
+  const normalized = value > 1 ? value / 100 : value;
+  const clamped = sanitizeNumeric(
+    normalized,
+    DEFAULT_READER_SETTINGS.knowledgeThreshold,
+    0.05,
+    0.95,
+  );
+
+  // Current UI has no direct threshold control; keep default behavior stable.
+  if (clamped <= 0.051) {
+    return DEFAULT_READER_SETTINGS.knowledgeThreshold;
+  }
+
+  return clamped;
+}
+
 function createDefaultProfile(): UserProfile {
   return {
     id: createId('profile'),
@@ -170,13 +205,19 @@ export function loadReaderSettings(): ReaderSettings {
   try {
     const parsed = JSON.parse(raw) as Partial<ReaderSettings>;
     const settings: ReaderSettings = {
-      fontSize: parsed.fontSize ?? DEFAULT_READER_SETTINGS.fontSize,
+      fontSize: sanitizeNumeric(parsed.fontSize, DEFAULT_READER_SETTINGS.fontSize, 12, 32),
       lineSpacing: parsed.lineSpacing ?? DEFAULT_READER_SETTINGS.lineSpacing,
       fontChoice: parsed.fontChoice ?? DEFAULT_READER_SETTINGS.fontChoice,
       pageWidth: parsed.pageWidth ?? DEFAULT_READER_SETTINGS.pageWidth,
-      maxWordsPerParagraph: parsed.maxWordsPerParagraph ?? DEFAULT_READER_SETTINGS.maxWordsPerParagraph,
-      knowledgeThreshold: parsed.knowledgeThreshold ?? DEFAULT_READER_SETTINGS.knowledgeThreshold,
+      maxWordsPerParagraph: sanitizeNumeric(parsed.maxWordsPerParagraph, DEFAULT_READER_SETTINGS.maxWordsPerParagraph, 1, 5),
+      knowledgeThreshold: sanitizeKnowledgeThreshold(parsed.knowledgeThreshold),
     };
+
+    const serialized = JSON.stringify(settings);
+    if (serialized !== raw) {
+      persistReaderSettingsWithoutEvent(settings);
+    }
+
     return settings;
   } catch (error) {
     console.warn('settings-parse-failed', { error });

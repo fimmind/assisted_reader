@@ -4,6 +4,19 @@ import { normalizeToken } from './math';
 import { estimateTheta, predictKnownProbability } from './model';
 import type { BookChapter, BookStats, ParagraphAnalysis, ParagraphToken, ReaderSettings, TaggedSentence, UserProfile, VocabularyModel } from './types';
 
+function resolveKnowledgeThreshold(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+  if (value < 0.05) {
+    return 0.05;
+  }
+  if (value > 0.95) {
+    return 0.95;
+  }
+  return value;
+}
+
 export interface ChapterAnalysisInput {
   chapter: BookChapter;
   settings: ReaderSettings;
@@ -141,6 +154,7 @@ function selectCardLemmas(tokens: ParagraphToken[], maxCardsPerParagraph: number
 
 export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[] {
   const theta = estimateTheta(input.model, input.profile);
+  const threshold = resolveKnowledgeThreshold(input.settings.knowledgeThreshold);
   const allTaggedSentences = flattenTaggedSentences(input.chapter.paragraphs, input.nlp);
   const properLexicon = buildHighConfidenceProperNounLexicon(allTaggedSentences);
 
@@ -154,11 +168,11 @@ export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[]
       input.profile,
       theta,
       input.lemmaDict,
-      input.settings.knowledgeThreshold,
+      threshold,
       input.nlp,
     );
 
-    const cardLemmas = selectCardLemmas(tokens, input.maxCardsPerParagraph, input.settings.knowledgeThreshold);
+    const cardLemmas = selectCardLemmas(tokens, input.maxCardsPerParagraph, threshold);
 
     return {
       paragraphText: paragraph,
@@ -178,6 +192,7 @@ export function calculateBookStats(
 ): BookStats {
   let unknownTokenCount = 0;
   let totalTokenCount = 0;
+  const threshold = resolveKnowledgeThreshold(settings.knowledgeThreshold);
   const theta = estimateTheta(model, profile);
 
   for (const chapter of book.chapters) {
@@ -194,7 +209,7 @@ export function calculateBookStats(
         profile,
         theta,
         lemmaDict,
-        settings.knowledgeThreshold,
+        threshold,
         nlp,
       );
 

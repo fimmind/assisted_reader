@@ -58,7 +58,26 @@ export default function LibraryPage() {
 
       const nextStats: Record<string, BookStats> = {};
       for (const book of loadedBooks) {
-        nextStats[book.id] = calculateBookStats(book, settings, model, activeProfile, lemmaDict, nlp);
+        let stats: BookStats | null = null;
+
+        try {
+          stats = calculateBookStats(book, settings, model, activeProfile, lemmaDict, nlp);
+        } catch (error) {
+          console.warn('library-book-stats-with-nlp-failed', { bookId: book.id, error });
+        }
+
+        if (!stats || (stats.unknownTokenCount === 0 && nlp !== null)) {
+          try {
+            const fallbackStats = calculateBookStats(book, settings, model, activeProfile, lemmaDict, null);
+            if (!stats || fallbackStats.unknownTokenCount > stats.unknownTokenCount) {
+              stats = fallbackStats;
+            }
+          } catch (error) {
+            console.warn('library-book-stats-fallback-failed', { bookId: book.id, error });
+          }
+        }
+
+        nextStats[book.id] = stats ?? fallbackStats;
       }
       setStatsByBookId(nextStats);
     } catch (error) {
