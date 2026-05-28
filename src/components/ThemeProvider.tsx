@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
 type Theme = "dark" | "light" | "system";
+type ResolvedTheme = "dark" | "light";
 
 type ThemeProviderProps = {
   children: React.ReactNode;
@@ -10,15 +11,28 @@ type ThemeProviderProps = {
 
 type ThemeProviderState = {
   theme: Theme;
+  resolvedTheme: ResolvedTheme;
   setTheme: (theme: Theme) => void;
 };
 
 const initialState: ThemeProviderState = {
   theme: "system",
+  resolvedTheme: "light",
   setTheme: () => null,
 };
 
 const ThemeProviderContext = createContext<ThemeProviderState>(initialState);
+
+function getSystemTheme(): ResolvedTheme {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function parseTheme(value: string | null, defaultTheme: Theme): Theme {
+  if (value === "light" || value === "dark" || value === "system") {
+    return value;
+  }
+  return defaultTheme;
+}
 
 export function ThemeProvider({
   children,
@@ -26,31 +40,42 @@ export function ThemeProvider({
   storageKey = "easeword-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
+  const [theme, setThemeState] = useState<Theme>(() => parseTheme(localStorage.getItem(storageKey), defaultTheme));
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    theme === "system" ? getSystemTheme() : theme
   );
 
   useEffect(() => {
     const root = window.document.documentElement;
-    root.classList.remove("light", "dark");
-
     if (theme === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-        .matches
-        ? "dark"
-        : "light";
-      root.classList.add(systemTheme);
-      return;
+      const media = window.matchMedia("(prefers-color-scheme: dark)");
+
+      const applyTheme = () => {
+        const nextTheme: ResolvedTheme = media.matches ? "dark" : "light";
+        root.classList.remove("light", "dark");
+        root.classList.add(nextTheme);
+        setResolvedTheme(nextTheme);
+      };
+
+      applyTheme();
+      media.addEventListener("change", applyTheme);
+      return () => {
+        media.removeEventListener("change", applyTheme);
+      };
     }
 
+    root.classList.remove("light", "dark");
     root.classList.add(theme);
+    setResolvedTheme(theme);
+    return undefined;
   }, [theme]);
 
   const value = {
     theme,
+    resolvedTheme,
     setTheme: (theme: Theme) => {
       localStorage.setItem(storageKey, theme);
-      setTheme(theme);
+      setThemeState(theme);
     },
   };
 

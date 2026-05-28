@@ -17,7 +17,7 @@ import { loadCompromise } from '@/core/external';
 import type { BookStats, ImportedBook } from '@/core/types';
 
 export default function LibraryPage() {
-  const { theme, setTheme } = useTheme();
+  const { resolvedTheme, setTheme } = useTheme();
   const [quizOpen, setQuizOpen] = useState(false);
   const [books, setBooks] = useState<ImportedBook[]>([]);
   const [statsByBookId, setStatsByBookId] = useState<Record<string, BookStats>>({});
@@ -150,11 +150,11 @@ export default function LibraryPage() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
               className="text-muted-foreground hover:text-foreground"
-              aria-label="Toggle theme"
+              aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             >
-              {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+              {resolvedTheme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
             </Button>
 
             <Link href="/settings">
