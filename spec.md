@@ -1,12 +1,3 @@
-I want you to create a UI skeleton for a static reader site with assistance functionality. The result must be reader-first, assistance-second. Minimal modern UI, typical for standard high-quality reader. The UI must be adaptive, functioning well on mobile, tablet and desktop screens
-
-The site will be implemented as static HTML/CSS/JS. Create mock up for complex logic. Focus on clean and beautiful UI. Use Alice's Adventures in Wonderland as a mock book
-
-No backend, authentication, file parsing, or real vocabulary estimation is required.
-The goal is a polished UI skeleton, not a production app.
-
-Deliver a complete working static UI skeleton with clean, maintainable code with core screens, JavaScript logic and CSS styles all in different files
-
 ## Product identity
 
 Name: Easeword
