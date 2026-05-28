@@ -228,6 +228,7 @@ export default function ReaderPage() {
     };
     await upsertBook(nextBook);
     setBook(nextBook);
+    window.scrollTo({ top: 0, behavior: 'auto' });
     const resources = resourcesRef.current;
     if (resources) {
       recomputeVisibleAnalysis(nextBook, resources);
