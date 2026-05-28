@@ -81,11 +81,15 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
   };
 
   const toggleWord = (word: string) => {
+    setWordCheckedState(word, !checkedWords.has(word));
+  };
+
+  const setWordCheckedState = (word: string, isChecked: boolean) => {
     const next = new Set(checkedWords);
-    if (next.has(word)) {
-      next.delete(word);
-    } else {
+    if (isChecked) {
       next.add(word);
+    } else {
+      next.delete(word);
     }
     setCheckedWords(next);
   };
@@ -204,19 +208,21 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
             <div className="py-4">
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                 {(activeQuiz?.currentWords ?? []).map((word) => (
-                  <div key={word} className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors">
+                  <div
+                    key={word}
+                    className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer"
+                    onClick={() => toggleWord(word)}
+                  >
                     <Checkbox
                       id={`quiz-word-${word}`}
                       checked={checkedWords.has(word)}
-                      onCheckedChange={() => toggleWord(word)}
+                      onClick={(event) => event.stopPropagation()}
+                      onCheckedChange={(checked) => setWordCheckedState(word, checked === true)}
                       className="border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
                     />
-                    <label
-                      htmlFor={`quiz-word-${word}`}
-                      className="text-sm font-serif font-medium leading-tight cursor-pointer break-words"
-                    >
+                    <span className="text-sm font-serif font-medium leading-tight break-words">
                       {word}
-                    </label>
+                    </span>
                   </div>
                 ))}
               </div>
