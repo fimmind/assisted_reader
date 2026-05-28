@@ -19,7 +19,7 @@ import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
 import { analyzeChapter } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
-import type { ImportedBook, LexiconEntry, ParagraphAnalysis } from '@/core/types';
+import type { ImportedBook, LexiconEntry, ParagraphAnalysis, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
 
 function clampChapterNumber(book: ImportedBook, chapterNumber: number): number {
   if (chapterNumber < 1) {
@@ -29,6 +29,66 @@ function clampChapterNumber(book: ImportedBook, chapterNumber: number): number {
     return book.chapters.length;
   }
   return chapterNumber;
+}
+
+type NlpLike = ((text: string) => {
+  terms: () => {
+    json: () => Array<{ text?: string; normal?: string; tags?: string[]; terms?: Array<{ text?: string; normal?: string; tags?: string[] }> }>;
+  };
+  verbs: () => { toInfinitive: () => { out: (format: 'text') => string } };
+  nouns: () => { toSingular: () => { out: (format: 'text') => string } };
+  adjectives: () => { conjugate: () => Array<Record<string, string>> };
+}) | null;
+
+interface ReaderResources {
+  model: VocabularyModel;
+  lemmaDict: Record<string, string>;
+  lexiconMap: Map<string, LexiconEntry>;
+  nlp: NlpLike;
+}
+
+function buildDefinitionMap(analyses: ParagraphAnalysis[], lexiconMap: Map<string, LexiconEntry>): Map<string, LexiconEntry> {
+  const definitionMap = new Map<string, LexiconEntry>();
+  for (const paragraph of analyses) {
+    for (const lemma of paragraph.cardLemmas) {
+      const found = lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
+      definitionMap.set(lemma, found);
+    }
+    for (const token of paragraph.tokens) {
+      if (token.unknown && !definitionMap.has(token.lemma)) {
+        const found = lexiconMap.get(token.lemma) ?? createFallbackLexiconEntry(token.lemma);
+        definitionMap.set(token.lemma, found);
+      }
+    }
+  }
+  return definitionMap;
+}
+
+function buildChapterAnalysis(
+  selectedBook: ImportedBook,
+  settings: ReaderSettings,
+  profile: UserProfile,
+  resources: ReaderResources,
+  assistanceEnabled: boolean,
+): ParagraphAnalysis[] {
+  const chapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
+  const chapterIndex = chapterNumber - 1;
+  const chapter = selectedBook.chapters[chapterIndex];
+  const maxCardsPerParagraph = Math.max(1, Math.min(3, settings.maxWordsPerParagraph));
+
+  if (!assistanceEnabled) {
+    return chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardLemmas: [] }));
+  }
+
+  return analyzeChapter({
+    chapter,
+    settings,
+    model: resources.model,
+    profile,
+    lemmaDict: resources.lemmaDict,
+    nlp: resources.nlp,
+    maxCardsPerParagraph,
+  });
 }
 
 export default function ReaderPage() {
@@ -41,6 +101,10 @@ export default function ReaderPage() {
   const [chapterAnalysis, setChapterAnalysis] = useState<ParagraphAnalysis[]>([]);
   const [definitionsByLemma, setDefinitionsByLemma] = useState<Map<string, LexiconEntry>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
+  const resourcesRef = useRef<ReaderResources | null>(null);
+  const bookRef = useRef<ImportedBook | null>(null);
+  const settingsRef = useRef<ReaderSettings>(settings);
+  const assistanceEnabledRef = useRef<boolean>(assistanceEnabled);
 
   const lastScrollY = useRef(0);
 
@@ -57,6 +121,22 @@ export default function ReaderPage() {
     _setExtraPadding((previous) => previous === value ? previous : value);
   }, []);
 
+  const recomputeVisibleAnalysis = useCallback((selectedBook: ImportedBook, resources: ReaderResources) => {
+    const profileState = loadProfileState();
+    const activeProfile = getActiveProfile(profileState);
+    const analyses = buildChapterAnalysis(
+      selectedBook,
+      settingsRef.current,
+      activeProfile,
+      resources,
+      assistanceEnabledRef.current,
+    );
+    const definitionMap = buildDefinitionMap(analyses, resources.lexiconMap);
+
+    setChapterAnalysis(analyses);
+    setDefinitionsByLemma(definitionMap);
+  }, []);
+
   const loadReaderState = useCallback(async () => {
     setIsLoading(true);
 
@@ -67,6 +147,7 @@ export default function ReaderPage() {
         setBook(null);
         setChapterAnalysis([]);
         setDefinitionsByLemma(new Map());
+        resourcesRef.current = null;
         return;
       }
 
@@ -77,61 +158,58 @@ export default function ReaderPage() {
         loadCompromise(),
       ]);
 
-      const profileState = loadProfileState();
-      const activeProfile = getActiveProfile(profileState);
-      const chapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
-      const chapterIndex = chapterNumber - 1;
-      const chapter = selectedBook.chapters[chapterIndex];
-      const maxCardsPerParagraph = Math.max(1, Math.min(3, settings.maxWordsPerParagraph));
-
-      const analyses = assistanceEnabled
-        ? analyzeChapter({
-            chapter,
-            settings,
-            model,
-            profile: activeProfile,
-            lemmaDict,
-            nlp,
-            maxCardsPerParagraph,
-          })
-        : chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardLemmas: [] }));
-
-      const definitionMap = new Map<string, LexiconEntry>();
-      for (const paragraph of analyses) {
-        for (const lemma of paragraph.cardLemmas) {
-          const found = lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
-          definitionMap.set(lemma, found);
-        }
-        for (const token of paragraph.tokens) {
-          if (token.unknown) {
-            const found = lexiconMap.get(token.lemma) ?? createFallbackLexiconEntry(token.lemma);
-            if (!definitionMap.has(token.lemma)) {
-              definitionMap.set(token.lemma, found);
-            }
-          }
-        }
-      }
+      const resources: ReaderResources = { model, lemmaDict, lexiconMap, nlp };
+      resourcesRef.current = resources;
 
       setBook(selectedBook);
-      setChapterAnalysis(analyses);
-      setDefinitionsByLemma(definitionMap);
+      recomputeVisibleAnalysis(selectedBook, resources);
     } catch (error) {
       console.error('reader-load-failed', { error, bookId });
     } finally {
       setIsLoading(false);
     }
-  }, [assistanceEnabled, bookId, settings]);
+  }, [bookId, recomputeVisibleAnalysis]);
+
+  useEffect(() => {
+    bookRef.current = book;
+  }, [book]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    assistanceEnabledRef.current = assistanceEnabled;
+  }, [assistanceEnabled]);
+
+  useEffect(() => {
+    const resources = resourcesRef.current;
+    if (!book || !resources || isLoading) {
+      return;
+    }
+    recomputeVisibleAnalysis(book, resources);
+  }, [assistanceEnabled, book, isLoading, recomputeVisibleAnalysis, settings]);
 
   useEffect(() => {
     void loadReaderState();
     const unsubscribe = listenStateUpdated(() => {
-      void loadReaderState();
+      const resources = resourcesRef.current;
+      const currentBook = bookRef.current;
+      if (!currentBook || !resources) {
+        void loadReaderState();
+        return;
+      }
+      recomputeVisibleAnalysis(currentBook, resources);
     });
     return unsubscribe;
-  }, [loadReaderState]);
+  }, [loadReaderState, recomputeVisibleAnalysis]);
 
   const markLemma = (lemma: string, known: boolean) => {
     upsertObservation(lemma, known);
+    const resources = resourcesRef.current;
+    if (book && resources) {
+      recomputeVisibleAnalysis(book, resources);
+    }
   };
 
   const updateCurrentChapter = async (delta: number) => {
@@ -150,6 +228,11 @@ export default function ReaderPage() {
     };
     await upsertBook(nextBook);
     setBook(nextBook);
+    const resources = resourcesRef.current;
+    if (resources) {
+      recomputeVisibleAnalysis(nextBook, resources);
+      return;
+    }
     void loadReaderState();
   };
 
