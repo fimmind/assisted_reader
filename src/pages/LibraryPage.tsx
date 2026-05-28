@@ -123,7 +123,7 @@ export default function LibraryPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
+    <div className="h-dvh bg-background text-foreground flex flex-col overflow-hidden">
       <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b border-border">
         <div className="container mx-auto px-4 md:px-6 lg:px-8 h-14 lg:h-16 flex items-center justify-between">
           <div className="font-serif text-xl lg:text-2xl font-bold tracking-tight text-primary">Easeword</div>
@@ -166,7 +166,7 @@ export default function LibraryPage() {
         </div>
       </header>
 
-      <main className="flex-1 container mx-auto px-4 md:px-6 lg:px-8 py-8 md:py-7 lg:py-10">
+      <main className="flex-1 overflow-y-auto container mx-auto px-4 md:px-6 lg:px-8 py-8 md:py-7 lg:py-10">
         <input
           ref={fileInputRef}
           type="file"
