@@ -9,11 +9,44 @@ import { QuizModal } from '../components/QuizModal';
 import { importBookFromFile } from '@/core/book-parser';
 import { deleteBookById, listBooks, seedBooksIfEmpty, upsertBook } from '@/core/books-store';
 import { createSeedBook } from '@/core/seed-book';
-import { calculateBookStats } from '@/core/reader-analysis';
+import { analyzeChapter } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
+import { loadCompromise } from '@/core/external';
 import type { BookStats, ImportedBook } from '@/core/types';
+
+type DeferredHandle = {
+  kind: 'idle' | 'timeout';
+  id: number;
+};
+
+type IdleWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (id: number) => void;
+};
+
+function clearDeferredHandle(handle: DeferredHandle | null): void {
+  if (!handle) {
+    return;
+  }
+  const idleWindow = window as IdleWindow;
+  if (handle.kind === 'idle' && typeof idleWindow.cancelIdleCallback === 'function') {
+    idleWindow.cancelIdleCallback(handle.id);
+    return;
+  }
+  window.clearTimeout(handle.id);
+}
+
+function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHandle {
+  const idleWindow = window as IdleWindow;
+  if (typeof idleWindow.requestIdleCallback === 'function') {
+    const id = idleWindow.requestIdleCallback(task, { timeout: timeoutMs });
+    return { kind: 'idle', id };
+  }
+  const id = window.setTimeout(task, timeoutMs);
+  return { kind: 'timeout', id };
+}
 
 export default function LibraryPage() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -23,6 +56,11 @@ export default function LibraryPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const refreshRunIdRef = useRef(0);
+  const fastStatsHandleRef = useRef<DeferredHandle | null>(null);
+  const nlpStatsHandleRef = useRef<DeferredHandle | null>(null);
+  const seedHandleRef = useRef<DeferredHandle | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   const fallbackStats: BookStats = useMemo(() => ({
     unknownTokenCount: 0,
@@ -30,55 +68,199 @@ export default function LibraryPage() {
     progressPercent: 0,
   }), []);
 
-  const calculateStatsForBooks = (
-    loadedBooks: ImportedBook[],
+  const calculateBookStatsSafe = (
+    book: ImportedBook,
     model: Awaited<ReturnType<typeof loadVocabularyModel>>,
     lemmaDict: Awaited<ReturnType<typeof loadLemmaDict>>,
-  ): Record<string, BookStats> => {
+    nlp: Awaited<ReturnType<typeof loadCompromise>>,
+  ): BookStats => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
     const settings = loadReaderSettings();
-    const nextStats: Record<string, BookStats> = {};
-
-    for (const book of loadedBooks) {
-      let stats: BookStats | null = null;
-      try {
-        stats = calculateBookStats(book, settings, model, activeProfile, lemmaDict, null);
-      } catch (error) {
-        console.warn('library-book-stats-failed', { bookId: book.id, error });
-      }
-      nextStats[book.id] = stats ?? fallbackStats;
+    const chapterCount = book.chapters.length;
+    const progressPercent = chapterCount === 0 ? 0 : (book.currentChapter / chapterCount) * 100;
+    if (chapterCount === 0) {
+      return {
+        ...fallbackStats,
+        progressPercent,
+      };
+    }
+    const safeChapterIndex = Math.max(0, Math.min(chapterCount - 1, book.currentChapter - 1));
+    const chapter = book.chapters[safeChapterIndex];
+    const sampleLimit = nlp === null ? 12 : 24;
+    const sampledParagraphs = chapter.paragraphs.slice(0, sampleLimit);
+    if (sampledParagraphs.length === 0) {
+      return {
+        ...fallbackStats,
+        progressPercent,
+      };
     }
 
-    return nextStats;
+    try {
+      const analyses = analyzeChapter({
+        chapter: {
+          title: chapter.title,
+          paragraphs: sampledParagraphs,
+        },
+        settings,
+        model,
+        profile: activeProfile,
+        lemmaDict,
+        nlp,
+        maxCardsPerParagraph: 1,
+      });
+
+      let sampledUnknownTokens = 0;
+      let sampledTotalTokens = 0;
+      for (const paragraph of analyses) {
+        for (const token of paragraph.tokens) {
+          sampledTotalTokens += 1;
+          if (token.unknown) {
+            sampledUnknownTokens += 1;
+          }
+        }
+      }
+      const unknownTokenPercent = sampledTotalTokens === 0 ? 0 : (sampledUnknownTokens / sampledTotalTokens) * 100;
+      const scale = chapter.paragraphs.length / sampledParagraphs.length;
+      const unknownTokenCount = Math.max(0, Math.round(sampledUnknownTokens * scale));
+
+      return {
+        unknownTokenCount,
+        unknownTokenPercent,
+        progressPercent,
+      };
+    } catch (error) {
+      console.warn('library-book-stats-failed', { bookId: book.id, hasNlp: nlp !== null, error });
+      return {
+        ...fallbackStats,
+        progressPercent,
+      };
+    }
   };
 
   const refreshBooksAndStats = async () => {
-    setIsLoading(true);
+    const runId = refreshRunIdRef.current + 1;
+    refreshRunIdRef.current = runId;
+    clearDeferredHandle(fastStatsHandleRef.current);
+    fastStatsHandleRef.current = null;
+    clearDeferredHandle(nlpStatsHandleRef.current);
+    nlpStatsHandleRef.current = null;
+    clearDeferredHandle(seedHandleRef.current);
+    seedHandleRef.current = null;
+    if (!hasLoadedOnceRef.current) {
+      setIsLoading(true);
+    }
 
     try {
-      await seedBooksIfEmpty([await createSeedBook()]);
       let loadedBooks = await listBooks();
+      if (refreshRunIdRef.current !== runId) {
+        return;
+      }
       const hasLegacySeedAlice = loadedBooks.some((book) => book.id === 'seed-alice');
       const hasNewSeedHitchhiker = loadedBooks.some((book) => book.id === 'seed-hitchhiker');
       if (hasLegacySeedAlice && !hasNewSeedHitchhiker) {
-        await deleteBookById('seed-alice');
-        await upsertBook(await createSeedBook());
-        loadedBooks = await listBooks();
+        seedHandleRef.current = scheduleDeferredTask(() => {
+          void (async () => {
+            try {
+              await deleteBookById('seed-alice');
+              await upsertBook(await createSeedBook());
+              if (refreshRunIdRef.current === runId) {
+                void refreshBooksAndStats();
+              }
+            } catch (error) {
+              console.warn('library-legacy-seed-migration-failed', { error });
+            }
+          })();
+        }, 1500);
       }
       setBooks(loadedBooks);
+      const nextFallbackStats: Record<string, BookStats> = {};
+      for (const book of loadedBooks) {
+        nextFallbackStats[book.id] = fallbackStats;
+      }
+      setStatsByBookId(nextFallbackStats);
+      setIsLoading(false);
+      hasLoadedOnceRef.current = true;
 
-      const [model, lemmaDict] = await Promise.all([
-        loadVocabularyModel(),
-        loadLemmaDict(),
-      ]);
+      if (loadedBooks.length === 0) {
+        seedHandleRef.current = scheduleDeferredTask(() => {
+          void (async () => {
+            try {
+              await seedBooksIfEmpty([await createSeedBook()]);
+              if (refreshRunIdRef.current === runId) {
+                void refreshBooksAndStats();
+              }
+            } catch (error) {
+              console.warn('library-seed-refresh-failed', { error });
+            }
+          })();
+        }, 1000);
+        return;
+      }
 
-      const nextStats = calculateStatsForBooks(loadedBooks, model, lemmaDict);
-      setStatsByBookId(nextStats);
+      fastStatsHandleRef.current = scheduleDeferredTask(() => {
+        void (async () => {
+          try {
+            const [model, lemmaDict] = await Promise.all([
+              loadVocabularyModel(),
+              loadLemmaDict(),
+            ]);
+            if (refreshRunIdRef.current !== runId) {
+              return;
+            }
+            let fastIndex = 0;
+            const processFastNext = () => {
+              if (refreshRunIdRef.current !== runId) {
+                return;
+              }
+              const book = loadedBooks[fastIndex];
+              if (!book) {
+                nlpStatsHandleRef.current = scheduleDeferredTask(() => {
+                  void (async () => {
+                    try {
+                      const nlp = await loadCompromise();
+                      if (refreshRunIdRef.current !== runId || nlp === null) {
+                        return;
+                      }
+                      let nlpIndex = 0;
+                      const processNlpNext = () => {
+                        if (refreshRunIdRef.current !== runId) {
+                          return;
+                        }
+                        const nlpBook = loadedBooks[nlpIndex];
+                        if (!nlpBook) {
+                          return;
+                        }
+                        const stat = calculateBookStatsSafe(nlpBook, model, lemmaDict, nlp);
+                        setStatsByBookId((previous) => ({ ...previous, [nlpBook.id]: stat }));
+                        nlpIndex += 1;
+                        nlpStatsHandleRef.current = scheduleDeferredTask(processNlpNext, 80);
+                      };
+                      processNlpNext();
+                    } catch (error) {
+                      console.warn('library-nlp-stats-refresh-failed', { error });
+                    }
+                  })();
+                }, 1000);
+                return;
+              }
+              const stat = calculateBookStatsSafe(book, model, lemmaDict, null);
+              setStatsByBookId((previous) => ({ ...previous, [book.id]: stat }));
+              fastIndex += 1;
+              fastStatsHandleRef.current = scheduleDeferredTask(processFastNext, 60);
+            };
+            processFastNext();
+          } catch (error) {
+            console.warn('library-fast-stats-refresh-failed', { error });
+          }
+        })();
+      }, 300);
     } catch (error) {
       console.error('library-refresh-failed', { error });
     } finally {
-      setIsLoading(false);
+      if (refreshRunIdRef.current === runId) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -88,6 +270,15 @@ export default function LibraryPage() {
       void refreshBooksAndStats();
     });
     return unsubscribe;
+  }, []);
+
+  useEffect(() => () => {
+    clearDeferredHandle(fastStatsHandleRef.current);
+    fastStatsHandleRef.current = null;
+    clearDeferredHandle(nlpStatsHandleRef.current);
+    nlpStatsHandleRef.current = null;
+    clearDeferredHandle(seedHandleRef.current);
+    seedHandleRef.current = null;
   }, []);
 
   const triggerImport = () => {
