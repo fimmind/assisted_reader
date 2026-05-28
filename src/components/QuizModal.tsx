@@ -156,7 +156,10 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className={step === 'quiz' ? 'sm:max-w-[720px]' : 'sm:max-w-[500px]'}>
+      <DialogContent
+        className={step === 'quiz' ? 'sm:max-w-[720px]' : 'sm:max-w-[500px]'}
+        onOpenAutoFocus={(event) => event.preventDefault()}
+      >
         {step === 'setup' ? (
           <>
             <DialogHeader>
