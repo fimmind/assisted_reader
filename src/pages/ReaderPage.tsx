@@ -248,9 +248,21 @@ export default function ReaderPage() {
       const rowStyles = window.getComputedStyle(rowRef.current);
       const rowPaddingTop = Number.parseFloat(rowStyles.paddingTop) || 0;
       const rowTop = rowRect.top + rowPaddingTop;
-      const newOffsets = paraRefs.current.map((element) =>
+      const rawOffsets = paraRefs.current.map((element) =>
         element ? (element.getBoundingClientRect().top - rowTop) : 0
       );
+      const newOffsets = [...rawOffsets];
+      const minCardGap = 12;
+      let nextMinTop = 0;
+      cardGrpRefs.current.forEach((element, index) => {
+        if (!element) {
+          return;
+        }
+        const desiredTop = rawOffsets[index] ?? 0;
+        const adjustedTop = Math.max(desiredTop, nextMinTop);
+        newOffsets[index] = adjustedTop;
+        nextMinTop = adjustedTop + element.offsetHeight + minCardGap;
+      });
       setParaOffsets((previous) =>
         previous.length === newOffsets.length && previous.every((value, index) => value === newOffsets[index])
           ? previous : [...newOffsets]);
