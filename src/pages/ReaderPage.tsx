@@ -4,7 +4,6 @@ import {
 import type { ReactNode } from 'react';
 import { useParams, Link } from 'wouter';
 import { ChevronLeft, MoreHorizontal, Bookmark, Type, Eye, EyeOff } from 'lucide-react';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
@@ -47,18 +46,44 @@ interface ReaderResources {
   nlp: NlpLike;
 }
 
+type DeferredHandle = {
+  kind: 'idle' | 'timeout';
+  id: number;
+};
+
+type IdleWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (id: number) => void;
+};
+
+function clearDeferredHandle(handle: DeferredHandle | null): void {
+  if (!handle) {
+    return;
+  }
+  const idleWindow = window as IdleWindow;
+  if (handle.kind === 'idle' && typeof idleWindow.cancelIdleCallback === 'function') {
+    idleWindow.cancelIdleCallback(handle.id);
+    return;
+  }
+  window.clearTimeout(handle.id);
+}
+
+function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHandle {
+  const idleWindow = window as IdleWindow;
+  if (typeof idleWindow.requestIdleCallback === 'function') {
+    const id = idleWindow.requestIdleCallback(task, { timeout: timeoutMs });
+    return { kind: 'idle', id };
+  }
+  const id = window.setTimeout(task, timeoutMs);
+  return { kind: 'timeout', id };
+}
+
 function buildDefinitionMap(analyses: ParagraphAnalysis[], lexiconMap: Map<string, LexiconEntry>): Map<string, LexiconEntry> {
   const definitionMap = new Map<string, LexiconEntry>();
   for (const paragraph of analyses) {
     for (const lemma of paragraph.cardLemmas) {
       const found = lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
       definitionMap.set(lemma, found);
-    }
-    for (const token of paragraph.tokens) {
-      if (token.unknown && !definitionMap.has(token.lemma)) {
-        const found = lexiconMap.get(token.lemma) ?? createFallbackLexiconEntry(token.lemma);
-        definitionMap.set(token.lemma, found);
-      }
     }
   }
   return definitionMap;
@@ -91,6 +116,16 @@ function buildChapterAnalysis(
   });
 }
 
+function buildPlainChapterAnalysis(selectedBook: ImportedBook): ParagraphAnalysis[] {
+  const chapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
+  const chapterIndex = chapterNumber - 1;
+  const chapter = selectedBook.chapters[chapterIndex];
+  if (!chapter) {
+    return [];
+  }
+  return chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardLemmas: [] }));
+}
+
 export default function ReaderPage() {
   const { bookId } = useParams();
   const { settings, updateSetting } = useSettings();
@@ -105,6 +140,9 @@ export default function ReaderPage() {
   const bookRef = useRef<ImportedBook | null>(null);
   const settingsRef = useRef<ReaderSettings>(settings);
   const assistanceEnabledRef = useRef<boolean>(assistanceEnabled);
+  const analysisRunIdRef = useRef(0);
+  const fastAnalysisHandleRef = useRef<DeferredHandle | null>(null);
+  const fullAnalysisHandleRef = useRef<DeferredHandle | null>(null);
 
   const lastScrollY = useRef(0);
 
@@ -124,17 +162,82 @@ export default function ReaderPage() {
   const recomputeVisibleAnalysis = useCallback((selectedBook: ImportedBook, resources: ReaderResources) => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
-    const analyses = buildChapterAnalysis(
-      selectedBook,
-      settingsRef.current,
-      activeProfile,
-      resources,
-      assistanceEnabledRef.current,
-    );
-    const definitionMap = buildDefinitionMap(analyses, resources.lexiconMap);
+    const currentRunId = analysisRunIdRef.current + 1;
+    analysisRunIdRef.current = currentRunId;
+    const expectedParagraphCount = buildPlainChapterAnalysis(selectedBook).length;
 
-    setChapterAnalysis(analyses);
-    setDefinitionsByLemma(definitionMap);
+    const applyAnalysis = (analyses: ParagraphAnalysis[]) => {
+      if (analysisRunIdRef.current !== currentRunId) {
+        return;
+      }
+      if (analyses.length !== expectedParagraphCount) {
+        console.warn('reader-analysis-length-mismatch', {
+          expectedParagraphCount,
+          actualParagraphCount: analyses.length,
+          chapter: selectedBook.currentChapter,
+          bookId: selectedBook.id,
+        });
+        return;
+      }
+      const definitionMap = buildDefinitionMap(analyses, resources.lexiconMap);
+      setChapterAnalysis(analyses);
+      setDefinitionsByLemma(definitionMap);
+    };
+
+    const plainAnalyses = buildPlainChapterAnalysis(selectedBook);
+    setChapterAnalysis(plainAnalyses);
+    setDefinitionsByLemma(new Map());
+    clearDeferredHandle(fastAnalysisHandleRef.current);
+    fastAnalysisHandleRef.current = null;
+    clearDeferredHandle(fullAnalysisHandleRef.current);
+    fullAnalysisHandleRef.current = null;
+
+    if (!assistanceEnabledRef.current) {
+      return;
+    }
+
+    fastAnalysisHandleRef.current = scheduleDeferredTask(() => {
+      if (analysisRunIdRef.current !== currentRunId) {
+        return;
+      }
+
+      const fastResources: ReaderResources = { ...resources, nlp: null };
+      try {
+        const fastAnalyses = buildChapterAnalysis(
+          selectedBook,
+          settingsRef.current,
+          activeProfile,
+          fastResources,
+          true,
+        );
+        applyAnalysis(fastAnalyses);
+      } catch (error) {
+        console.warn('reader-fast-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
+        return;
+      }
+
+      if (resources.nlp === null) {
+        return;
+      }
+
+      fullAnalysisHandleRef.current = scheduleDeferredTask(() => {
+        if (analysisRunIdRef.current !== currentRunId) {
+          return;
+        }
+        try {
+          const fullAnalyses = buildChapterAnalysis(
+            selectedBook,
+            settingsRef.current,
+            activeProfile,
+            resources,
+            true,
+          );
+          applyAnalysis(fullAnalyses);
+        } catch (error) {
+          console.warn('reader-full-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
+        }
+      }, 1500);
+    }, 600);
   }, []);
 
   const loadReaderState = useCallback(async () => {
@@ -204,6 +307,13 @@ export default function ReaderPage() {
     return unsubscribe;
   }, [loadReaderState, recomputeVisibleAnalysis]);
 
+  useEffect(() => () => {
+    clearDeferredHandle(fastAnalysisHandleRef.current);
+    fastAnalysisHandleRef.current = null;
+    clearDeferredHandle(fullAnalysisHandleRef.current);
+    fullAnalysisHandleRef.current = null;
+  }, []);
+
   const markLemma = (lemma: string, known: boolean) => {
     upsertObservation(lemma, known);
     const resources = resourcesRef.current;
@@ -226,15 +336,11 @@ export default function ReaderPage() {
       currentChapter: nextChapter,
       updatedAt: new Date().toISOString(),
     };
-    await upsertBook(nextBook);
     setBook(nextBook);
     window.scrollTo({ top: 0, behavior: 'auto' });
-    const resources = resourcesRef.current;
-    if (resources) {
-      recomputeVisibleAnalysis(nextBook, resources);
-      return;
-    }
-    void loadReaderState();
+    void upsertBook(nextBook).catch((error) => {
+      console.warn('reader-chapter-progress-save-failed', { bookId: nextBook.id, chapter: nextBook.currentChapter, error });
+    });
   };
 
   const rafIdRef = useRef<number | null>(null);
@@ -243,6 +349,10 @@ export default function ReaderPage() {
     if (rafIdRef.current !== null) return;
     rafIdRef.current = requestAnimationFrame(() => {
       rafIdRef.current = null;
+      if (window.innerWidth < 768) {
+        setExtraPadding(0);
+        return;
+      }
       if (!rowRef.current || !textColRef.current) return;
 
       const rowRect = rowRef.current.getBoundingClientRect();
@@ -316,60 +426,7 @@ export default function ReaderPage() {
     settings.pageWidth === 'Narrow' ? 'max-w-4xl' :
     settings.pageWidth === 'Wide' ? 'max-w-6xl' : 'max-w-5xl';
 
-  const renderParagraph = (analysis: ParagraphAnalysis) => {
-    if (!assistanceEnabled || analysis.tokens.length === 0) {
-      return <>{analysis.paragraphText}</>;
-    }
-
-    const nodes: ReactNode[] = [];
-    let cursor = 0;
-
-    for (let index = 0; index < analysis.tokens.length; index += 1) {
-      const token = analysis.tokens[index];
-      if (token.start > cursor) {
-        nodes.push(analysis.paragraphText.slice(cursor, token.start));
-      }
-
-      const tokenText = analysis.paragraphText.slice(token.start, token.end);
-      if (!token.unknown) {
-        nodes.push(tokenText);
-        cursor = token.end;
-        continue;
-      }
-
-      const definition = definitionsByLemma.get(token.lemma) ?? createFallbackLexiconEntry(token.lemma);
-      const isPriority = (1 - token.pKnown) > 0.6;
-      nodes.push(
-        <Popover key={`${token.lemma}-${token.start}`}>
-          <PopoverTrigger asChild>
-            <span
-              className={cn(
-                'cursor-pointer rounded-sm px-0.5 -mx-0.5',
-                isPriority ? 'unknown-word priority' : 'unknown-word'
-              )}
-            >
-              {tokenText}
-            </span>
-          </PopoverTrigger>
-          <PopoverContent side="top" align="center" className="p-0 w-auto border-none shadow-lg">
-            <WordDefinitionCard
-              definition={definition}
-              onMarkKnown={() => markLemma(token.lemma, true)}
-              onMarkUnknown={() => markLemma(token.lemma, false)}
-            />
-          </PopoverContent>
-        </Popover>
-      );
-
-      cursor = token.end;
-    }
-
-    if (cursor < analysis.paragraphText.length) {
-      nodes.push(analysis.paragraphText.slice(cursor));
-    }
-
-    return <>{nodes}</>;
-  };
+  const renderParagraph = (paragraphText: string): ReactNode => <>{paragraphText}</>;
 
   if (isLoading) {
     return <div className="min-h-screen bg-background text-foreground p-6">Loading reader...</div>;
@@ -378,6 +435,7 @@ export default function ReaderPage() {
   if (!book) {
     return <div className="min-h-screen bg-background text-foreground p-6">No books found in your library.</div>;
   }
+  const chapterParagraphs = book.chapters[book.currentChapter - 1]?.paragraphs ?? [];
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -493,14 +551,16 @@ export default function ReaderPage() {
               }}
               data-testid="text-column"
             >
-              {chapterAnalysis.map((analysis, index) => (
+              {chapterParagraphs.map((paragraphText, index) => {
+                const analysis = chapterAnalysis[index] ?? { paragraphText, tokens: [], cardLemmas: [] };
+                return (
                 <div key={index} className="mb-10" data-testid={`paragraph-block-${index}`}>
                   <p
                     ref={(element) => { paraRefs.current[index] = element; }}
                     className="text-foreground/90 reader-text"
                     data-testid={`paragraph-${index}`}
                   >
-                    {renderParagraph(analysis)}
+                    {renderParagraph(paragraphText)}
                   </p>
                   {assistanceEnabled && analysis.cardLemmas.length > 0 && (
                     <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${index}`}>
@@ -518,7 +578,8 @@ export default function ReaderPage() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="mt-20 pt-8 border-t border-border flex justify-between items-center text-muted-foreground font-serif">
@@ -540,7 +601,8 @@ export default function ReaderPage() {
             aria-label="Vocabulary cards"
             data-testid="card-column"
           >
-            {chapterAnalysis.map((analysis, index) => {
+            {chapterParagraphs.map((paragraphText, index) => {
+              const analysis = chapterAnalysis[index] ?? { paragraphText, tokens: [], cardLemmas: [] };
               if (!analysis.cardLemmas.length || !assistanceEnabled) return null;
               return (
                 <div

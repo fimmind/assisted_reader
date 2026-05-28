@@ -43,6 +43,10 @@ function flattenTaggedSentences(paragraphs: string[], nlp: ChapterAnalysisInput[
   return output;
 }
 
+function buildTaggedSentenceGroups(paragraphs: string[], nlp: ChapterAnalysisInput['nlp']): TaggedSentence[][] {
+  return paragraphs.map((paragraph) => buildTaggedSentences(paragraph, nlp));
+}
+
 function buildParagraphTokenList(
   paragraph: string,
   taggedSentences: TaggedSentence[],
@@ -155,11 +159,12 @@ function selectCardLemmas(tokens: ParagraphToken[], maxCardsPerParagraph: number
 export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[] {
   const theta = estimateTheta(input.model, input.profile);
   const threshold = resolveKnowledgeThreshold(input.settings.knowledgeThreshold);
-  const allTaggedSentences = flattenTaggedSentences(input.chapter.paragraphs, input.nlp);
+  const taggedByParagraph = buildTaggedSentenceGroups(input.chapter.paragraphs, input.nlp);
+  const allTaggedSentences = taggedByParagraph.flat();
   const properLexicon = buildHighConfidenceProperNounLexicon(allTaggedSentences);
 
-  return input.chapter.paragraphs.map((paragraph) => {
-    const taggedSentences = buildTaggedSentences(paragraph, input.nlp);
+  return input.chapter.paragraphs.map((paragraph, paragraphIndex) => {
+    const taggedSentences = taggedByParagraph[paragraphIndex] ?? [];
     const tokens = buildParagraphTokenList(
       paragraph,
       taggedSentences,
@@ -196,11 +201,13 @@ export function calculateBookStats(
   const theta = estimateTheta(model, profile);
 
   for (const chapter of book.chapters) {
-    const allTagged = flattenTaggedSentences(chapter.paragraphs, nlp);
+    const taggedByParagraph = buildTaggedSentenceGroups(chapter.paragraphs, nlp);
+    const allTagged = taggedByParagraph.flat();
     const properLexicon = buildHighConfidenceProperNounLexicon(allTagged);
 
-    for (const paragraph of chapter.paragraphs) {
-      const taggedSentences = buildTaggedSentences(paragraph, nlp);
+    for (let paragraphIndex = 0; paragraphIndex < chapter.paragraphs.length; paragraphIndex += 1) {
+      const paragraph = chapter.paragraphs[paragraphIndex];
+      const taggedSentences = taggedByParagraph[paragraphIndex] ?? [];
       const tokens = buildParagraphTokenList(
         paragraph,
         taggedSentences,
