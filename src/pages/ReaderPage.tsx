@@ -493,23 +493,16 @@ export default function ReaderPage() {
               data-testid="text-column"
             >
               {chapterAnalysis.map((analysis, index) => (
-                <p
-                  key={index}
-                  ref={(element) => { paraRefs.current[index] = element; }}
-                  className="mb-10 text-foreground/90 reader-text"
-                  data-testid={`paragraph-${index}`}
-                >
-                  {renderParagraph(analysis)}
-                </p>
-              ))}
-            </div>
-
-            {assistanceEnabled && (
-              <div className="md:hidden mt-2 space-y-10 mb-10" data-testid="mobile-cards">
-                {chapterAnalysis.map((analysis, index) => {
-                  if (!analysis.cardLemmas.length) return null;
-                  return (
-                    <div key={index} className="flex flex-col gap-3" data-testid={`mobile-card-group-${index}`}>
+                <div key={index} className="mb-10" data-testid={`paragraph-block-${index}`}>
+                  <p
+                    ref={(element) => { paraRefs.current[index] = element; }}
+                    className="text-foreground/90 reader-text"
+                    data-testid={`paragraph-${index}`}
+                  >
+                    {renderParagraph(analysis)}
+                  </p>
+                  {assistanceEnabled && analysis.cardLemmas.length > 0 && (
+                    <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${index}`}>
                       {analysis.cardLemmas.map((lemma) => {
                         const definition = definitionsByLemma.get(lemma) ?? createFallbackLexiconEntry(lemma);
                         return (
@@ -522,10 +515,10 @@ export default function ReaderPage() {
                         );
                       })}
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  )}
+                </div>
+              ))}
+            </div>
 
             <div className="mt-20 pt-8 border-t border-border flex justify-between items-center text-muted-foreground font-serif">
               <Button variant="ghost" className="gap-2" data-testid="button-prev-chapter" onClick={() => void updateCurrentChapter(-1)}>
