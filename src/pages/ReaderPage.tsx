@@ -475,7 +475,7 @@ export default function ReaderPage() {
       >
         <div
           ref={rowRef}
-          className="relative flex items-start gap-10 py-12 md:py-20"
+          className="relative flex items-start gap-5 py-12 md:py-20"
           data-testid="reading-row"
         >
           <div className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
@@ -541,7 +541,7 @@ export default function ReaderPage() {
           </div>
 
           <div
-            className="hidden md:block relative w-[280px] flex-shrink-0"
+            className="hidden md:block relative w-[300px] flex-shrink-0"
             style={{ minHeight: 1 }}
             aria-label="Vocabulary cards"
             data-testid="card-column"
