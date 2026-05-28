@@ -125,10 +125,10 @@ export default function LibraryPage() {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b border-border">
-        <div className="container mx-auto px-4 md:px-8 h-16 flex items-center justify-between">
-          <div className="font-serif text-2xl font-bold tracking-tight text-primary">Easeword</div>
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 h-14 lg:h-16 flex items-center justify-between">
+          <div className="font-serif text-xl lg:text-2xl font-bold tracking-tight text-primary">Easeword</div>
 
-          <div className="flex items-center gap-2 md:gap-4">
+          <div className="flex items-center gap-1.5 md:gap-2.5 lg:gap-4">
             <Button
               variant="ghost"
               size="sm"
@@ -145,7 +145,7 @@ export default function LibraryPage() {
               <span className="hidden sm:inline">Quiz</span>
             </Button>
 
-            <div className="w-px h-6 bg-border mx-1"></div>
+            <div className="w-px h-5 lg:h-6 bg-border mx-0.5 lg:mx-1"></div>
 
             <Button
               variant="ghost"
@@ -166,7 +166,7 @@ export default function LibraryPage() {
         </div>
       </header>
 
-      <main className="flex-1 container mx-auto px-4 md:px-8 py-10">
+      <main className="flex-1 container mx-auto px-4 md:px-6 lg:px-8 py-8 md:py-7 lg:py-10">
         <div className="flex justify-between items-end mb-8">
           <h1 className="font-serif text-3xl md:text-4xl font-medium">Your Library</h1>
           <Button variant="ghost" size="icon" className="md:hidden text-muted-foreground hover:text-foreground" aria-label="Import Book" onClick={triggerImport} disabled={isImporting}>
@@ -185,7 +185,7 @@ export default function LibraryPage() {
         {isLoading ? (
           <div className="text-sm text-muted-foreground">Loading library...</div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 md:gap-10">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(130px,1fr))] sm:gap-4 md:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] md:gap-5 lg:grid-cols-[repeat(auto-fill,minmax(170px,1fr))] lg:gap-8">
             {books.map((book) => (
               <BookCard key={book.id} book={book} stats={statsByBookId[book.id] ?? fallbackStats} />
             ))}
