@@ -2,16 +2,41 @@ import { CALENDAR_EXCLUSIONS, SENTENCE_RE, TITLE_CASE_NOISE, WORD_RE, WORD_TOKEN
 import { isWordToken, normalizeToken, orderedUnique } from './math';
 import type { DeinflectionResult, TaggedSentence, TaggedTerm } from './types';
 
+type CompromiseTags = string[] | Record<string, unknown>;
+type CompromiseTermNode = {
+  text?: string;
+  normal?: string;
+  tags?: CompromiseTags;
+  terms?: CompromiseTermNode[];
+};
+
 type NlpLike = {
   (text: string): {
     terms: () => {
-      json: () => Array<{ text?: string; normal?: string; tags?: string[]; terms?: Array<{ text?: string; normal?: string; tags?: string[] }> }>;
+      json: () => CompromiseTermNode[];
     };
     verbs: () => { toInfinitive: () => { out: (format: 'text') => string } };
     nouns: () => { toSingular: () => { out: (format: 'text') => string } };
     adjectives: () => { conjugate: () => Array<Record<string, string>> };
   };
 };
+
+const COMPROMISE_PROPER_TAGS = new Set<string>([
+  'ProperNoun',
+  'Person',
+  'FirstName',
+  'LastName',
+  'MaleName',
+  'FemaleName',
+  'Place',
+  'City',
+  'Country',
+  'Region',
+  'Organization',
+  'Demonym',
+  'Acronym',
+  'Nationality',
+]);
 
 function buildFallbackTerms(sentence: string): TaggedTerm[] {
   const terms: TaggedTerm[] = [];
@@ -33,16 +58,33 @@ function buildFallbackTerms(sentence: string): TaggedTerm[] {
   return terms;
 }
 
-function flattenCompromiseTerms(jsonTerms: Array<{ text?: string; normal?: string; tags?: string[]; terms?: Array<{ text?: string; normal?: string; tags?: string[] }> }>): Array<{ text: string; tags: Set<string> }> {
+function extractCompromiseTermTags(rawTags: CompromiseTags | undefined): Set<string> {
+  const normalizeTag = (tag: string) => tag.replace(/^#/, '').trim();
+
+  if (Array.isArray(rawTags)) {
+    return new Set<string>(rawTags.map((tag) => normalizeTag(String(tag))).filter((tag) => tag.length > 0));
+  }
+  if (rawTags && typeof rawTags === 'object') {
+    return new Set<string>(Object.keys(rawTags).map((tag) => normalizeTag(tag)).filter((tag) => tag.length > 0));
+  }
+  return new Set<string>();
+}
+
+function flattenCompromiseTerms(jsonTerms: CompromiseTermNode[]): Array<{ text: string; tags: Set<string> }> {
   const output: Array<{ text: string; tags: Set<string> }> = [];
   for (const item of jsonTerms) {
+    const parentTags = extractCompromiseTermTags(item.tags);
     if (Array.isArray(item.terms) && item.terms.length > 0) {
       for (const nested of item.terms) {
         const text = nested.text ?? nested.normal ?? '';
         if (text.length === 0) {
           continue;
         }
-        output.push({ text, tags: new Set<string>(nested.tags ?? []) });
+        const mergedTags = new Set<string>(parentTags);
+        for (const tag of extractCompromiseTermTags(nested.tags)) {
+          mergedTags.add(tag);
+        }
+        output.push({ text, tags: mergedTags });
       }
       continue;
     }
@@ -51,7 +93,7 @@ function flattenCompromiseTerms(jsonTerms: Array<{ text?: string; normal?: strin
     if (text.length === 0) {
       continue;
     }
-    output.push({ text, tags: new Set<string>(item.tags ?? []) });
+    output.push({ text, tags: parentTags });
   }
   return output;
 }
@@ -135,16 +177,17 @@ function isAllUppercase(raw: string): boolean {
   return raw === raw.toUpperCase() && raw !== raw.toLowerCase();
 }
 
+function isTitleCaseToken(raw: string): boolean {
+  return isUppercaseInitial(raw) && !isAllUppercase(raw);
+}
+
 function hasProperTag(term: TaggedTerm): boolean {
-  const properTags = [
-    'ProperNoun',
-    'Person',
-    'Place',
-    'City',
-    'Country',
-    'Organization',
-  ];
-  return properTags.some((tag) => term.tags.has(tag));
+  for (const tag of COMPROMISE_PROPER_TAGS) {
+    if (term.tags.has(tag)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isNameLikeToken(raw: string, sentenceInitial: boolean): boolean {
@@ -176,7 +219,38 @@ export function isProperNounTag(term: TaggedTerm): boolean {
   if (hasProperTag(term)) {
     return true;
   }
+  if (isAllUppercase(term.raw)) {
+    if (term.raw.length < 2) {
+      return false;
+    }
+    const normalized = normalizeToken(term.raw);
+    if (CALENDAR_EXCLUSIONS.has(normalized) || TITLE_CASE_NOISE.has(normalized)) {
+      return false;
+    }
+    return true;
+  }
   return isNameLikeToken(term.raw, term.sentenceInitial);
+}
+
+function isStrongProperShapeTerm(term: TaggedTerm): boolean {
+  if (!WORD_TOKEN_RE.test(term.raw)) {
+    return false;
+  }
+
+  const normalized = normalizeToken(term.raw);
+  if (CALENDAR_EXCLUSIONS.has(normalized) || TITLE_CASE_NOISE.has(normalized)) {
+    return false;
+  }
+
+  if (isAllUppercase(term.raw)) {
+    return term.raw.length >= 2;
+  }
+
+  if (!isTitleCaseToken(term.raw)) {
+    return false;
+  }
+
+  return !term.sentenceInitial;
 }
 
 export function buildHighConfidenceProperNounLexicon(taggedSentences: TaggedSentence[]): Set<string> {
@@ -325,10 +399,13 @@ export function contextualDeinflectTaggedTerms(
   const tokens: string[] = [];
   const properFlags: boolean[] = [];
 
-  for (const term of terms) {
+  for (let index = 0; index < terms.length; index += 1) {
+    const term = terms[index];
     const normalized = normalizeToken(term.raw);
+    const explicitProperTag = hasProperTag(term);
     const tagProper = isProperNounTag(term);
-    const properByLexicon = tagProper && properNounLexicon.has(normalized);
+    const strongShapeProper = isStrongProperShapeTerm(term);
+    const properByLexicon = explicitProperTag || strongShapeProper || (tagProper && properNounLexicon.has(normalized));
     properFlags.push(properByLexicon);
 
     if (excludeProperNouns && properByLexicon) {

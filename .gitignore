@@ -51,3 +51,6 @@ Thumbs.db
 
 # generated static assets from sync:data
 public/data/
+
+# generated test artifacts
+.tmp-tests/
