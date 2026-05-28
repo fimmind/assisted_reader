@@ -161,14 +161,21 @@ export default function ReaderPage() {
       rafIdRef.current = null;
       if (!rowRef.current || !textColRef.current) return;
 
-      const newOffsets = paraRefs.current.map((element) => (element ? element.offsetTop : 0));
+      const rowRect = rowRef.current.getBoundingClientRect();
+      const rowStyles = window.getComputedStyle(rowRef.current);
+      const rowPaddingTop = Number.parseFloat(rowStyles.paddingTop) || 0;
+      const rowTop = rowRect.top + rowPaddingTop;
+      const newOffsets = paraRefs.current.map((element) =>
+        element ? (element.getBoundingClientRect().top - rowTop) : 0
+      );
       setParaOffsets((previous) =>
         previous.length === newOffsets.length && previous.every((value, index) => value === newOffsets[index])
           ? previous : [...newOffsets]);
 
       const textElement = textColRef.current;
       const naturalTextHeight = textElement.scrollHeight - extraPaddingRef.current;
-      const textBottom = textElement.offsetTop + naturalTextHeight;
+      const textTop = textElement.getBoundingClientRect().top - rowTop;
+      const textBottom = textTop + naturalTextHeight;
 
       let maxOverflow = 0;
       cardGrpRefs.current.forEach((element, index) => {
