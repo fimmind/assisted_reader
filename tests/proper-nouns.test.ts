@@ -6,6 +6,7 @@ import {
   contextualDeinflectTaggedTerms,
   tagSentenceTerms,
 } from '../src/core/nlp.js';
+import { normalizeToken } from '../src/core/math.js';
 import type { TaggedSentence, TaggedTerm } from '../src/core/types.js';
 
 function createStubNlpWithTaggedTerms(terms: Array<{ text: string; tags: Record<string, boolean> | string[] }>) {
@@ -56,6 +57,92 @@ function createTaggedTerm(raw: string, sentenceInitial: boolean): TaggedTerm {
     tags: new Set<string>(),
     sentenceInitial,
   };
+}
+
+type LemmaForms = {
+  verbInfinitive: string;
+  nounSingular: string;
+  adjectiveBase: string;
+};
+
+function createLemmaNlp(formsByToken: Record<string, LemmaForms>) {
+  return (text: string) => {
+    const normalized = normalizeToken(text);
+    const forms = formsByToken[normalized];
+    const verbInfinitive = forms ? forms.verbInfinitive : '';
+    const nounSingular = forms ? forms.nounSingular : '';
+    const adjectiveBase = forms ? forms.adjectiveBase : '';
+    return {
+      terms: () => ({
+        json: () => [] as Array<{ text: string; tags: Record<string, boolean> | string[] }>,
+      }),
+      verbs: () => ({ toInfinitive: () => ({ out: (_format: 'text') => verbInfinitive }) }),
+      nouns: () => ({ toSingular: () => ({ out: (_format: 'text') => nounSingular }) }),
+      adjectives: () => ({
+        conjugate: () => (adjectiveBase.length > 0 ? [{ adjective: adjectiveBase }] : []),
+      }),
+    };
+  };
+}
+
+function buildLowerToIdxForExpectedLemmas(
+  terms: TaggedTerm[],
+  expectedPairs: Array<{ token: string; lemma: string }>,
+): Map<string, number> {
+  const expectedTokenSet = new Set<string>(expectedPairs.map((pair) => normalizeToken(pair.token)));
+  const vocab: string[] = [];
+
+  for (const term of terms) {
+    if (expectedTokenSet.has(term.normalized)) {
+      continue;
+    }
+    vocab.push(term.normalized);
+  }
+  for (const pair of expectedPairs) {
+    vocab.push(normalizeToken(pair.lemma));
+  }
+
+  const lowerToIdx = new Map<string, number>();
+  for (const token of vocab) {
+    if (!lowerToIdx.has(token)) {
+      lowerToIdx.set(token, lowerToIdx.size);
+    }
+  }
+  return lowerToIdx;
+}
+
+function assertSentenceDeinflection(
+  sentence: string,
+  expectedPairs: Array<{ token: string; lemma: string }>,
+  formsByToken: Record<string, LemmaForms>,
+) {
+  const terms = tagSentenceTerms(sentence, null);
+  const lowerToIdx = buildLowerToIdxForExpectedLemmas(terms, expectedPairs);
+  const nlp = createLemmaNlp(formsByToken);
+  const result = contextualDeinflectTaggedTerms(terms, {}, lowerToIdx, new Set<string>(), false, nlp);
+
+  assert.equal(result.tokens.length, terms.length, `Token count mismatch for sentence: ${sentence}`);
+  for (const token of result.tokens) {
+    assert.notEqual(token, '', `Unexpected filtered token while deinflecting: ${sentence}`);
+  }
+
+  for (const pair of expectedPairs) {
+    const normalizedToken = normalizeToken(pair.token);
+    const normalizedLemma = normalizeToken(pair.lemma);
+    let found = false;
+    for (let index = 0; index < terms.length; index += 1) {
+      if (terms[index].normalized !== normalizedToken) {
+        continue;
+      }
+      found = true;
+      assert.equal(
+        result.tokens[index],
+        normalizedLemma,
+        `Expected '${pair.token}' -> '${pair.lemma}' in sentence: ${sentence}`,
+      );
+    }
+    assert.equal(found, true, `Token '${pair.token}' not found in sentence: ${sentence}`);
+  }
 }
 
 test('compromise object tags are parsed and explicit proper names are excluded', () => {
@@ -570,5 +657,169 @@ test('ten Hitchhikers sentences exclude proper nouns reliably', () => {
     for (const expected of sample.expectedIncluded) {
       assert.equal(included.has(expected), true, `Expected '${expected}' to remain included in sentence: ${sample.sentence}`);
     }
+  }
+});
+
+test('contextual deinflection matches expected mappings for provided sentences', () => {
+  const sentenceOne = 'When the seas move, this bird too travels to the south darkness, the darkness known as the Pool of Heaven.';
+  const sentenceTwo = 'Is this its true colour? Or is it because it is so far away that it appears like this?';
+  const sentenceThree = 'Someone who goes into the countryside with his lunch, and returns in time for the evening meal will be as full as when he left.';
+  const sentenceFour = 'Concerning the record of the past actions of the kings in the Spring and Autumn Annals, the sage discusses but does not judge.';
+
+  const formsByToken: Record<string, LemmaForms> = {
+    seas: { verbInfinitive: '', nounSingular: 'sea', adjectiveBase: '' },
+    travels: { verbInfinitive: 'travel', nounSingular: '', adjectiveBase: '' },
+    appears: { verbInfinitive: 'appear', nounSingular: '', adjectiveBase: '' },
+    returns: { verbInfinitive: 'return', nounSingular: '', adjectiveBase: '' },
+    actions: { verbInfinitive: '', nounSingular: 'action', adjectiveBase: '' },
+    kings: { verbInfinitive: '', nounSingular: 'king', adjectiveBase: '' },
+    discusses: { verbInfinitive: 'discuss', nounSingular: '', adjectiveBase: '' },
+  };
+
+  assertSentenceDeinflection(sentenceOne, [
+    { token: 'seas', lemma: 'sea' },
+    { token: 'travels', lemma: 'travel' },
+  ], formsByToken);
+  assertSentenceDeinflection(sentenceTwo, [{ token: 'appears', lemma: 'appear' }], formsByToken);
+  assertSentenceDeinflection(sentenceThree, [{ token: 'returns', lemma: 'return' }], formsByToken);
+  assertSentenceDeinflection(sentenceFour, [
+    { token: 'actions', lemma: 'action' },
+    { token: 'kings', lemma: 'king' },
+  ], formsByToken);
+});
+
+test('ten AiW sentences run contextual deinflection with expected lemmas', () => {
+  const formsByToken: Record<string, LemmaForms> = {
+    sitting: { verbInfinitive: 'sit', nounSingular: '', adjectiveBase: '' },
+    considering: { verbInfinitive: 'consider', nounSingular: '', adjectiveBase: '' },
+    daisies: { verbInfinitive: '', nounSingular: 'daisy', adjectiveBase: '' },
+    doors: { verbInfinitive: '', nounSingular: 'door', adjectiveBase: '' },
+    looked: { verbInfinitive: 'look', nounSingular: '', adjectiveBase: '' },
+    words: { verbInfinitive: '', nounSingular: 'word', adjectiveBase: '' },
+    lamps: { verbInfinitive: '', nounSingular: 'lamp', adjectiveBase: '' },
+    gardeners: { verbInfinitive: '', nounSingular: 'gardener', adjectiveBase: '' },
+    dates: { verbInfinitive: '', nounSingular: 'date', adjectiveBase: '' },
+    soldiers: { verbInfinitive: '', nounSingular: 'soldier', adjectiveBase: '' },
+    hedgehogs: { verbInfinitive: '', nounSingular: 'hedgehog', adjectiveBase: '' },
+  };
+
+  const cases: Array<{ sentence: string; expectedPairs: Array<{ token: string; lemma: string }> }> = [
+    {
+      sentence: 'Alice was beginning to get very tired of sitting by her sister on the bank.',
+      expectedPairs: [{ token: 'sitting', lemma: 'sit' }],
+    },
+    {
+      sentence: 'So she was considering in her own mind whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies.',
+      expectedPairs: [
+        { token: 'considering', lemma: 'consider' },
+        { token: 'daisies', lemma: 'daisy' },
+      ],
+    },
+    {
+      sentence: 'There were doors all round the hall, but they were all locked.',
+      expectedPairs: [{ token: 'doors', lemma: 'door' }],
+    },
+    {
+      sentence: 'The rabbit took a watch out of its waistcoat-pocket, and looked at it, and then hurried on.',
+      expectedPairs: [{ token: 'looked', lemma: 'look' }],
+    },
+    {
+      sentence: 'Alice had no idea what Latitude was, or Longitude either, but thought they were nice grand words to say.',
+      expectedPairs: [{ token: 'words', lemma: 'word' }],
+    },
+    {
+      sentence: 'The lamps were burning, and the cups were full.',
+      expectedPairs: [{ token: 'lamps', lemma: 'lamp' }],
+    },
+    {
+      sentence: 'The gardeners were painting the white roses red.',
+      expectedPairs: [{ token: 'gardeners', lemma: 'gardener' }],
+    },
+    {
+      sentence: 'The jurymen were writing down all three dates on their slates.',
+      expectedPairs: [{ token: 'dates', lemma: 'date' }],
+    },
+    {
+      sentence: 'The soldiers were silent and looked at the Queen.',
+      expectedPairs: [{ token: 'soldiers', lemma: 'soldier' }],
+    },
+    {
+      sentence: 'The hedgehogs were engaged in fighting with each other.',
+      expectedPairs: [{ token: 'hedgehogs', lemma: 'hedgehog' }],
+    },
+  ];
+
+  for (const sample of cases) {
+    assertSentenceDeinflection(sample.sentence, sample.expectedPairs, formsByToken);
+  }
+});
+
+test('ten Hitchhikers sentences run contextual deinflection with expected lemmas', () => {
+  const formsByToken: Record<string, LemmaForms> = {
+    blinked: { verbInfinitive: 'blink', nounSingular: '', adjectiveBase: '' },
+    screens: { verbInfinitive: '', nounSingular: 'screen', adjectiveBase: '' },
+    grabbed: { verbInfinitive: 'grab', nounSingular: '', adjectiveBase: '' },
+    towels: { verbInfinitive: '', nounSingular: 'towel', adjectiveBase: '' },
+    voices: { verbInfinitive: '', nounSingular: 'voice', adjectiveBase: '' },
+    mutters: { verbInfinitive: 'mutter', nounSingular: '', adjectiveBase: '' },
+    watches: { verbInfinitive: 'watch', nounSingular: '', adjectiveBase: '' },
+    robots: { verbInfinitive: '', nounSingular: 'robot', adjectiveBase: '' },
+    shuffled: { verbInfinitive: 'shuffle', nounSingular: '', adjectiveBase: '' },
+    glances: { verbInfinitive: '', nounSingular: 'glance', adjectiveBase: '' },
+    calculated: { verbInfinitive: 'calculate', nounSingular: '', adjectiveBase: '' },
+    passengers: { verbInfinitive: '', nounSingular: 'passenger', adjectiveBase: '' },
+  };
+
+  const cases: Array<{ sentence: string; expectedPairs: Array<{ token: string; lemma: string }> }> = [
+    {
+      sentence: 'Arthur blinked at the screens and listened to the engines.',
+      expectedPairs: [
+        { token: 'blinked', lemma: 'blink' },
+        { token: 'screens', lemma: 'screen' },
+      ],
+    },
+    {
+      sentence: 'Ford grabbed the towels and stuffed them into the satchel.',
+      expectedPairs: [
+        { token: 'grabbed', lemma: 'grab' },
+        { token: 'towels', lemma: 'towel' },
+      ],
+    },
+    {
+      sentence: 'The voices echoed through the corridors of the ship.',
+      expectedPairs: [{ token: 'voices', lemma: 'voice' }],
+    },
+    {
+      sentence: 'Zaphod mutters and grins while the doors slide open.',
+      expectedPairs: [{ token: 'mutters', lemma: 'mutter' }],
+    },
+    {
+      sentence: 'Trillian watches the stars and writes notes.',
+      expectedPairs: [{ token: 'watches', lemma: 'watch' }],
+    },
+    {
+      sentence: 'The robots carry trays and answer questions.',
+      expectedPairs: [{ token: 'robots', lemma: 'robot' }],
+    },
+    {
+      sentence: 'Marvin shuffled across the decks and sighed.',
+      expectedPairs: [{ token: 'shuffled', lemma: 'shuffle' }],
+    },
+    {
+      sentence: 'They exchanged glances and whispered about probabilities.',
+      expectedPairs: [{ token: 'glances', lemma: 'glance' }],
+    },
+    {
+      sentence: 'The computers calculated routes and printed warnings.',
+      expectedPairs: [{ token: 'calculated', lemma: 'calculate' }],
+    },
+    {
+      sentence: 'Passengers hurried toward exits as alarms started ringing.',
+      expectedPairs: [{ token: 'passengers', lemma: 'passenger' }],
+    },
+  ];
+
+  for (const sample of cases) {
+    assertSentenceDeinflection(sample.sentence, sample.expectedPairs, formsByToken);
   }
 });

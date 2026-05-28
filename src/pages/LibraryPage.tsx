@@ -13,7 +13,6 @@ import { calculateBookStats } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
-import { loadCompromise } from '@/core/external';
 import type { BookStats, ImportedBook } from '@/core/types';
 
 export default function LibraryPage() {
@@ -31,6 +30,29 @@ export default function LibraryPage() {
     progressPercent: 0,
   }), []);
 
+  const calculateStatsForBooks = (
+    loadedBooks: ImportedBook[],
+    model: Awaited<ReturnType<typeof loadVocabularyModel>>,
+    lemmaDict: Awaited<ReturnType<typeof loadLemmaDict>>,
+  ): Record<string, BookStats> => {
+    const profileState = loadProfileState();
+    const activeProfile = getActiveProfile(profileState);
+    const settings = loadReaderSettings();
+    const nextStats: Record<string, BookStats> = {};
+
+    for (const book of loadedBooks) {
+      let stats: BookStats | null = null;
+      try {
+        stats = calculateBookStats(book, settings, model, activeProfile, lemmaDict, null);
+      } catch (error) {
+        console.warn('library-book-stats-failed', { bookId: book.id, error });
+      }
+      nextStats[book.id] = stats ?? fallbackStats;
+    }
+
+    return nextStats;
+  };
+
   const refreshBooksAndStats = async () => {
     setIsLoading(true);
 
@@ -46,39 +68,12 @@ export default function LibraryPage() {
       }
       setBooks(loadedBooks);
 
-      const [model, lemmaDict, nlp] = await Promise.all([
+      const [model, lemmaDict] = await Promise.all([
         loadVocabularyModel(),
         loadLemmaDict(),
-        loadCompromise(),
       ]);
 
-      const profileState = loadProfileState();
-      const activeProfile = getActiveProfile(profileState);
-      const settings = loadReaderSettings();
-
-      const nextStats: Record<string, BookStats> = {};
-      for (const book of loadedBooks) {
-        let stats: BookStats | null = null;
-
-        try {
-          stats = calculateBookStats(book, settings, model, activeProfile, lemmaDict, nlp);
-        } catch (error) {
-          console.warn('library-book-stats-with-nlp-failed', { bookId: book.id, error });
-        }
-
-        if (!stats || (stats.unknownTokenCount === 0 && nlp !== null)) {
-          try {
-            const fallbackStats = calculateBookStats(book, settings, model, activeProfile, lemmaDict, null);
-            if (!stats || fallbackStats.unknownTokenCount > stats.unknownTokenCount) {
-              stats = fallbackStats;
-            }
-          } catch (error) {
-            console.warn('library-book-stats-fallback-failed', { bookId: book.id, error });
-          }
-        }
-
-        nextStats[book.id] = stats ?? fallbackStats;
-      }
+      const nextStats = calculateStatsForBooks(loadedBooks, model, lemmaDict);
       setStatsByBookId(nextStats);
     } catch (error) {
       console.error('library-refresh-failed', { error });

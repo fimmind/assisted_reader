@@ -232,7 +232,7 @@ export function isProperNounTag(term: TaggedTerm): boolean {
   return isNameLikeToken(term.raw, term.sentenceInitial);
 }
 
-function isStrongProperShapeTerm(term: TaggedTerm): boolean {
+function isStrongProperShapeTerm(term: TaggedTerm, next: TaggedTerm | null): boolean {
   if (!WORD_TOKEN_RE.test(term.raw)) {
     return false;
   }
@@ -248,6 +248,13 @@ function isStrongProperShapeTerm(term: TaggedTerm): boolean {
 
   if (!isTitleCaseToken(term.raw)) {
     return false;
+  }
+
+  if (term.sentenceInitial && next !== null) {
+    const nextIsTitleCaseWord = WORD_TOKEN_RE.test(next.raw) && isTitleCaseToken(next.raw);
+    if (nextIsTitleCaseWord && !normalized.endsWith('ly')) {
+      return true;
+    }
   }
 
   return !term.sentenceInitial;
@@ -401,10 +408,11 @@ export function contextualDeinflectTaggedTerms(
 
   for (let index = 0; index < terms.length; index += 1) {
     const term = terms[index];
+    const next = index < (terms.length - 1) ? terms[index + 1] : null;
     const normalized = normalizeToken(term.raw);
     const explicitProperTag = hasProperTag(term);
     const tagProper = isProperNounTag(term);
-    const strongShapeProper = isStrongProperShapeTerm(term);
+    const strongShapeProper = isStrongProperShapeTerm(term, next);
     const properByLexicon = explicitProperTag || strongShapeProper || (tagProper && properNounLexicon.has(normalized));
     properFlags.push(properByLexicon);
 
@@ -414,20 +422,10 @@ export function contextualDeinflectTaggedTerms(
     }
 
     const candidates = makeLemmaCandidates(term, lemmaDict, nlp);
-    let chosen = normalized;
+    const selectedFromVocab = candidates.find((candidate) => lowerToIdx.has(candidate));
+    const selected = selectedFromVocab ?? candidates[0] ?? normalized;
 
-    for (const candidate of candidates) {
-      if (lowerToIdx.has(candidate)) {
-        chosen = candidate;
-        break;
-      }
-    }
-
-    if (chosen.length === 0 && candidates.length > 0) {
-      chosen = candidates[0];
-    }
-
-    tokens.push(chosen);
+    tokens.push(selected);
   }
 
   return { tokens, properFlags };
