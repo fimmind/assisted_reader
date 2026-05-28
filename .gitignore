@@ -48,3 +48,6 @@ Thumbs.db
 .cache/
 .local/
 .agents/
+
+# generated static assets from sync:data
+public/data/
