@@ -132,12 +132,12 @@ export default function LibraryPage() {
             <Button
               variant="ghost"
               size="sm"
-              className="hidden md:flex gap-2 text-muted-foreground hover:text-foreground"
+              className="flex gap-2 text-muted-foreground hover:text-foreground"
               onClick={triggerImport}
               disabled={isImporting}
             >
               <Upload size={18} />
-              <span>{isImporting ? 'Importing...' : 'Import Book'}</span>
+              <span className="hidden sm:inline">{isImporting ? 'Importing...' : 'Import Book'}</span>
             </Button>
 
             <Button variant="outline" size="sm" onClick={() => setQuizOpen(true)} className="gap-2 border-primary/20 text-primary hover:bg-primary hover:text-primary-foreground transition-colors">
@@ -167,20 +167,14 @@ export default function LibraryPage() {
       </header>
 
       <main className="flex-1 container mx-auto px-4 md:px-6 lg:px-8 py-8 md:py-7 lg:py-10">
-        <div className="flex justify-between items-end mb-8">
-          <h1 className="font-serif text-3xl md:text-4xl font-medium">Your Library</h1>
-          <Button variant="ghost" size="icon" className="md:hidden text-muted-foreground hover:text-foreground" aria-label="Import Book" onClick={triggerImport} disabled={isImporting}>
-            <Upload size={20} />
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".txt,.epub"
-            multiple
-            className="hidden"
-            onChange={onImportFiles}
-          />
-        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".txt,.epub"
+          multiple
+          className="hidden"
+          onChange={onImportFiles}
+        />
 
         {isLoading ? (
           <div className="text-sm text-muted-foreground">Loading library...</div>
