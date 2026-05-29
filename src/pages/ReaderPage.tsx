@@ -78,42 +78,39 @@ function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHand
   return { kind: 'timeout', id };
 }
 
-function buildDefinitionMap(analyses: ParagraphAnalysis[], lexiconMap: Map<string, LexiconEntry>): Map<string, LexiconEntry> {
-  const definitionMap = new Map<string, LexiconEntry>();
-  for (const paragraph of analyses) {
-    for (const lemma of paragraph.cardLemmas) {
-      const found = lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
-      definitionMap.set(lemma, found);
-    }
-  }
-  return definitionMap;
-}
-
-function buildChapterAnalysis(
+function buildParagraphAnalysisAtIndex(
   selectedBook: ImportedBook,
   settings: ReaderSettings,
   profile: UserProfile,
   resources: ReaderResources,
+  paragraphIndex: number,
   assistanceEnabled: boolean,
-): ParagraphAnalysis[] {
+): ParagraphAnalysis {
   const chapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
   const chapterIndex = chapterNumber - 1;
   const chapter = selectedBook.chapters[chapterIndex];
-  const maxCardsPerParagraph = Math.max(1, Math.min(3, settings.maxWordsPerParagraph));
-
+  if (!chapter) {
+    return { paragraphText: '', tokens: [], cardLemmas: [] };
+  }
+  const paragraphText = chapter.paragraphs[paragraphIndex] ?? '';
   if (!assistanceEnabled) {
-    return chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardLemmas: [] }));
+    return { paragraphText, tokens: [], cardLemmas: [] };
   }
 
-  return analyzeChapter({
-    chapter,
+  const analyses = analyzeChapter({
+    chapter: {
+      title: chapter.title,
+      paragraphs: [paragraphText],
+    },
     settings,
     model: resources.model,
     profile,
     lemmaDict: resources.lemmaDict,
     nlp: resources.nlp,
-    maxCardsPerParagraph,
+    maxCardsPerParagraph: Math.max(1, Math.min(3, settings.maxWordsPerParagraph)),
   });
+
+  return analyses[0] ?? { paragraphText, tokens: [], cardLemmas: [] };
 }
 
 function buildPlainChapterAnalysis(selectedBook: ImportedBook): ParagraphAnalysis[] {
@@ -141,8 +138,7 @@ export default function ReaderPage() {
   const settingsRef = useRef<ReaderSettings>(settings);
   const assistanceEnabledRef = useRef<boolean>(assistanceEnabled);
   const analysisRunIdRef = useRef(0);
-  const fastAnalysisHandleRef = useRef<DeferredHandle | null>(null);
-  const fullAnalysisHandleRef = useRef<DeferredHandle | null>(null);
+  const deferredAnalysisHandleRef = useRef<DeferredHandle | null>(null);
 
   const lastScrollY = useRef(0);
 
@@ -166,78 +162,71 @@ export default function ReaderPage() {
     analysisRunIdRef.current = currentRunId;
     const expectedParagraphCount = buildPlainChapterAnalysis(selectedBook).length;
 
-    const applyAnalysis = (analyses: ParagraphAnalysis[]) => {
-      if (analysisRunIdRef.current !== currentRunId) {
-        return;
-      }
-      if (analyses.length !== expectedParagraphCount) {
-        console.warn('reader-analysis-length-mismatch', {
-          expectedParagraphCount,
-          actualParagraphCount: analyses.length,
-          chapter: selectedBook.currentChapter,
-          bookId: selectedBook.id,
-        });
-        return;
-      }
-      const definitionMap = buildDefinitionMap(analyses, resources.lexiconMap);
-      setChapterAnalysis(analyses);
-      setDefinitionsByLemma(definitionMap);
-    };
-
     const plainAnalyses = buildPlainChapterAnalysis(selectedBook);
     setChapterAnalysis(plainAnalyses);
     setDefinitionsByLemma(new Map());
-    clearDeferredHandle(fastAnalysisHandleRef.current);
-    fastAnalysisHandleRef.current = null;
-    clearDeferredHandle(fullAnalysisHandleRef.current);
-    fullAnalysisHandleRef.current = null;
+    clearDeferredHandle(deferredAnalysisHandleRef.current);
+    deferredAnalysisHandleRef.current = null;
 
     if (!assistanceEnabledRef.current) {
       return;
     }
 
-    fastAnalysisHandleRef.current = scheduleDeferredTask(() => {
+    deferredAnalysisHandleRef.current = scheduleDeferredTask(() => {
       if (analysisRunIdRef.current !== currentRunId) {
         return;
       }
 
-      const fastResources: ReaderResources = { ...resources, nlp: null };
-      try {
-        const fastAnalyses = buildChapterAnalysis(
-          selectedBook,
-          settingsRef.current,
-          activeProfile,
-          fastResources,
-          true,
-        );
-        applyAnalysis(fastAnalyses);
-      } catch (error) {
-        console.warn('reader-fast-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
-        return;
-      }
-
-      if (resources.nlp === null) {
-        return;
-      }
-
-      fullAnalysisHandleRef.current = scheduleDeferredTask(() => {
-        if (analysisRunIdRef.current !== currentRunId) {
-          return;
-        }
+      void (async () => {
         try {
-          const fullAnalyses = buildChapterAnalysis(
-            selectedBook,
-            settingsRef.current,
-            activeProfile,
-            resources,
-            true,
-          );
-          applyAnalysis(fullAnalyses);
+          const nextAnalyses = plainAnalyses.slice();
+          const definitionMap = new Map<string, LexiconEntry>();
+
+          for (let paragraphIndex = 0; paragraphIndex < expectedParagraphCount; paragraphIndex += 1) {
+            if (analysisRunIdRef.current !== currentRunId) {
+              return;
+            }
+
+            try {
+              const analysis = buildParagraphAnalysisAtIndex(
+                selectedBook,
+                settingsRef.current,
+                activeProfile,
+                resources,
+                paragraphIndex,
+                true,
+              );
+              nextAnalyses[paragraphIndex] = analysis;
+
+              for (const lemma of analysis.cardLemmas) {
+                const found = resources.lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
+                definitionMap.set(lemma, found);
+              }
+            } catch (error) {
+              console.warn('reader-paragraph-analysis-failed', {
+                error,
+                chapter: selectedBook.currentChapter,
+                paragraphIndex,
+                bookId: selectedBook.id,
+              });
+            }
+
+            if (analysisRunIdRef.current !== currentRunId) {
+              return;
+            }
+
+            setChapterAnalysis([...nextAnalyses]);
+            setDefinitionsByLemma(new Map(definitionMap));
+
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
+          }
         } catch (error) {
-          console.warn('reader-full-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
+          console.warn('reader-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
         }
-      }, 1500);
-    }, 600);
+      })();
+    }, 700);
   }, []);
 
   const loadReaderState = useCallback(async () => {
@@ -308,10 +297,8 @@ export default function ReaderPage() {
   }, [loadReaderState, recomputeVisibleAnalysis]);
 
   useEffect(() => () => {
-    clearDeferredHandle(fastAnalysisHandleRef.current);
-    fastAnalysisHandleRef.current = null;
-    clearDeferredHandle(fullAnalysisHandleRef.current);
-    fullAnalysisHandleRef.current = null;
+    clearDeferredHandle(deferredAnalysisHandleRef.current);
+    deferredAnalysisHandleRef.current = null;
   }, []);
 
   const markLemma = (lemma: string, known: boolean) => {
