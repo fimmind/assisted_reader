@@ -838,6 +838,9 @@ export default function ReaderPage() {
     currentChapterNumber,
     chapterParagraphs[0],
   );
+  const profileStateForRender = loadProfileState();
+  const activeProfileForRender = getActiveProfile(profileStateForRender);
+  const observationLabels = activeProfileForRender.observations;
   const paragraphStartIndex = shouldHideFirstParagraphAsDuplicateTitle(chapterDisplayTitle, chapterParagraphs[0]) ? 1 : 0;
   const visibleParagraphEntries = chapterParagraphs.slice(paragraphStartIndex).map((paragraphText, visibleIndex) => ({
     paragraphText,
@@ -996,12 +999,15 @@ export default function ReaderPage() {
                     <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
                       {analysis.cardLemmas.map((lemma) => {
                         const definition = definitionsByLemma.get(lemma) ?? createFallbackLexiconEntry(lemma);
+                        const observation = observationLabels[lemma.toLowerCase()];
                         return (
                           <WordDefinitionCard
                             key={lemma}
                             definition={definition}
                             onMarkKnown={() => markLemma(lemma, true)}
                             onMarkUnknown={() => markLemma(lemma, false)}
+                            isMarkedKnown={observation === 1}
+                            isMarkedUnknown={observation === 0}
                           />
                         );
                       })}
@@ -1044,12 +1050,15 @@ export default function ReaderPage() {
                 >
                   {analysis.cardLemmas.map((lemma) => {
                     const definition = definitionsByLemma.get(lemma) ?? createFallbackLexiconEntry(lemma);
+                    const observation = observationLabels[lemma.toLowerCase()];
                     return (
                       <WordDefinitionCard
                         key={lemma}
                         definition={definition}
                         onMarkKnown={() => markLemma(lemma, true)}
                         onMarkUnknown={() => markLemma(lemma, false)}
+                        isMarkedKnown={observation === 1}
+                        isMarkedUnknown={observation === 0}
                       />
                     );
                   })}
