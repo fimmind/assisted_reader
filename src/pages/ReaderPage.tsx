@@ -582,7 +582,7 @@ export default function ReaderPage() {
               {chapterParagraphs.map((paragraphText, index) => {
                 const analysis = chapterAnalysis[index] ?? { paragraphText, tokens: [], cardLemmas: [] };
                 return (
-                <div key={index} className="mb-10" data-testid={`paragraph-block-${index}`}>
+                <div key={index} className="mb-2" data-testid={`paragraph-block-${index}`}>
                   <p
                     ref={(element) => { paraRefs.current[index] = element; }}
                     className="text-foreground/90 reader-text"
