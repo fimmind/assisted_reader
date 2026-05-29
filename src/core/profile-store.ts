@@ -157,6 +157,21 @@ export function createProfile(name: string): void {
   saveProfileState(state);
 }
 
+export function renameProfile(profileId: string, name: string): void {
+  const trimmedName = name.trim();
+  if (trimmedName.length === 0) {
+    throw new Error('Profile name cannot be empty.');
+  }
+
+  const state = loadProfileState();
+  const profile = state.profiles.find((item) => item.id === profileId);
+  if (!profile) {
+    throw new Error(`Cannot rename profile. Missing id=${profileId}`);
+  }
+  profile.name = trimmedName;
+  saveProfileState(state);
+}
+
 export function setActiveProfile(profileId: string): void {
   const state = loadProfileState();
   const exists = state.profiles.some((profile) => profile.id === profileId);

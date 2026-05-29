@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
-import { ChevronLeft, Trash2, Upload, Download, Plus, RotateCcw } from 'lucide-react';
+import { ChevronLeft, Trash2, Upload, Download, Plus, RotateCcw, Pencil } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useSettings } from '../hooks/useSettings';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
+import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
 import type { UserProfile } from '@/core/types';
 
 export default function SettingsPage() {
@@ -36,8 +36,41 @@ export default function SettingsPage() {
     if (!name) {
       return;
     }
-    createProfile(name);
+    try {
+      createProfile(name);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create profile.';
+      window.alert(message);
+    }
   };
+
+  const renameExistingProfile = (profile: UserProfile) => {
+    const nextName = window.prompt('New profile name', profile.name);
+    if (nextName === null) {
+      return;
+    }
+    try {
+      renameProfile(profile.id, nextName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to rename profile.';
+      window.alert(message);
+    }
+  };
+
+  const deleteExistingProfile = (profile: UserProfile) => {
+    const confirmed = window.confirm(`Delete profile "${profile.name}"? This will permanently remove all saved vocabulary observations.`);
+    if (!confirmed) {
+      return;
+    }
+    try {
+      deleteProfile(profile.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete profile.';
+      window.alert(message);
+    }
+  };
+
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -77,41 +110,42 @@ export default function SettingsPage() {
                     {activeProfileId === profile.id && <span className="text-xs text-primary font-medium">Active</span>}
                   </div>
                 </div>
-                <div className="flex gap-2" onClick={(event) => event.stopPropagation()}>
-                  {profiles.length > 1 && (
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10">
-                          <Trash2 size={16} />
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Delete profile?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This will permanently delete the profile "{profile.name}" and all saved vocabulary observations.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => deleteProfile(profile.id)}>
-                            Delete
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  )}
-                </div>
               </button>
             ))}
 
-            <div className="flex gap-3">
-              <Button variant="outline" className="gap-2" onClick={createNewProfile}>
+            <div className="flex flex-wrap gap-3">
+              <Button variant="outline" className="gap-2 flex-1 min-w-[140px] sm:flex-none" onClick={createNewProfile}>
                 <Plus size={16} /> New Profile
+              </Button>
+              <Button
+                variant="outline"
+                className="gap-2 flex-1 min-w-[140px] sm:flex-none"
+                onClick={() => {
+                  if (!activeProfile) {
+                    return;
+                  }
+                  renameExistingProfile(activeProfile);
+                }}
+                disabled={!activeProfile}
+              >
+                <Pencil size={16} /> Rename
+              </Button>
+              <Button
+                variant="outline"
+                className="gap-2 flex-1 min-w-[140px] sm:flex-none"
+                onClick={() => {
+                  if (!activeProfile) {
+                    return;
+                  }
+                  deleteExistingProfile(activeProfile);
+                }}
+                disabled={!activeProfile || profiles.length <= 1}
+              >
+                <Trash2 size={16} /> Delete
               </Button>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="outline" className="gap-2" disabled={profiles.length === 0}>
+                  <Button variant="outline" className="gap-2 flex-1 min-w-[140px] sm:flex-none" disabled={profiles.length === 0}>
                     <RotateCcw size={16} /> Reset
                   </Button>
                 </AlertDialogTrigger>
@@ -130,10 +164,10 @@ export default function SettingsPage() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
-              <Button variant="outline" className="gap-2" disabled>
+              <Button variant="outline" className="gap-2 flex-1 min-w-[140px] sm:flex-none" disabled>
                 <Upload size={16} /> Import
               </Button>
-              <Button variant="outline" className="gap-2" disabled>
+              <Button variant="outline" className="gap-2 flex-1 min-w-[140px] sm:flex-none" disabled>
                 <Download size={16} /> Export
               </Button>
             </div>
