@@ -18,6 +18,7 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   pageWidth: 'Normal',
   maxWordsPerParagraph: 2,
   knowledgeThreshold: 0.5,
+  englishVariant: 'US',
 };
 
 export const DEFAULT_PROFILE_NAME = 'Default Reader';

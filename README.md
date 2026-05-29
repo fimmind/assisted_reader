@@ -141,7 +141,29 @@ Definition entries are sourced from **Wiktionary** via **Wiktextract** exports.
 
 The builder matches entries to words from `data/best_grouped_irt_model_model_data.json`, prefers English (`lang_code = "en"`), and falls back to `"Definition unavailable in this build."` when no usable definition is found.
 
+Generated lexicon entry behavior:
+
+- up to 2 bundled definitions per word (`definitions`), with near-identical inflection glosses filtered out
+- separate pronunciation fields for US/UK variants when available (`ipaUs`, `ipaUk`)
+- compatibility fields (`definition`, `ipa`) retained for runtime fallback
+
+Runtime display behavior:
+
+- Settings include **English Variant** (`US` or `UK`)
+- definition cards select pronunciation by that variant (`ipaUs`/`ipaUk`) with fallback when one variant is missing
+- the same setting path is intended to influence definitions in future work
+
 These assets must exist in `public/data/` for runtime fetches. `sync:data` handles this.
+
+### Deploy bundling guarantee
+
+`pnpm run verify:deploy-assets` validates that deploy output (`dist/`) includes:
+
+- `data/lexicon_full.json`
+- `data/lexicon/index.json`
+- every chunk file referenced by `index.json`
+
+and performs schema sanity checks on `lexicon_full.json` entries to ensure definitions are present.
 
 ## Useful commands
 

@@ -17,6 +17,10 @@ function normalizeWord(value) {
   return String(value).trim().toLowerCase();
 }
 
+function normalizeSpaces(value) {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
 function resolveChunkKey(word) {
   const firstChar = word[0] ?? '_';
   return /^[a-z]$/.test(firstChar) ? firstChar : '_';
@@ -54,65 +58,200 @@ function loadOverrides() {
       continue;
     }
     const word = normalizeWord(entry.word);
-    const definition = typeof entry.definition === 'string' ? entry.definition.trim() : '';
+    const definition = typeof entry.definition === 'string' ? normalizeSpaces(entry.definition) : '';
     if (word.length === 0 || definition.length === 0) {
       continue;
     }
-    const ipa = typeof entry.ipa === 'string' ? entry.ipa.trim() : '';
+    const ipa = typeof entry.ipa === 'string' ? normalizeSpaces(entry.ipa) : '';
+    const ipaUs = typeof entry.ipaUs === 'string' ? normalizeSpaces(entry.ipaUs) : '';
+    const ipaUk = typeof entry.ipaUk === 'string' ? normalizeSpaces(entry.ipaUk) : '';
+    const definitions = Array.isArray(entry.definitions)
+      ? entry.definitions
+        .filter((item) => typeof item === 'string')
+        .map((item) => normalizeSpaces(item))
+        .filter((item) => item.length > 0)
+      : [definition];
+    const uniqueDefinitions = [];
+    const seen = new Set();
+    for (const item of definitions) {
+      if (!seen.has(item)) {
+        uniqueDefinitions.push(item);
+        seen.add(item);
+      }
+      if (uniqueDefinitions.length >= 2) {
+        break;
+      }
+    }
     const pos = typeof entry.pos === 'string' ? entry.pos.trim() : '';
-    map.set(word, { word, ipa, pos, definition });
+    map.set(word, {
+      word,
+      ipa: ipa.length > 0 ? ipa : (ipaUs || ipaUk),
+      ipaUs: ipaUs.length > 0 ? ipaUs : undefined,
+      ipaUk: ipaUk.length > 0 ? ipaUk : undefined,
+      pos,
+      definition: uniqueDefinitions[0] ?? definition,
+      definitions: uniqueDefinitions.length > 0 ? uniqueDefinitions : [definition],
+    });
   }
   return map;
 }
 
-function pickIpa(sounds) {
-  if (!Array.isArray(sounds)) {
-    return '';
+function normalizeSoundTags(sound) {
+  if (!sound || typeof sound !== 'object') {
+    return [];
   }
+  if (!Array.isArray(sound.tags)) {
+    return [];
+  }
+  return sound.tags
+    .filter((tag) => typeof tag === 'string')
+    .map((tag) => tag.toLowerCase());
+}
+
+function isUsPronunciationTag(tag) {
+  return (
+    tag === 'us'
+    || tag === 'u.s.'
+    || tag === 'american'
+    || tag === 'north-american'
+    || tag === 'general-american'
+    || tag === 'genam'
+  );
+}
+
+function isUkPronunciationTag(tag) {
+  return (
+    tag === 'uk'
+    || tag === 'u.k.'
+    || tag === 'british'
+    || tag === 'received-pronunciation'
+    || tag === 'rp'
+    || tag === 'england'
+  );
+}
+
+function pickPronunciations(sounds) {
+  if (!Array.isArray(sounds)) {
+    return { ipa: '', ipaUs: '', ipaUk: '' };
+  }
+  let ipaUs = '';
+  let ipaUk = '';
+  let ipaAny = '';
+
   for (const sound of sounds) {
     if (!sound || typeof sound !== 'object') {
       continue;
     }
-    const ipa = typeof sound.ipa === 'string' ? sound.ipa.trim() : '';
+    const ipa = typeof sound.ipa === 'string' ? normalizeSpaces(sound.ipa) : '';
     if (ipa.length > 0) {
-      return ipa;
+      if (ipaAny.length === 0) {
+        ipaAny = ipa;
+      }
+      const tags = normalizeSoundTags(sound);
+      const hasUs = tags.some((tag) => isUsPronunciationTag(tag));
+      const hasUk = tags.some((tag) => isUkPronunciationTag(tag));
+      if (hasUs && ipaUs.length === 0) {
+        ipaUs = ipa;
+      }
+      if (hasUk && ipaUk.length === 0) {
+        ipaUk = ipa;
+      }
+      if (ipaUs.length > 0 && ipaUk.length > 0) {
+        break;
+      }
     }
   }
-  return '';
+
+  return {
+    ipa: ipaAny,
+    ipaUs,
+    ipaUk,
+  };
 }
 
-function pickDefinition(senses) {
-  if (!Array.isArray(senses)) {
-    return '';
+function normalizeGlossIdentity(gloss) {
+  let base = normalizeSpaces(gloss).toLowerCase();
+  while (base.startsWith('(')) {
+    const closingIndex = base.indexOf(')');
+    if (closingIndex < 0) {
+      break;
+    }
+    base = normalizeSpaces(base.slice(closingIndex + 1));
   }
+
+  const noPunctuation = base.replace(/[^\p{L}\p{N}\s]/gu, ' ');
+  let collapsed = normalizeSpaces(noPunctuation);
+  if (collapsed.length === 0) {
+    collapsed = normalizeSpaces(base.replace(/[^\p{L}\p{N}\s]/gu, ' '));
+  }
+  const inflectionMatch = collapsed.match(
+    /^(simple past|past participle|past tense|present participle|gerund|plural|third person singular simple present|third-person singular simple present|alternative form|alternative spelling|alternative letter-case form|obsolete spelling|archaic spelling|misspelling|comparative|superlative)\s+of\s+(.+)$/,
+  );
+  if (inflectionMatch) {
+    const target = normalizeSpaces(inflectionMatch[2]);
+    return `inflection-of ${target}`;
+  }
+  return collapsed;
+}
+
+function collectPrimaryDefinitions(senses) {
+  if (!Array.isArray(senses)) {
+    return [];
+  }
+
+  const output = [];
+  const seenIdentity = new Set();
+
   for (const sense of senses) {
     if (!sense || typeof sense !== 'object') {
       continue;
     }
+
+    const candidates = [];
     if (Array.isArray(sense.glosses)) {
       for (const gloss of sense.glosses) {
-        if (typeof gloss === 'string' && gloss.trim().length > 0) {
-          return gloss.trim();
+        if (typeof gloss === 'string') {
+          candidates.push(gloss);
         }
       }
     }
     if (Array.isArray(sense.raw_glosses)) {
       for (const rawGloss of sense.raw_glosses) {
-        if (typeof rawGloss === 'string' && rawGloss.trim().length > 0) {
-          return rawGloss.trim();
+        if (typeof rawGloss === 'string') {
+          candidates.push(rawGloss);
         }
       }
     }
+
+    for (const raw of candidates) {
+      const gloss = normalizeSpaces(raw);
+      if (gloss.length === 0) {
+        continue;
+      }
+      const identity = normalizeGlossIdentity(gloss);
+      if (seenIdentity.has(identity)) {
+        continue;
+      }
+      seenIdentity.add(identity);
+      output.push(gloss);
+      if (output.length >= 2) {
+        return output;
+      }
+    }
   }
-  return '';
+
+  return output;
 }
 
 function toFallbackEntry(word) {
   return {
     word,
     ipa: '',
+    ipaUs: undefined,
+    ipaUk: undefined,
     pos: '',
     definition: 'Definition unavailable in this build.',
+    definitions: ['Definition unavailable in this build.'],
   };
 }
 
@@ -153,14 +292,22 @@ async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
       continue;
     }
 
-    const definition = pickDefinition(record.senses);
-    if (definition.length === 0) {
+    const definitions = collectPrimaryDefinitions(record.senses);
+    if (definitions.length === 0) {
       continue;
     }
 
     const pos = typeof record.pos === 'string' ? record.pos.trim() : '';
-    const ipa = pickIpa(record.sounds);
-    extractedMap.set(word, { word, ipa, pos, definition });
+    const pronunciations = pickPronunciations(record.sounds);
+    extractedMap.set(word, {
+      word,
+      ipa: pronunciations.ipa,
+      ipaUs: pronunciations.ipaUs.length > 0 ? pronunciations.ipaUs : undefined,
+      ipaUk: pronunciations.ipaUk.length > 0 ? pronunciations.ipaUk : undefined,
+      pos,
+      definition: definitions[0],
+      definitions,
+    });
   }
 
   return extractedMap;

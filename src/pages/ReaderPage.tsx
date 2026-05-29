@@ -1123,6 +1123,7 @@ export default function ReaderPage() {
                             onMarkUnknown={() => markLemma(lemma, false)}
                             isMarkedKnown={observation === 1}
                             isMarkedUnknown={observation === 0}
+                            pronunciationVariant={settings.englishVariant}
                             compact
                           />
                         );
@@ -1175,6 +1176,7 @@ export default function ReaderPage() {
                         onMarkUnknown={() => markLemma(lemma, false)}
                         isMarkedKnown={observation === 1}
                         isMarkedUnknown={observation === 0}
+                        pronunciationVariant={settings.englishVariant}
                         compact
                       />
                     );
@@ -1201,6 +1203,7 @@ export default function ReaderPage() {
             onMarkUnknown={() => markLemma(wordPopup.lemma, false)}
             isMarkedKnown={popupObservation === 1}
             isMarkedUnknown={popupObservation === 0}
+            pronunciationVariant={settings.englishVariant}
             compact
           />
         </div>

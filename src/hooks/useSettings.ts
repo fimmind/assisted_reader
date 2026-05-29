@@ -10,6 +10,7 @@ function areReaderSettingsEqual(left: ReaderSettings, right: ReaderSettings): bo
     && left.pageWidth === right.pageWidth
     && left.maxWordsPerParagraph === right.maxWordsPerParagraph
     && left.knowledgeThreshold === right.knowledgeThreshold
+    && left.englishVariant === right.englishVariant
   );
 }
 

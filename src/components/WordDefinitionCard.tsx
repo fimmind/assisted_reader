@@ -10,6 +10,42 @@ interface WordDefinitionCardProps {
   compact?: boolean;
   isMarkedKnown?: boolean;
   isMarkedUnknown?: boolean;
+  pronunciationVariant?: 'US' | 'UK';
+}
+
+function resolveIpa(definition: LexiconEntry, pronunciationVariant: 'US' | 'UK'): string {
+  if (pronunciationVariant === 'UK') {
+    if (typeof definition.ipaUk === 'string' && definition.ipaUk.trim().length > 0) {
+      return definition.ipaUk.trim();
+    }
+    if (typeof definition.ipaUs === 'string' && definition.ipaUs.trim().length > 0) {
+      return definition.ipaUs.trim();
+    }
+  } else {
+    if (typeof definition.ipaUs === 'string' && definition.ipaUs.trim().length > 0) {
+      return definition.ipaUs.trim();
+    }
+    if (typeof definition.ipaUk === 'string' && definition.ipaUk.trim().length > 0) {
+      return definition.ipaUk.trim();
+    }
+  }
+  return definition.ipa.trim();
+}
+
+function resolveDefinitions(definition: LexiconEntry): string[] {
+  if (Array.isArray(definition.definitions)) {
+    const sanitized = definition.definitions
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    if (sanitized.length > 0) {
+      return sanitized;
+    }
+  }
+  const fallback = definition.definition.trim();
+  if (fallback.length > 0) {
+    return [fallback];
+  }
+  return ['Definition unavailable in this build.'];
 }
 
 export function WordDefinitionCard({
@@ -19,8 +55,10 @@ export function WordDefinitionCard({
   compact = false,
   isMarkedKnown = false,
   isMarkedUnknown = false,
+  pronunciationVariant = 'US',
 }: WordDefinitionCardProps) {
-  const ipaText = definition.ipa.trim();
+  const ipaText = resolveIpa(definition, pronunciationVariant);
+  const definitionLines = resolveDefinitions(definition);
 
   if (compact) {
     return (
@@ -55,7 +93,15 @@ export function WordDefinitionCard({
             </button>
           </div>
         </div>
-        <p className="text-sm text-foreground/80 leading-snug">{definition.definition}</p>
+        {definitionLines.length === 1 ? (
+          <p className="text-sm text-foreground/80 leading-snug">{definitionLines[0]}</p>
+        ) : (
+          <ol className="text-sm text-foreground/80 leading-snug list-decimal pl-4 space-y-1">
+            {definitionLines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ol>
+        )}
       </div>
     );
   }
@@ -96,7 +142,15 @@ export function WordDefinitionCard({
           </Button>
         </div>
       </div>
-      <p className="text-foreground/90 text-sm leading-relaxed">{definition.definition}</p>
+      {definitionLines.length === 1 ? (
+        <p className="text-foreground/90 text-sm leading-relaxed">{definitionLines[0]}</p>
+      ) : (
+        <ol className="text-foreground/90 text-sm leading-relaxed list-decimal pl-5 space-y-1">
+          {definitionLines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

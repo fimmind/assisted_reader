@@ -5,6 +5,7 @@ export interface ReaderSettings {
   pageWidth: 'Narrow' | 'Normal' | 'Wide';
   maxWordsPerParagraph: number;
   knowledgeThreshold: number;
+  englishVariant: 'US' | 'UK';
 }
 
 export interface BookChapter {
@@ -47,8 +48,11 @@ export interface VocabularyModel {
 export interface LexiconEntry {
   word: string;
   ipa: string;
+  ipaUs?: string;
+  ipaUk?: string;
   pos: string;
   definition: string;
+  definitions?: string[];
 }
 
 export interface UserProfile {

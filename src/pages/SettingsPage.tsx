@@ -182,7 +182,7 @@ export default function SettingsPage() {
             <p className="text-sm text-muted-foreground mt-1">Control how intrusive the inline help is.</p>
           </div>
 
-          <div className="space-y-4 max-w-md">
+          <div className="space-y-6 max-w-md">
             <div className="flex justify-between">
               <Label>Max highlighted words per paragraph</Label>
               <span className="text-muted-foreground text-sm font-medium">{settings.maxWordsPerParagraph}</span>
@@ -197,6 +197,25 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground leading-relaxed">
               Higher numbers provide more immediate help, but can clutter the page and distract from reading flow.
             </p>
+
+            <div className="space-y-3">
+              <Label>English Variant</Label>
+              <div className="flex flex-wrap gap-3">
+                {(['US', 'UK'] as const).map((variant) => (
+                  <Button
+                    key={variant}
+                    variant={settings.englishVariant === variant ? 'default' : 'outline'}
+                    onClick={() => updateSetting('englishVariant', variant)}
+                    className="min-w-[100px]"
+                  >
+                    {variant}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Chooses pronunciation variant in definition cards.
+              </p>
+            </div>
           </div>
         </section>
 

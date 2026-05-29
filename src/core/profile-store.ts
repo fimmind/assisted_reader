@@ -47,6 +47,10 @@ function sanitizeKnowledgeThreshold(value: unknown): number {
   return clamped;
 }
 
+function sanitizeEnglishVariant(value: unknown): ReaderSettings['englishVariant'] {
+  return value === 'UK' ? 'UK' : 'US';
+}
+
 function createDefaultProfile(): UserProfile {
   return {
     id: createId('profile'),
@@ -226,6 +230,7 @@ export function loadReaderSettings(): ReaderSettings {
       pageWidth: parsed.pageWidth ?? DEFAULT_READER_SETTINGS.pageWidth,
       maxWordsPerParagraph: sanitizeNumeric(parsed.maxWordsPerParagraph, DEFAULT_READER_SETTINGS.maxWordsPerParagraph, 1, 5),
       knowledgeThreshold: sanitizeKnowledgeThreshold(parsed.knowledgeThreshold),
+      englishVariant: sanitizeEnglishVariant(parsed.englishVariant),
     };
 
     const serialized = JSON.stringify(settings);
