@@ -3,7 +3,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { useParams, Link } from 'wouter';
-import { ChevronLeft, MoreHorizontal, Bookmark, Type, Eye, EyeOff } from 'lucide-react';
+import { ChevronLeft, Type, Eye, EyeOff } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
@@ -506,9 +506,6 @@ export default function ReaderPage() {
               aria-label="Toggle vocabulary assistance" data-testid="button-toggle-assistance">
               {assistanceEnabled ? <Eye size={18} /> : <EyeOff size={18} />}
             </Button>
-            <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-bookmark">
-              <Bookmark size={18} />
-            </Button>
             <Sheet modal={false} open={readerSettingsOpen} onOpenChange={setReaderSettingsOpen}>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-reader-settings">
@@ -566,9 +563,6 @@ export default function ReaderPage() {
                 </div>
               </SheetContent>
             </Sheet>
-            <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-more-options">
-              <MoreHorizontal size={18} />
-            </Button>
           </div>
         </div>
       </header>
