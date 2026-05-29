@@ -26,6 +26,17 @@ type IdleWindow = Window & {
   cancelIdleCallback?: (id: number) => void;
 };
 
+interface CachedBookStatsEntry {
+  stats: BookStats;
+  observationFingerprint: string;
+  bookUpdatedAt: string;
+  currentChapter: number;
+}
+
+type CachedBookStatsMap = Record<string, CachedBookStatsEntry>;
+
+const BOOK_STATS_CACHE_KEY = 'easeword-book-stats-cache-v1';
+
 function clearDeferredHandle(handle: DeferredHandle | null): void {
   if (!handle) {
     return;
@@ -54,6 +65,88 @@ async function yieldToEventLoop(): Promise<void> {
   });
 }
 
+function calculateProgressPercent(book: ImportedBook): number {
+  const chapterCount = book.chapters.length;
+  if (chapterCount === 0) {
+    return 0;
+  }
+  return (book.currentChapter / chapterCount) * 100;
+}
+
+function hashTokenSegment(value: string, seed: number): number {
+  let hash = seed >>> 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function computeObservationFingerprint(observations: Record<string, 0 | 1>): string {
+  const keys = Object.keys(observations).sort();
+  let hash = 2166136261;
+  for (const key of keys) {
+    hash = hashTokenSegment(key, hash);
+    hash = hashTokenSegment(String(observations[key]), hash);
+  }
+  return `${keys.length}:${hash >>> 0}`;
+}
+
+function isValidCachedBookStatsMap(value: unknown): value is CachedBookStatsMap {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const entries = Object.values(value as Record<string, unknown>);
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') {
+      return false;
+    }
+    const typed = entry as Partial<CachedBookStatsEntry>;
+    if (!typed.stats || typeof typed.stats !== 'object') {
+      return false;
+    }
+    if (typeof typed.observationFingerprint !== 'string') {
+      return false;
+    }
+    if (typeof typed.bookUpdatedAt !== 'string') {
+      return false;
+    }
+    if (typeof typed.currentChapter !== 'number' || !Number.isFinite(typed.currentChapter)) {
+      return false;
+    }
+    if (
+      typeof typed.stats.unknownTokenCount !== 'number'
+      || typeof typed.stats.unknownTokenPercent !== 'number'
+      || typeof typed.stats.progressPercent !== 'number'
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function loadCachedBookStatsMap(): CachedBookStatsMap {
+  const raw = localStorage.getItem(BOOK_STATS_CACHE_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isValidCachedBookStatsMap(parsed)) {
+      return {};
+    }
+    return parsed;
+  } catch (error) {
+    console.warn('library-book-stats-cache-parse-failed', { error });
+    return {};
+  }
+}
+
+function saveCachedBookStatsMap(cacheMap: CachedBookStatsMap): void {
+  localStorage.setItem(BOOK_STATS_CACHE_KEY, JSON.stringify(cacheMap));
+}
+
 export default function LibraryPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const [quizOpen, setQuizOpen] = useState(false);
@@ -80,12 +173,11 @@ export default function LibraryPage() {
     lemmaDict: Awaited<ReturnType<typeof loadLemmaDict>>,
     nlp: Awaited<ReturnType<typeof loadCompromise>>,
     runId: number,
+    activeProfile: ReturnType<typeof getActiveProfile>,
+    settings: ReturnType<typeof loadReaderSettings>,
   ): Promise<BookStats | null> => {
-    const profileState = loadProfileState();
-    const activeProfile = getActiveProfile(profileState);
-    const settings = loadReaderSettings();
     const chapterCount = book.chapters.length;
-    const progressPercent = chapterCount === 0 ? 0 : (book.currentChapter / chapterCount) * 100;
+    const progressPercent = calculateProgressPercent(book);
     if (chapterCount === 0) {
       return {
         ...fallbackStats,
@@ -179,6 +271,12 @@ export default function LibraryPage() {
       if (refreshRunIdRef.current !== runId) {
         return;
       }
+      const profileState = loadProfileState();
+      const activeProfile = getActiveProfile(profileState);
+      const settings = loadReaderSettings();
+      const observationFingerprint = computeObservationFingerprint(activeProfile.observations);
+      const cacheMap = loadCachedBookStatsMap();
+
       const hasLegacySeedAlice = loadedBooks.some((book) => book.id === 'seed-alice');
       const hasNewSeedHitchhiker = loadedBooks.some((book) => book.id === 'seed-hitchhiker');
       if (hasLegacySeedAlice && !hasNewSeedHitchhiker) {
@@ -197,11 +295,62 @@ export default function LibraryPage() {
         }, 1500);
       }
       setBooks(loadedBooks);
-      const nextFallbackStats: Record<string, BookStats> = {};
+      const booksNeedingRefresh: ImportedBook[] = [];
+      const booksForFastRefresh: ImportedBook[] = [];
+      const cachedStatsByBookId: Record<string, BookStats> = {};
+      const progressByBookId: Record<string, number> = {};
       for (const book of loadedBooks) {
-        nextFallbackStats[book.id] = fallbackStats;
+        const cached = cacheMap[book.id];
+        const progressPercent = calculateProgressPercent(book);
+        progressByBookId[book.id] = progressPercent;
+
+        if (cached) {
+          cachedStatsByBookId[book.id] = {
+            ...cached.stats,
+            progressPercent,
+          };
+        }
+
+        const isFresh = (
+          !!cached
+          && cached.observationFingerprint === observationFingerprint
+          && cached.bookUpdatedAt === book.updatedAt
+          && cached.currentChapter === book.currentChapter
+        );
+
+        if (!isFresh) {
+          booksNeedingRefresh.push(book);
+          const hasDisplayedBaseline = !!cached || !!statsByBookId[book.id];
+          if (!hasDisplayedBaseline) {
+            booksForFastRefresh.push(book);
+          }
+        }
       }
-      setStatsByBookId(nextFallbackStats);
+      setStatsByBookId((previous) => {
+        const next: Record<string, BookStats> = {};
+        for (const book of loadedBooks) {
+          const bookId = book.id;
+          const progressPercent = progressByBookId[bookId] ?? 0;
+          const cachedStats = cachedStatsByBookId[bookId];
+          if (cachedStats) {
+            next[bookId] = cachedStats;
+            continue;
+          }
+          const previousStats = previous[bookId];
+          if (previousStats) {
+            next[bookId] = {
+              ...previousStats,
+              progressPercent,
+            };
+            continue;
+          }
+          next[bookId] = {
+            ...fallbackStats,
+            progressPercent,
+          };
+        }
+        return next;
+      });
       setIsLoading(false);
       hasLoadedOnceRef.current = true;
 
@@ -221,6 +370,10 @@ export default function LibraryPage() {
         return;
       }
 
+      if (booksNeedingRefresh.length === 0) {
+        return;
+      }
+
       fastStatsHandleRef.current = scheduleDeferredTask(() => {
         void (async () => {
           try {
@@ -236,7 +389,7 @@ export default function LibraryPage() {
               if (refreshRunIdRef.current !== runId) {
                 return;
               }
-              const book = loadedBooks[fastIndex];
+              const book = booksForFastRefresh[fastIndex];
               if (!book) {
                 nlpStatsHandleRef.current = scheduleDeferredTask(() => {
                   void (async () => {
@@ -250,15 +403,30 @@ export default function LibraryPage() {
                         if (refreshRunIdRef.current !== runId) {
                           return;
                         }
-                        const nlpBook = loadedBooks[nlpIndex];
+                        const nlpBook = booksNeedingRefresh[nlpIndex];
                         if (!nlpBook) {
                           return;
                         }
-                        const stat = await calculateBookStatsSafe(nlpBook, model, lemmaDict, nlp, runId);
+                        const stat = await calculateBookStatsSafe(
+                          nlpBook,
+                          model,
+                          lemmaDict,
+                          nlp,
+                          runId,
+                          activeProfile,
+                          settings,
+                        );
                         if (stat === null || refreshRunIdRef.current !== runId) {
                           return;
                         }
                         setStatsByBookId((previous) => ({ ...previous, [nlpBook.id]: stat }));
+                        cacheMap[nlpBook.id] = {
+                          stats: stat,
+                          observationFingerprint,
+                          bookUpdatedAt: nlpBook.updatedAt,
+                          currentChapter: nlpBook.currentChapter,
+                        };
+                        saveCachedBookStatsMap(cacheMap);
                         nlpIndex += 1;
                         nlpStatsHandleRef.current = scheduleDeferredTask(() => {
                           void processNlpNext();
@@ -272,11 +440,26 @@ export default function LibraryPage() {
                 }, 1000);
                 return;
               }
-              const stat = await calculateBookStatsSafe(book, model, lemmaDict, null, runId);
+              const stat = await calculateBookStatsSafe(
+                book,
+                model,
+                lemmaDict,
+                null,
+                runId,
+                activeProfile,
+                settings,
+              );
               if (stat === null || refreshRunIdRef.current !== runId) {
                 return;
               }
               setStatsByBookId((previous) => ({ ...previous, [book.id]: stat }));
+              cacheMap[book.id] = {
+                stats: stat,
+                observationFingerprint,
+                bookUpdatedAt: book.updatedAt,
+                currentChapter: book.currentChapter,
+              };
+              saveCachedBookStatsMap(cacheMap);
               fastIndex += 1;
               fastStatsHandleRef.current = scheduleDeferredTask(() => {
                 void processFastNext();
