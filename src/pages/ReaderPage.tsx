@@ -134,6 +134,7 @@ export default function ReaderPage() {
   const [book, setBook] = useState<ImportedBook | null>(null);
   const [assistanceEnabled, setAssistanceEnabled] = useState(true);
   const [headerVisible, setHeaderVisible] = useState(true);
+  const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [chapterAnalysis, setChapterAnalysis] = useState<ParagraphAnalysis[]>([]);
   const [definitionsByLemma, setDefinitionsByLemma] = useState<Map<string, LexiconEntry>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
@@ -478,6 +479,13 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {readerSettingsOpen && (
+        <div
+          className="fixed inset-0 z-10 bg-black/20"
+          aria-hidden="true"
+          onClick={() => setReaderSettingsOpen(false)}
+        />
+      )}
       <header className={cn(
         'fixed top-0 inset-x-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border transition-transform duration-300',
         headerVisible ? 'translate-y-0' : '-translate-y-full'
@@ -501,13 +509,13 @@ export default function ReaderPage() {
             <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-bookmark">
               <Bookmark size={18} />
             </Button>
-            <Sheet>
+            <Sheet modal={false} open={readerSettingsOpen} onOpenChange={setReaderSettingsOpen}>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-reader-settings">
                   <Type size={18} />
                 </Button>
               </SheetTrigger>
-              <SheetContent side="right" className="w-[300px] sm:w-[400px] overflow-y-auto">
+              <SheetContent side="right" disableAnimation className="w-[300px] sm:w-[400px] overflow-y-auto">
                 <SheetHeader className="mb-6">
                   <SheetTitle className="font-serif">Reader Settings</SheetTitle>
                 </SheetHeader>
