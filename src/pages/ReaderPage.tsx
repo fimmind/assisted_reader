@@ -1057,7 +1057,7 @@ export default function ReaderPage() {
                 </div>
               </SheetContent>
             </Sheet>
-            <DropdownMenu>
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground" aria-label="More actions" data-testid="button-reader-more-actions">
                   <MoreHorizontal size={18} />
