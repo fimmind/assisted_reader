@@ -234,6 +234,97 @@ function buildPlainChapterAnalysis(selectedBook: ImportedBook): ParagraphAnalysi
   return chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardLemmas: [] }));
 }
 
+function resolveKnowledgeThreshold(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+  if (value < 0.05) {
+    return 0.05;
+  }
+  if (value > 0.95) {
+    return 0.95;
+  }
+  return value;
+}
+
+function resolveDeduplicationRadius(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  const integer = Math.trunc(value);
+  if (integer < 0) {
+    return 0;
+  }
+  if (integer > 20) {
+    return 20;
+  }
+  return integer;
+}
+
+function rankParagraphCardLemmas(tokens: ParagraphAnalysis['tokens'], threshold: number): string[] {
+  const frequencies = new Map<string, { count: number; pKnown: number; firstIndex: number }>();
+  tokens.forEach((token, index) => {
+    if (!token.unknown) {
+      return;
+    }
+
+    const current = frequencies.get(token.lemma);
+    if (!current) {
+      frequencies.set(token.lemma, { count: 1, pKnown: token.pKnown, firstIndex: index });
+      return;
+    }
+
+    current.count += 1;
+    if (token.pKnown < current.pKnown) {
+      current.pKnown = token.pKnown;
+    }
+  });
+
+  const denominator = 1 - threshold;
+  const scored = Array.from(frequencies.entries()).map(([lemma, value]) => {
+    const uncertaintyScore = denominator <= 0 ? 1 : (1 - value.pKnown) / denominator;
+    const importance = (0.7 * value.count) + (0.3 * uncertaintyScore);
+    return {
+      lemma,
+      importance,
+      firstIndex: value.firstIndex,
+    };
+  });
+
+  scored.sort((left, right) => {
+    if (right.importance !== left.importance) {
+      return right.importance - left.importance;
+    }
+    return left.firstIndex - right.firstIndex;
+  });
+
+  return scored.map((entry) => entry.lemma);
+}
+
+function selectDeduplicatedCardLemmas(
+  tokens: ParagraphAnalysis['tokens'],
+  maxCardsPerParagraph: number,
+  threshold: number,
+  suppressedLemmas: Set<string>,
+): string[] {
+  if (maxCardsPerParagraph <= 0) {
+    return [];
+  }
+
+  const ranked = rankParagraphCardLemmas(tokens, threshold);
+  const selected: string[] = [];
+  for (const lemma of ranked) {
+    if (selected.length >= maxCardsPerParagraph) {
+      break;
+    }
+    if (suppressedLemmas.has(lemma.toLowerCase())) {
+      continue;
+    }
+    selected.push(lemma);
+  }
+  return selected;
+}
+
 function normalizeHeadingText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
@@ -414,6 +505,10 @@ export default function ReaderPage() {
         try {
           const nextAnalyses = initialAnalyses.slice();
           const definitionMap = new Map<string, LexiconEntry>(initialDefinitions);
+          const processedParagraphIndices = new Set<number>();
+          const deduplicationRadius = resolveDeduplicationRadius(settingsRef.current.deduplicationRadius);
+          const threshold = resolveKnowledgeThreshold(settingsRef.current.knowledgeThreshold);
+          const maxCardsPerParagraph = Math.max(1, Math.min(5, settingsRef.current.maxWordsPerParagraph));
           const anchorIndex = resolveAnalysisAnchorIndex(
             expectedParagraphCount,
             selectedBook.currentChapterProgress,
@@ -434,16 +529,35 @@ export default function ReaderPage() {
                 paragraphIndex,
                 true,
               );
-              const previousAnalysis = nextAnalyses[paragraphIndex];
-              const hasMeaningfulChange = !previousAnalysis || !areParagraphAnalysesVisuallyEquivalent(previousAnalysis, analysis);
-              if (hasMeaningfulChange) {
-                nextAnalyses[paragraphIndex] = analysis;
+              const suppressedLemmas = new Set<string>();
+              if (deduplicationRadius > 0) {
+                for (const seenIndex of processedParagraphIndices) {
+                  if (Math.abs(seenIndex - paragraphIndex) > deduplicationRadius) {
+                    continue;
+                  }
+                  const nearbyAnalysis = nextAnalyses[seenIndex];
+                  for (const lemma of nearbyAnalysis.cardLemmas) {
+                    suppressedLemmas.add(lemma.toLowerCase());
+                  }
+                }
               }
+              const deduplicatedCardLemmas = selectDeduplicatedCardLemmas(
+                analysis.tokens,
+                maxCardsPerParagraph,
+                threshold,
+                suppressedLemmas,
+              );
+              const nextAnalysis: ParagraphAnalysis = {
+                ...analysis,
+                cardLemmas: deduplicatedCardLemmas,
+              };
+              nextAnalyses[paragraphIndex] = nextAnalysis;
 
-              for (const lemma of analysis.cardLemmas) {
+              for (const lemma of nextAnalysis.cardLemmas) {
                 const found = resources.lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
                 definitionMap.set(lemma, found);
               }
+              processedParagraphIndices.add(paragraphIndex);
             } catch (error) {
               console.warn('reader-paragraph-analysis-failed', {
                 error,

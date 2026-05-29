@@ -4,6 +4,7 @@ export interface ReaderSettings {
   fontChoice: 'Serif' | 'Sans';
   pageWidth: 'Narrow' | 'Normal' | 'Wide';
   maxWordsPerParagraph: number;
+  deduplicationRadius: number;
   knowledgeThreshold: number;
   englishVariant: 'US' | 'UK';
 }

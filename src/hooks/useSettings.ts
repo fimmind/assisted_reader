@@ -9,6 +9,7 @@ function areReaderSettingsEqual(left: ReaderSettings, right: ReaderSettings): bo
     && left.fontChoice === right.fontChoice
     && left.pageWidth === right.pageWidth
     && left.maxWordsPerParagraph === right.maxWordsPerParagraph
+    && left.deduplicationRadius === right.deduplicationRadius
     && left.knowledgeThreshold === right.knowledgeThreshold
     && left.englishVariant === right.englishVariant
   );

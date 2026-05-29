@@ -198,6 +198,23 @@ export default function SettingsPage() {
               Higher numbers provide more immediate help, but can clutter the page and distract from reading flow.
             </p>
 
+            <div className="space-y-1">
+              <div className="flex justify-between">
+                <Label>Deduplication Radius</Label>
+                <span className="text-muted-foreground text-sm font-medium">{settings.deduplicationRadius}</span>
+              </div>
+              <Slider
+                value={[settings.deduplicationRadius]}
+                min={0}
+                max={20}
+                step={1}
+                onValueChange={([value]) => updateSetting('deduplicationRadius', value)}
+              />
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Suppresses repeated definition cards if the same word was already shown in nearby paragraphs. Zero means no deduplication.
+              </p>
+            </div>
+
             <div className="space-y-3">
               <Label>English Variant</Label>
               <div className="flex flex-wrap gap-3">

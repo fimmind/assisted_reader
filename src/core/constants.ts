@@ -17,6 +17,7 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   fontChoice: 'Serif',
   pageWidth: 'Normal',
   maxWordsPerParagraph: 1,
+  deduplicationRadius: 5,
   knowledgeThreshold: 0.5,
   englishVariant: 'US',
 };

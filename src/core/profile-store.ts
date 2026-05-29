@@ -229,6 +229,7 @@ export function loadReaderSettings(): ReaderSettings {
       fontChoice: parsed.fontChoice ?? DEFAULT_READER_SETTINGS.fontChoice,
       pageWidth: parsed.pageWidth ?? DEFAULT_READER_SETTINGS.pageWidth,
       maxWordsPerParagraph: sanitizeNumeric(parsed.maxWordsPerParagraph, DEFAULT_READER_SETTINGS.maxWordsPerParagraph, 1, 5),
+      deduplicationRadius: sanitizeNumeric(parsed.deduplicationRadius, DEFAULT_READER_SETTINGS.deduplicationRadius, 0, 20),
       knowledgeThreshold: sanitizeKnowledgeThreshold(parsed.knowledgeThreshold),
       englishVariant: sanitizeEnglishVariant(parsed.englishVariant),
     };

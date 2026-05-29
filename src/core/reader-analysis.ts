@@ -17,6 +17,20 @@ function resolveKnowledgeThreshold(value: number): number {
   return value;
 }
 
+function resolveDeduplicationRadius(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  const integer = Math.trunc(value);
+  if (integer < 0) {
+    return 0;
+  }
+  if (integer > 20) {
+    return 20;
+  }
+  return integer;
+}
+
 export interface ChapterAnalysisInput {
   chapter: BookChapter;
   settings: ReaderSettings;
@@ -121,11 +135,7 @@ function buildParagraphTokenList(
   return tokens;
 }
 
-function selectCardLemmas(tokens: ParagraphToken[], maxCardsPerParagraph: number, threshold: number): string[] {
-  if (maxCardsPerParagraph <= 0) {
-    return [];
-  }
-
+function scoreCardLemmas(tokens: ParagraphToken[], threshold: number): string[] {
   const frequencies = new Map<string, { count: number; pKnown: number; firstIndex: number }>();
   tokens.forEach((token, index) => {
     if (!token.unknown) {
@@ -162,17 +172,18 @@ function selectCardLemmas(tokens: ParagraphToken[], maxCardsPerParagraph: number
     return left.firstIndex - right.firstIndex;
   });
 
-  return scored.slice(0, maxCardsPerParagraph).map((entry) => entry.lemma);
+  return scored.map((entry) => entry.lemma);
 }
 
 export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[] {
   const theta = estimateTheta(input.model, input.profile);
   const threshold = resolveKnowledgeThreshold(input.settings.knowledgeThreshold);
+  const deduplicationRadius = resolveDeduplicationRadius(input.settings.deduplicationRadius);
   const taggedByParagraph = buildTaggedSentenceGroups(input.chapter.paragraphs, input.nlp);
   const allTaggedSentences = taggedByParagraph.flat();
   const properLexicon = buildHighConfidenceProperNounLexicon(allTaggedSentences);
 
-  return input.chapter.paragraphs.map((paragraph, paragraphIndex) => {
+  const paragraphTokens = input.chapter.paragraphs.map((paragraph, paragraphIndex) => {
     const taggedSentences = taggedByParagraph[paragraphIndex] ?? [];
     const tokens = buildParagraphTokenList(
       paragraph,
@@ -185,9 +196,41 @@ export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[]
       threshold,
       input.nlp,
     );
+    return tokens;
+  });
 
-    const cardLemmas = selectCardLemmas(tokens, input.maxCardsPerParagraph, threshold);
+  const rankedCardLemmasByParagraph = paragraphTokens.map((tokens) => scoreCardLemmas(tokens, threshold));
+  const selectedCardLemmasByParagraph: string[][] = [];
+  for (let paragraphIndex = 0; paragraphIndex < rankedCardLemmasByParagraph.length; paragraphIndex += 1) {
+    const rankedLemmas = rankedCardLemmasByParagraph[paragraphIndex];
+    const nearbyShownLemmas = new Set<string>();
+    if (deduplicationRadius > 0) {
+      const fromIndex = Math.max(0, paragraphIndex - deduplicationRadius);
+      for (let index = fromIndex; index < paragraphIndex; index += 1) {
+        const previousSelection = selectedCardLemmasByParagraph[index] ?? [];
+        for (const lemma of previousSelection) {
+          nearbyShownLemmas.add(lemma);
+        }
+      }
+    }
 
+    const selectedLemmas: string[] = [];
+    for (const lemma of rankedLemmas) {
+      if (selectedLemmas.length >= input.maxCardsPerParagraph) {
+        break;
+      }
+      if (nearbyShownLemmas.has(lemma)) {
+        continue;
+      }
+      selectedLemmas.push(lemma);
+      nearbyShownLemmas.add(lemma);
+    }
+    selectedCardLemmasByParagraph.push(selectedLemmas);
+  }
+
+  return input.chapter.paragraphs.map((paragraph, paragraphIndex) => {
+    const tokens = paragraphTokens[paragraphIndex] ?? [];
+    const cardLemmas = selectedCardLemmasByParagraph[paragraphIndex] ?? [];
     return {
       paragraphText: paragraph,
       tokens,
