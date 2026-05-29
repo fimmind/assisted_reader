@@ -426,7 +426,48 @@ export default function ReaderPage() {
     settings.pageWidth === 'Narrow' ? 'max-w-4xl' :
     settings.pageWidth === 'Wide' ? 'max-w-6xl' : 'max-w-5xl';
 
-  const renderParagraph = (paragraphText: string): ReactNode => <>{paragraphText}</>;
+  const renderParagraphWithHighlights = (analysis: ParagraphAnalysis): ReactNode => {
+    if (!assistanceEnabled || analysis.tokens.length === 0 || analysis.cardLemmas.length === 0) {
+      return <>{analysis.paragraphText}</>;
+    }
+
+    const highlightedLemmas = new Set<string>(analysis.cardLemmas);
+    const nodes: ReactNode[] = [];
+    let cursor = 0;
+
+    for (let index = 0; index < analysis.tokens.length; index += 1) {
+      const token = analysis.tokens[index];
+      if (token.start > cursor) {
+        nodes.push(analysis.paragraphText.slice(cursor, token.start));
+      }
+
+      const tokenText = analysis.paragraphText.slice(token.start, token.end);
+      const shouldHighlight = token.unknown && highlightedLemmas.has(token.lemma);
+      if (!shouldHighlight) {
+        nodes.push(tokenText);
+      } else {
+        const isPriority = (1 - token.pKnown) > 0.6;
+        nodes.push(
+          <span
+            key={`${token.lemma}-${token.start}`}
+            className={cn(
+              'cursor-pointer rounded-sm px-0.5 -mx-0.5',
+              isPriority ? 'unknown-word priority' : 'unknown-word',
+            )}
+          >
+            {tokenText}
+          </span>,
+        );
+      }
+      cursor = token.end;
+    }
+
+    if (cursor < analysis.paragraphText.length) {
+      nodes.push(analysis.paragraphText.slice(cursor));
+    }
+
+    return <>{nodes}</>;
+  };
 
   if (isLoading) {
     return <div className="min-h-screen bg-background text-foreground p-6">Loading reader...</div>;
@@ -560,7 +601,7 @@ export default function ReaderPage() {
                     className="text-foreground/90 reader-text"
                     data-testid={`paragraph-${index}`}
                   >
-                    {renderParagraph(paragraphText)}
+                    {renderParagraphWithHighlights(analysis)}
                   </p>
                   {assistanceEnabled && analysis.cardLemmas.length > 0 && (
                     <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${index}`}>
