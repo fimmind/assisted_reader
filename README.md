@@ -126,12 +126,28 @@ The app depends on files under `data/`, including:
 - lexicon index + chunk files
 - seeded default book text
 
+### Lexicon source
+
+Definition entries are sourced from **Wiktionary** via **Wiktextract** exports.
+
+- Runtime files consumed by the app:
+  - `data/lexicon_full.json`
+  - `data/lexicon/index.json`
+  - `data/lexicon/*.json`
+- Build script:
+  - `scripts/build-lexicon-from-wiktextract.mjs`
+- Rebuild command:
+  - `pnpm run build:lexicon:wiktextract -- <path-to-wiktextract.jsonl-or-jsonl.gz>`
+
+The builder matches entries to words from `data/best_grouped_irt_model_model_data.json`, prefers English (`lang_code = "en"`), and falls back to `"Definition unavailable in this build."` when no usable definition is found.
+
 These assets must exist in `public/data/` for runtime fetches. `sync:data` handles this.
 
 ## Useful commands
 
 ```bash
 pnpm run sync:data
+pnpm run build:lexicon:wiktextract -- /path/to/wiktextract.jsonl.gz
 pnpm run typecheck
 pnpm run test:proper-nouns
 pnpm run build

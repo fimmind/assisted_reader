@@ -20,13 +20,17 @@ export function WordDefinitionCard({
   isMarkedKnown = false,
   isMarkedUnknown = false,
 }: WordDefinitionCardProps) {
+  const ipaText = definition.ipa.trim();
+
   if (compact) {
     return (
       <div className="inline-flex flex-col bg-popover border border-border rounded-md shadow-sm px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] align-middle">
         <div className="flex items-center justify-between gap-3 mb-1">
           <div className="flex items-baseline gap-2">
             <span className="font-serif font-medium text-[1.1em]">{definition.word}</span>
-            <span className="text-xs text-muted-foreground italic">{definition.ipa}</span>
+            {ipaText.length > 0 && (
+              <span className="text-xs text-muted-foreground italic">{ipaText}</span>
+            )}
           </div>
           <div className="flex gap-1">
             <button
@@ -61,7 +65,9 @@ export function WordDefinitionCard({
       <div className="flex justify-between items-start mb-3">
         <div>
           <h3 className="font-serif text-2xl font-medium text-foreground">{definition.word}</h3>
-          <p className="text-muted-foreground italic mt-1">{definition.ipa}</p>
+          {ipaText.length > 0 && (
+            <p className="text-muted-foreground italic mt-1">{ipaText}</p>
+          )}
         </div>
         <div className="flex gap-2">
           <Button
