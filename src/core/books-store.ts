@@ -9,13 +9,80 @@ function sortBooks(books: ImportedBook[]): ImportedBook[] {
   return [...books].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
+function normalizeChapterNumber(rawValue: unknown, chapterCount: number): number {
+  if (chapterCount <= 0) {
+    return 1;
+  }
+  if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) {
+    return 1;
+  }
+  const integer = Math.trunc(rawValue);
+  if (integer < 1) {
+    return 1;
+  }
+  if (integer > chapterCount) {
+    return chapterCount;
+  }
+  return integer;
+}
+
+function normalizeBook(raw: unknown): ImportedBook | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const candidate = raw as Partial<ImportedBook>;
+  if (typeof candidate.id !== 'string' || candidate.id.length === 0) {
+    return null;
+  }
+  if (!Array.isArray(candidate.chapters)) {
+    return null;
+  }
+
+  const normalizedChapters = candidate.chapters
+    .map((chapter) => ({
+      title: typeof chapter.title === 'string' && chapter.title.length > 0 ? chapter.title : 'Chapter',
+      paragraphs: Array.isArray(chapter.paragraphs) ? chapter.paragraphs.filter((item): item is string => typeof item === 'string') : [],
+    }))
+    .filter((chapter) => chapter.paragraphs.length > 0);
+
+  const isSeedHitchhiker = candidate.id === 'seed-hitchhiker';
+  const fallbackTitle = isSeedHitchhiker ? "The Hitchhiker's Guide to the Galaxy" : 'Untitled Book';
+  const fallbackAuthor = isSeedHitchhiker ? 'Douglas Adams' : 'Unknown Author';
+
+  return {
+    id: candidate.id,
+    title: typeof candidate.title === 'string' && candidate.title.length > 0 ? candidate.title : fallbackTitle,
+    author: typeof candidate.author === 'string' && candidate.author.length > 0 ? candidate.author : fallbackAuthor,
+    sourceType: candidate.sourceType === 'epub' ? 'epub' : 'txt',
+    createdAt: typeof candidate.createdAt === 'string' && candidate.createdAt.length > 0 ? candidate.createdAt : new Date().toISOString(),
+    updatedAt: typeof candidate.updatedAt === 'string' && candidate.updatedAt.length > 0 ? candidate.updatedAt : new Date().toISOString(),
+    currentChapter: normalizeChapterNumber(candidate.currentChapter, normalizedChapters.length),
+    chapters: normalizedChapters,
+  };
+}
+
+function normalizeBooks(rawBooks: unknown[]): ImportedBook[] {
+  const normalized: ImportedBook[] = [];
+  for (const item of rawBooks) {
+    const book = normalizeBook(item);
+    if (book) {
+      normalized.push(book);
+    }
+  }
+  return normalized;
+}
+
 function loadFallbackBooks(): ImportedBook[] {
   const raw = localStorage.getItem(BOOKS_FALLBACK_STORAGE_KEY);
   if (!raw) {
     return [];
   }
   try {
-    return sortBooks(JSON.parse(raw) as ImportedBook[]);
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return sortBooks(normalizeBooks(parsed));
   } catch (error) {
     console.warn('books-fallback-parse-failed', { error });
     return [];
@@ -71,10 +138,10 @@ export async function listBooks(): Promise<ImportedBook[]> {
 
   try {
     const books = await withStore('readonly', async (store) => {
-      const result = await requestToPromise(store.getAll() as IDBRequest<ImportedBook[]>);
+      const result = await requestToPromise(store.getAll() as IDBRequest<unknown[]>);
       return result;
     });
-    return sortBooks(books);
+    return sortBooks(normalizeBooks(books));
   } catch (error) {
     console.warn('books-indexeddb-list-failed', { error });
     return loadFallbackBooks();
@@ -89,8 +156,8 @@ export async function getBookById(id: string): Promise<ImportedBook | null> {
 
   try {
     return await withStore('readonly', async (store) => {
-      const book = await requestToPromise(store.get(id) as IDBRequest<ImportedBook | undefined>);
-      return book ?? null;
+      const book = await requestToPromise(store.get(id) as IDBRequest<unknown>);
+      return normalizeBook(book);
     });
   } catch (error) {
     console.warn('books-indexeddb-get-failed', { id, error });
@@ -100,24 +167,29 @@ export async function getBookById(id: string): Promise<ImportedBook | null> {
 }
 
 export async function upsertBook(book: ImportedBook): Promise<void> {
+  const normalized = normalizeBook(book);
+  if (!normalized) {
+    throw new Error('Cannot upsert invalid book payload.');
+  }
+
   if (!isIndexedDbAvailable()) {
     const books = loadFallbackBooks();
-    const next = books.filter((item) => item.id !== book.id);
-    next.push(book);
+    const next = books.filter((item) => item.id !== normalized.id);
+    next.push(normalized);
     saveFallbackBooks(sortBooks(next));
     return;
   }
 
   try {
     await withStore('readwrite', async (store) => {
-      await requestToPromise(store.put(book));
+      await requestToPromise(store.put(normalized));
       return undefined;
     });
   } catch (error) {
-    console.warn('books-indexeddb-upsert-failed', { id: book.id, error });
+    console.warn('books-indexeddb-upsert-failed', { id: normalized.id, error });
     const books = loadFallbackBooks();
-    const next = books.filter((item) => item.id !== book.id);
-    next.push(book);
+    const next = books.filter((item) => item.id !== normalized.id);
+    next.push(normalized);
     saveFallbackBooks(sortBooks(next));
   }
 }
