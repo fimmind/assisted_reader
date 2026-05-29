@@ -22,7 +22,7 @@ export function WordDefinitionCard({
 }: WordDefinitionCardProps) {
   if (compact) {
     return (
-      <div className="inline-flex flex-col bg-popover border border-border rounded-md shadow-sm p-3 mx-2 my-1 max-w-[250px] align-middle">
+      <div className="inline-flex flex-col bg-popover border border-border rounded-md shadow-sm px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] align-middle">
         <div className="flex items-center justify-between gap-3 mb-1">
           <div className="flex items-baseline gap-2">
             <span className="font-serif font-medium text-[1.1em]">{definition.word}</span>
