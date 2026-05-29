@@ -2,16 +2,17 @@ import {
   useState, useEffect, useRef, useLayoutEffect, useCallback,
 } from 'react';
 import type { ReactNode } from 'react';
-import { useParams, Link } from 'wouter';
-import { ChevronLeft, Type, Eye, EyeOff } from 'lucide-react';
+import { useParams, Link, useLocation } from 'wouter';
+import { ChevronLeft, Type, Eye, EyeOff, MoreHorizontal, Trash2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
 import { WordDefinitionCard } from '@/components/WordDefinitionCard';
 import { cn } from '@/lib/utils';
-import { getBookById, listBooks, upsertBook } from '@/core/books-store';
+import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { createFallbackLexiconEntry, loadLexiconMap } from '@/core/lexicon';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
@@ -247,6 +248,7 @@ function shouldHideFirstParagraphAsDuplicateTitle(
 
 export default function ReaderPage() {
   const { bookId } = useParams();
+  const [, setLocation] = useLocation();
   const { settings, updateSetting } = useSettings();
 
   const [book, setBook] = useState<ImportedBook | null>(null);
@@ -693,6 +695,24 @@ export default function ReaderPage() {
     settings.pageWidth === 'Narrow' ? 'max-w-4xl' :
     settings.pageWidth === 'Wide' ? 'max-w-6xl' : 'max-w-5xl';
 
+  const deleteCurrentBook = async () => {
+    if (!book) {
+      return;
+    }
+    const confirmed = window.confirm(`Delete "${book.title}" from your library?`);
+    if (!confirmed) {
+      return;
+    }
+    persistCurrentChapterProgress(true);
+    try {
+      await deleteBookById(book.id);
+      setLocation('/');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete book.';
+      window.alert(message);
+    }
+  };
+
   const renderParagraphWithHighlights = (analysis: ParagraphAnalysis): ReactNode => {
     if (!assistanceEnabled || analysis.tokens.length === 0 || analysis.cardLemmas.length === 0) {
       return <>{analysis.paragraphText}</>;
@@ -776,17 +796,19 @@ export default function ReaderPage() {
         headerVisible ? 'translate-y-0' : '-translate-y-full'
       )}>
         <div className="container mx-auto px-4 h-14 flex items-center justify-between">
-          <Link href="/">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-2 text-muted-foreground hover:text-foreground"
-              data-testid="button-back-library"
-              onClick={() => persistCurrentChapterProgress(true)}
-            >
-              <ChevronLeft size={18} /><span className="hidden sm:inline">Library</span>
-            </Button>
-          </Link>
+          <div className="flex items-center gap-1">
+            <Link href="/">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 text-muted-foreground hover:text-foreground"
+                data-testid="button-back-library"
+                onClick={() => persistCurrentChapterProgress(true)}
+              >
+                <ChevronLeft size={18} /><span className="hidden sm:inline">Library</span>
+              </Button>
+            </Link>
+          </div>
           <div className="font-serif text-sm font-medium text-muted-foreground hidden md:block">
             {book.title} — Chapter {currentChapterNumber}
           </div>
@@ -854,6 +876,19 @@ export default function ReaderPage() {
                 </div>
               </SheetContent>
             </Sheet>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground" aria-label="More actions" data-testid="button-reader-more-actions">
+                  <MoreHorizontal size={18} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => { void deleteCurrentBook(); }}>
+                  <Trash2 size={16} />
+                  Delete Book
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </header>
