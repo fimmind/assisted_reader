@@ -64,6 +64,8 @@ interface ReaderResources {
   nlp: NlpLike;
 }
 
+type AnalysisRefreshMode = 'reset' | 'preserve';
+
 type DeferredHandle = {
   kind: 'idle' | 'timeout';
   id: number;
@@ -183,6 +185,37 @@ function buildParagraphAnalysisAtIndex(
   return analyses[0] ?? { paragraphText, tokens: [], cardLemmas: [] };
 }
 
+function areParagraphAnalysesVisuallyEquivalent(left: ParagraphAnalysis, right: ParagraphAnalysis): boolean {
+  if (left.paragraphText !== right.paragraphText) {
+    return false;
+  }
+  if (left.cardLemmas.length !== right.cardLemmas.length) {
+    return false;
+  }
+  for (let index = 0; index < left.cardLemmas.length; index += 1) {
+    if (left.cardLemmas[index] !== right.cardLemmas[index]) {
+      return false;
+    }
+  }
+  if (left.tokens.length !== right.tokens.length) {
+    return false;
+  }
+  for (let index = 0; index < left.tokens.length; index += 1) {
+    const leftToken = left.tokens[index];
+    const rightToken = right.tokens[index];
+    if (
+      leftToken.start !== rightToken.start
+      || leftToken.end !== rightToken.end
+      || leftToken.lemma !== rightToken.lemma
+      || leftToken.unknown !== rightToken.unknown
+      || leftToken.proper !== rightToken.proper
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function buildPlainChapterAnalysis(selectedBook: ImportedBook): ParagraphAnalysis[] {
   const chapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
   const chapterIndex = chapterNumber - 1;
@@ -260,6 +293,8 @@ export default function ReaderPage() {
   const [isLoading, setIsLoading] = useState(true);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
+  const chapterAnalysisRef = useRef<ParagraphAnalysis[]>([]);
+  const definitionsByLemmaRef = useRef<Map<string, LexiconEntry>>(new Map());
   const settingsRef = useRef<ReaderSettings>(settings);
   const assistanceEnabledRef = useRef<boolean>(assistanceEnabled);
   const analysisRunIdRef = useRef(0);
@@ -333,7 +368,7 @@ export default function ReaderPage() {
     return fallbackIndex;
   }, []);
 
-  const recomputeVisibleAnalysis = useCallback((selectedBook: ImportedBook, resources: ReaderResources) => {
+  const recomputeVisibleAnalysis = useCallback((selectedBook: ImportedBook, resources: ReaderResources, mode: AnalysisRefreshMode) => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
     const currentRunId = analysisRunIdRef.current + 1;
@@ -341,12 +376,23 @@ export default function ReaderPage() {
     const expectedParagraphCount = buildPlainChapterAnalysis(selectedBook).length;
 
     const plainAnalyses = buildPlainChapterAnalysis(selectedBook);
-    setChapterAnalysis(plainAnalyses);
-    setDefinitionsByLemma(new Map());
+    const canPreserveExisting = (
+      mode === 'preserve'
+      && chapterAnalysisRef.current.length === expectedParagraphCount
+      && chapterAnalysisRef.current.every((analysis, index) => analysis.paragraphText === (plainAnalyses[index]?.paragraphText ?? ''))
+    );
+    const initialAnalyses = canPreserveExisting ? chapterAnalysisRef.current.slice() : plainAnalyses;
+    const initialDefinitions = canPreserveExisting ? new Map(definitionsByLemmaRef.current) : new Map<string, LexiconEntry>();
+    if (mode === 'reset' || !canPreserveExisting) {
+      setChapterAnalysis(initialAnalyses);
+      setDefinitionsByLemma(initialDefinitions);
+    }
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
 
     if (!assistanceEnabledRef.current) {
+      setChapterAnalysis(plainAnalyses);
+      setDefinitionsByLemma(new Map());
       return;
     }
 
@@ -357,8 +403,8 @@ export default function ReaderPage() {
 
       void (async () => {
         try {
-          const nextAnalyses = plainAnalyses.slice();
-          const definitionMap = new Map<string, LexiconEntry>();
+          const nextAnalyses = initialAnalyses.slice();
+          const definitionMap = new Map<string, LexiconEntry>(initialDefinitions);
           const anchorIndex = resolveAnalysisAnchorIndex(
             expectedParagraphCount,
             selectedBook.currentChapterProgress,
@@ -379,7 +425,11 @@ export default function ReaderPage() {
                 paragraphIndex,
                 true,
               );
-              nextAnalyses[paragraphIndex] = analysis;
+              const previousAnalysis = nextAnalyses[paragraphIndex];
+              const hasMeaningfulChange = !previousAnalysis || !areParagraphAnalysesVisuallyEquivalent(previousAnalysis, analysis);
+              if (hasMeaningfulChange) {
+                nextAnalyses[paragraphIndex] = analysis;
+              }
 
               for (const lemma of analysis.cardLemmas) {
                 const found = resources.lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
@@ -398,7 +448,16 @@ export default function ReaderPage() {
               return;
             }
 
-            setChapterAnalysis([...nextAnalyses]);
+            setChapterAnalysis((previous) => {
+              const previousAnalysis = previous[paragraphIndex];
+              const nextAnalysis = nextAnalyses[paragraphIndex];
+              if (previousAnalysis && areParagraphAnalysesVisuallyEquivalent(previousAnalysis, nextAnalysis)) {
+                return previous;
+              }
+              const updated = previous.length === nextAnalyses.length ? previous.slice() : nextAnalyses.slice();
+              updated[paragraphIndex] = nextAnalysis;
+              return updated;
+            });
             setDefinitionsByLemma(new Map(definitionMap));
 
             await new Promise<void>((resolve) => {
@@ -437,7 +496,7 @@ export default function ReaderPage() {
       resourcesRef.current = resources;
 
       setBook(selectedBook);
-      recomputeVisibleAnalysis(selectedBook, resources);
+      recomputeVisibleAnalysis(selectedBook, resources, 'reset');
     } catch (error) {
       console.error('reader-load-failed', { error, bookId });
     } finally {
@@ -448,6 +507,14 @@ export default function ReaderPage() {
   useEffect(() => {
     bookRef.current = book;
   }, [book]);
+
+  useEffect(() => {
+    chapterAnalysisRef.current = chapterAnalysis;
+  }, [chapterAnalysis]);
+
+  useEffect(() => {
+    definitionsByLemmaRef.current = definitionsByLemma;
+  }, [definitionsByLemma]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -462,7 +529,7 @@ export default function ReaderPage() {
     if (!book || !resources || isLoading) {
       return;
     }
-    recomputeVisibleAnalysis(book, resources);
+    recomputeVisibleAnalysis(book, resources, 'reset');
   }, [assistanceEnabled, book, isLoading, recomputeVisibleAnalysis, settings]);
 
   useEffect(() => {
@@ -474,7 +541,7 @@ export default function ReaderPage() {
         void loadReaderState();
         return;
       }
-      recomputeVisibleAnalysis(currentBook, resources);
+      recomputeVisibleAnalysis(currentBook, resources, 'preserve');
     });
     return unsubscribe;
   }, [loadReaderState, recomputeVisibleAnalysis]);
@@ -486,10 +553,6 @@ export default function ReaderPage() {
 
   const markLemma = (lemma: string, known: boolean) => {
     upsertObservation(lemma, known);
-    const resources = resourcesRef.current;
-    if (book && resources) {
-      recomputeVisibleAnalysis(book, resources);
-    }
   };
 
   const persistCurrentChapterProgress = useCallback((force: boolean) => {
