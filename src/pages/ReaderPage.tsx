@@ -127,6 +127,59 @@ function buildPlainChapterAnalysis(selectedBook: ImportedBook): ParagraphAnalysi
   return chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardLemmas: [] }));
 }
 
+function normalizeHeadingText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function isChapterHeadingText(text: string): boolean {
+  return /^chapter\b/i.test(normalizeHeadingText(text));
+}
+
+function isGenericChapterHeading(text: string): boolean {
+  const normalized = normalizeHeadingText(text).toLowerCase();
+  return normalized === 'chapter' || normalized === 'chapter.';
+}
+
+function resolveChapterDisplayTitle(
+  chapterTitle: string | undefined,
+  chapterNumber: number,
+  firstParagraph: string | undefined,
+): string {
+  const fallbackTitle = `Chapter ${chapterNumber}`;
+  const normalizedTitle = chapterTitle ? normalizeHeadingText(chapterTitle) : '';
+  const normalizedFirstParagraph = firstParagraph ? normalizeHeadingText(firstParagraph) : '';
+
+  if (normalizedTitle.length === 0) {
+    if (normalizedFirstParagraph.length > 0 && isChapterHeadingText(normalizedFirstParagraph)) {
+      return normalizedFirstParagraph;
+    }
+    return fallbackTitle;
+  }
+
+  if (isGenericChapterHeading(normalizedTitle)) {
+    if (normalizedFirstParagraph.length > 0 && isChapterHeadingText(normalizedFirstParagraph)) {
+      return normalizedFirstParagraph;
+    }
+    return fallbackTitle;
+  }
+
+  return normalizedTitle;
+}
+
+function shouldHideFirstParagraphAsDuplicateTitle(
+  chapterDisplayTitle: string,
+  firstParagraph: string | undefined,
+): boolean {
+  if (!firstParagraph) {
+    return false;
+  }
+  const normalizedParagraph = normalizeHeadingText(firstParagraph);
+  if (!isChapterHeadingText(normalizedParagraph)) {
+    return false;
+  }
+  return normalizedParagraph.toLowerCase() === normalizeHeadingText(chapterDisplayTitle).toLowerCase();
+}
+
 export default function ReaderPage() {
   const { bookId } = useParams();
   const { settings, updateSetting } = useSettings();
@@ -476,6 +529,17 @@ export default function ReaderPage() {
   const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
   const currentChapter = book.chapters[currentChapterNumber - 1];
   const chapterParagraphs = currentChapter?.paragraphs ?? [];
+  const chapterDisplayTitle = resolveChapterDisplayTitle(
+    currentChapter?.title,
+    currentChapterNumber,
+    chapterParagraphs[0],
+  );
+  const paragraphStartIndex = shouldHideFirstParagraphAsDuplicateTitle(chapterDisplayTitle, chapterParagraphs[0]) ? 1 : 0;
+  const visibleParagraphEntries = chapterParagraphs.slice(paragraphStartIndex).map((paragraphText, visibleIndex) => ({
+    paragraphText,
+    visibleIndex,
+    sourceIndex: visibleIndex + paragraphStartIndex,
+  }));
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -580,7 +644,7 @@ export default function ReaderPage() {
         >
           <div className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
             <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
-              {currentChapter?.title ?? `Chapter ${currentChapterNumber}`}
+              {chapterDisplayTitle}
             </h1>
 
             <div
@@ -592,19 +656,19 @@ export default function ReaderPage() {
               }}
               data-testid="text-column"
             >
-              {chapterParagraphs.map((paragraphText, index) => {
-                const analysis = chapterAnalysis[index] ?? { paragraphText, tokens: [], cardLemmas: [] };
+              {visibleParagraphEntries.map((entry) => {
+                const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardLemmas: [] };
                 return (
-                <div key={index} className="mb-2" data-testid={`paragraph-block-${index}`}>
+                <div key={entry.sourceIndex} className="mb-2" data-testid={`paragraph-block-${entry.visibleIndex}`}>
                   <p
-                    ref={(element) => { paraRefs.current[index] = element; }}
+                    ref={(element) => { paraRefs.current[entry.visibleIndex] = element; }}
                     className="text-foreground/90 reader-text"
-                    data-testid={`paragraph-${index}`}
+                    data-testid={`paragraph-${entry.visibleIndex}`}
                   >
                     {renderParagraphWithHighlights(analysis)}
                   </p>
                   {assistanceEnabled && analysis.cardLemmas.length > 0 && (
-                    <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${index}`}>
+                    <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
                       {analysis.cardLemmas.map((lemma) => {
                         const definition = definitionsByLemma.get(lemma) ?? createFallbackLexiconEntry(lemma);
                         return (
@@ -642,16 +706,16 @@ export default function ReaderPage() {
             aria-label="Vocabulary cards"
             data-testid="card-column"
           >
-            {chapterParagraphs.map((paragraphText, index) => {
-              const analysis = chapterAnalysis[index] ?? { paragraphText, tokens: [], cardLemmas: [] };
+            {visibleParagraphEntries.map((entry) => {
+              const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardLemmas: [] };
               if (!analysis.cardLemmas.length || !assistanceEnabled) return null;
               return (
                 <div
-                  key={index}
-                  ref={(element) => { cardGrpRefs.current[index] = element; }}
-                  style={{ position: 'absolute', top: paraOffsets[index] ?? 0 }}
+                  key={entry.sourceIndex}
+                  ref={(element) => { cardGrpRefs.current[entry.visibleIndex] = element; }}
+                  style={{ position: 'absolute', top: paraOffsets[entry.visibleIndex] ?? 0 }}
                   className="flex flex-col gap-3 w-full"
-                  data-testid={`card-group-${index}`}
+                  data-testid={`card-group-${entry.visibleIndex}`}
                 >
                   {analysis.cardLemmas.map((lemma) => {
                     const definition = definitionsByLemma.get(lemma) ?? createFallbackLexiconEntry(lemma);
