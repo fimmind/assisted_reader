@@ -111,6 +111,42 @@ function calculateScrollTopFromProgress(progress: number): number {
   return maxScrollTop * normalized;
 }
 
+function clampParagraphIndex(index: number, paragraphCount: number): number {
+  if (paragraphCount <= 0) {
+    return 0;
+  }
+  if (index < 0) {
+    return 0;
+  }
+  if (index >= paragraphCount) {
+    return paragraphCount - 1;
+  }
+  return index;
+}
+
+function buildParagraphProcessingOrder(paragraphCount: number, anchorIndex: number): number[] {
+  if (paragraphCount <= 0) {
+    return [];
+  }
+
+  const order: number[] = [];
+  const safeAnchor = clampParagraphIndex(anchorIndex, paragraphCount);
+  order.push(safeAnchor);
+
+  for (let step = 1; order.length < paragraphCount; step += 1) {
+    const up = safeAnchor - step;
+    if (up >= 0) {
+      order.push(up);
+    }
+    const down = safeAnchor + step;
+    if (down < paragraphCount) {
+      order.push(down);
+    }
+  }
+
+  return order;
+}
+
 function buildParagraphAnalysisAtIndex(
   selectedBook: ImportedBook,
   settings: ReaderSettings,
@@ -246,6 +282,55 @@ export default function ReaderPage() {
     _setExtraPadding((previous) => previous === value ? previous : value);
   }, []);
 
+  const resolveAnalysisAnchorIndex = useCallback((paragraphCount: number, chapterProgress: number) => {
+    if (paragraphCount <= 0) {
+      return 0;
+    }
+
+    const fallbackIndex = clampParagraphIndex(
+      Math.floor(clampChapterProgress(chapterProgress) * Math.max(0, paragraphCount - 1)),
+      paragraphCount,
+    );
+    const visibleParagraphs = paraRefs.current.slice(0, paragraphCount);
+    const targetY = Math.min(window.innerHeight - 1, Math.max(80, Math.floor(window.innerHeight * 0.35)));
+
+    let containingIndex = -1;
+    for (let index = 0; index < visibleParagraphs.length; index += 1) {
+      const element = visibleParagraphs[index];
+      if (!element) {
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.top <= targetY && rect.bottom >= targetY) {
+        containingIndex = index;
+        break;
+      }
+    }
+    if (containingIndex >= 0) {
+      return containingIndex;
+    }
+
+    let closestIndex = -1;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < visibleParagraphs.length; index += 1) {
+      const element = visibleParagraphs[index];
+      if (!element) {
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      const distance = Math.abs(rect.top - targetY);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    }
+    if (closestIndex >= 0) {
+      return closestIndex;
+    }
+
+    return fallbackIndex;
+  }, []);
+
   const recomputeVisibleAnalysis = useCallback((selectedBook: ImportedBook, resources: ReaderResources) => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
@@ -272,8 +357,13 @@ export default function ReaderPage() {
         try {
           const nextAnalyses = plainAnalyses.slice();
           const definitionMap = new Map<string, LexiconEntry>();
+          const anchorIndex = resolveAnalysisAnchorIndex(
+            expectedParagraphCount,
+            selectedBook.currentChapterProgress,
+          );
+          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, anchorIndex);
 
-          for (let paragraphIndex = 0; paragraphIndex < expectedParagraphCount; paragraphIndex += 1) {
+          for (const paragraphIndex of paragraphOrder) {
             if (analysisRunIdRef.current !== currentRunId) {
               return;
             }
@@ -318,7 +408,7 @@ export default function ReaderPage() {
         }
       })();
     }, 700);
-  }, []);
+  }, [resolveAnalysisAnchorIndex]);
 
   const loadReaderState = useCallback(async () => {
     setIsLoading(true);
