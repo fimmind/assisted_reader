@@ -48,6 +48,12 @@ function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHand
   return { kind: 'timeout', id };
 }
 
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 0);
+  });
+}
+
 export default function LibraryPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const [quizOpen, setQuizOpen] = useState(false);
@@ -68,12 +74,13 @@ export default function LibraryPage() {
     progressPercent: 0,
   }), []);
 
-  const calculateBookStatsSafe = (
+  const calculateBookStatsSafe = async (
     book: ImportedBook,
     model: Awaited<ReturnType<typeof loadVocabularyModel>>,
     lemmaDict: Awaited<ReturnType<typeof loadLemmaDict>>,
     nlp: Awaited<ReturnType<typeof loadCompromise>>,
-  ): BookStats => {
+    runId: number,
+  ): Promise<BookStats | null> => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
     const settings = loadReaderSettings();
@@ -97,29 +104,45 @@ export default function LibraryPage() {
     }
 
     try {
-      const analyses = analyzeChapter({
-        chapter: {
-          title: chapter.title,
-          paragraphs: sampledParagraphs,
-        },
-        settings,
-        model,
-        profile: activeProfile,
-        lemmaDict,
-        nlp,
-        maxCardsPerParagraph: 1,
-      });
-
       let sampledUnknownTokens = 0;
       let sampledTotalTokens = 0;
-      for (const paragraph of analyses) {
+      for (let paragraphIndex = 0; paragraphIndex < sampledParagraphs.length; paragraphIndex += 1) {
+        if (refreshRunIdRef.current !== runId) {
+          return null;
+        }
+
+        const paragraphText = sampledParagraphs[paragraphIndex];
+        const analyses = analyzeChapter({
+          chapter: {
+            title: chapter.title,
+            paragraphs: [paragraphText],
+          },
+          settings,
+          model,
+          profile: activeProfile,
+          lemmaDict,
+          nlp,
+          maxCardsPerParagraph: 1,
+        });
+        const paragraph = analyses[0];
+        if (!paragraph) {
+          continue;
+        }
+
         for (const token of paragraph.tokens) {
           sampledTotalTokens += 1;
           if (token.unknown) {
             sampledUnknownTokens += 1;
           }
         }
+
+        await yieldToEventLoop();
       }
+
+      if (refreshRunIdRef.current !== runId) {
+        return null;
+      }
+
       const unknownTokenPercent = sampledTotalTokens === 0 ? 0 : (sampledUnknownTokens / sampledTotalTokens) * 100;
       const scale = chapter.paragraphs.length / sampledParagraphs.length;
       const unknownTokenCount = Math.max(0, Math.round(sampledUnknownTokens * scale));
@@ -209,7 +232,7 @@ export default function LibraryPage() {
               return;
             }
             let fastIndex = 0;
-            const processFastNext = () => {
+            const processFastNext = async () => {
               if (refreshRunIdRef.current !== runId) {
                 return;
               }
@@ -223,7 +246,7 @@ export default function LibraryPage() {
                         return;
                       }
                       let nlpIndex = 0;
-                      const processNlpNext = () => {
+                      const processNlpNext = async () => {
                         if (refreshRunIdRef.current !== runId) {
                           return;
                         }
@@ -231,12 +254,17 @@ export default function LibraryPage() {
                         if (!nlpBook) {
                           return;
                         }
-                        const stat = calculateBookStatsSafe(nlpBook, model, lemmaDict, nlp);
+                        const stat = await calculateBookStatsSafe(nlpBook, model, lemmaDict, nlp, runId);
+                        if (stat === null || refreshRunIdRef.current !== runId) {
+                          return;
+                        }
                         setStatsByBookId((previous) => ({ ...previous, [nlpBook.id]: stat }));
                         nlpIndex += 1;
-                        nlpStatsHandleRef.current = scheduleDeferredTask(processNlpNext, 80);
+                        nlpStatsHandleRef.current = scheduleDeferredTask(() => {
+                          void processNlpNext();
+                        }, 80);
                       };
-                      processNlpNext();
+                      void processNlpNext();
                     } catch (error) {
                       console.warn('library-nlp-stats-refresh-failed', { error });
                     }
@@ -244,12 +272,17 @@ export default function LibraryPage() {
                 }, 1000);
                 return;
               }
-              const stat = calculateBookStatsSafe(book, model, lemmaDict, null);
+              const stat = await calculateBookStatsSafe(book, model, lemmaDict, null, runId);
+              if (stat === null || refreshRunIdRef.current !== runId) {
+                return;
+              }
               setStatsByBookId((previous) => ({ ...previous, [book.id]: stat }));
               fastIndex += 1;
-              fastStatsHandleRef.current = scheduleDeferredTask(processFastNext, 60);
+              fastStatsHandleRef.current = scheduleDeferredTask(() => {
+                void processFastNext();
+              }, 60);
             };
-            processFastNext();
+            void processFastNext();
           } catch (error) {
             console.warn('library-fast-stats-refresh-failed', { error });
           }
