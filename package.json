@@ -16,7 +16,7 @@
     "deploy": "gh-pages -d dist --nojekyll",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:proper-nouns": "tsc -p tsconfig.tests.json && sed -i \"s|'./constants'|'./constants.js'|g; s|'./math'|'./math.js'|g; s|'./types'|'./types.js'|g\" .tmp-tests/src/core/nlp.js .tmp-tests/src/core/math.js && node --test .tmp-tests/tests/proper-nouns.test.js"
+    "test:proper-nouns": "tsc -p tsconfig.tests.json && sed -i \"s|'./constants'|'./constants.js'|g; s|'./math'|'./math.js'|g; s|'./types'|'./types.js'|g; s|'./nlp'|'./nlp.js'|g; s|'./model'|'./model.js'|g\" .tmp-tests/src/core/nlp.js .tmp-tests/src/core/math.js .tmp-tests/src/core/model.js .tmp-tests/src/core/reader-analysis.js && node --test .tmp-tests/tests/proper-nouns.test.js"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",

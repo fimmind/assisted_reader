@@ -6,8 +6,9 @@ import {
   contextualDeinflectTaggedTerms,
   tagSentenceTerms,
 } from '../src/core/nlp.js';
+import { analyzeChapter } from '../src/core/reader-analysis.js';
 import { normalizeToken } from '../src/core/math.js';
-import type { TaggedSentence, TaggedTerm } from '../src/core/types.js';
+import type { ReaderSettings, TaggedSentence, TaggedTerm, UserProfile, VocabularyModel } from '../src/core/types.js';
 
 function createStubNlpWithTaggedTerms(terms: Array<{ text: string; tags: Record<string, boolean> | string[] }>) {
   return (_text: string) => ({
@@ -822,4 +823,80 @@ test('ten Hitchhikers sentences run contextual deinflection with expected lemmas
   for (const sample of cases) {
     assertSentenceDeinflection(sample.sentence, sample.expectedPairs, formsByToken);
   }
+});
+
+test('reader analysis excludes one-letter and two-letter words from excerpt', () => {
+  const excerpt = '“Ah yes, Vogonity—sorry—of the poet’s compassionate soul”—Arthur felt he was on the homestretch now—“which contrives through the medium of the verse structure to sublimate this, transcend that, and come to terms with the fundamental dichotomies of the other”—he was reaching a triumphant crescendo—“and one is left with a profound and vivid insight into … into … er …” (which suddenly gave out on him). Ford leaped in with the coup de grace: “Into whatever it was the poem was about!” he yelled. Out of the corner of his mouth: “Well done, Arthur, that was very good.”';
+
+  const chapter = {
+    title: 'Excerpt',
+    paragraphs: [excerpt],
+  };
+  const settings: ReaderSettings = {
+    fontSize: 18,
+    lineSpacing: 'Normal',
+    fontChoice: 'Serif',
+    pageWidth: 'Normal',
+    maxWordsPerParagraph: 3,
+    knowledgeThreshold: 0.6,
+  };
+  const model: VocabularyModel = {
+    modelKey: 'test',
+    modelName: 'test',
+    words: ['vogonity', 'compassionate', 'soul', 'homestretch', 'fundamental', 'dichotomies', 'profound', 'insight', 'whatever'],
+    accuracy: [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4],
+    difficulties: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    wordToIdx: new Map<string, number>([
+      ['vogonity', 0],
+      ['compassionate', 1],
+      ['soul', 2],
+      ['homestretch', 3],
+      ['fundamental', 4],
+      ['dichotomies', 5],
+      ['profound', 6],
+      ['insight', 7],
+      ['whatever', 8],
+    ]),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+  const profile: UserProfile = {
+    id: 'p1',
+    name: 'Test',
+    observations: {},
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  const analyses = analyzeChapter({
+    chapter,
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp: null,
+    maxCardsPerParagraph: 3,
+  });
+  assert.equal(analyses.length, 1);
+
+  const paragraph = analyses[0];
+  for (const token of paragraph.tokens) {
+    const letterCount = token.lemma.replace(/['’]/g, '').length;
+    assert.ok(
+      letterCount > 2,
+      `Expected analyzed token lemma to be longer than 2 letters, got '${token.lemma}'`,
+    );
+  }
+  for (const lemma of paragraph.cardLemmas) {
+    const letterCount = lemma.replace(/['’]/g, '').length;
+    assert.ok(
+      letterCount > 2,
+      `Expected card lemma to be longer than 2 letters, got '${lemma}'`,
+    );
+  }
+
+  const containsShortLemma = paragraph.tokens.some((token) => {
+    const normalized = normalizeToken(token.raw).replace(/['’]/g, '');
+    return normalized.length <= 2;
+  });
+  assert.equal(containsShortLemma, false);
 });

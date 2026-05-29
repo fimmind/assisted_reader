@@ -47,6 +47,11 @@ function buildTaggedSentenceGroups(paragraphs: string[], nlp: ChapterAnalysisInp
   return paragraphs.map((paragraph) => buildTaggedSentences(paragraph, nlp));
 }
 
+function isAnalyzableLemma(lemma: string): boolean {
+  const letterCount = lemma.replace(/['’]/g, '').length;
+  return letterCount > 2;
+}
+
 function buildParagraphTokenList(
   paragraph: string,
   taggedSentences: TaggedSentence[],
@@ -90,6 +95,12 @@ function buildParagraphTokenList(
     const aligned = deinflectedTerms[sequentialIndex];
     const lemma = aligned?.lemma && aligned.lemma.length > 0 ? aligned.lemma : normalizeToken(raw);
     const proper = aligned?.proper ?? false;
+    sequentialIndex += 1;
+
+    if (!isAnalyzableLemma(lemma)) {
+      match = WORD_RE.exec(paragraph);
+      continue;
+    }
 
     const pKnown = predictKnownProbability(model, profile, theta, lemma);
     const unknown = !proper && lemma.length > 0 && pKnown < threshold;
@@ -103,8 +114,6 @@ function buildParagraphTokenList(
       unknown,
       proper,
     });
-
-    sequentialIndex += 1;
     match = WORD_RE.exec(paragraph);
   }
   WORD_RE.lastIndex = 0;

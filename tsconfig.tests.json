@@ -7,7 +7,7 @@
     "lib": ["es2022", "dom"],
     "outDir": ".tmp-tests",
     "rootDir": ".",
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "noEmit": false,
     "declaration": false,
     "sourceMap": false,
@@ -16,7 +16,9 @@
   "include": [
     "src/core/constants.ts",
     "src/core/math.ts",
+    "src/core/model.ts",
     "src/core/nlp.ts",
+    "src/core/reader-analysis.ts",
     "src/core/types.ts",
     "tests/**/*.ts"
   ],
