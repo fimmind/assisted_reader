@@ -462,7 +462,11 @@ export default function ReaderPage() {
   };
 
   if (isLoading) {
-    return <div className="min-h-screen bg-background text-foreground p-6">Loading reader...</div>;
+    return (
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-6">
+        Loading reader...
+      </div>
+    );
   }
 
   if (!book) {
