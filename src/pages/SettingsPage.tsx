@@ -102,11 +102,11 @@ export default function SettingsPage() {
                 type="button"
               >
                 <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-full bg-secondary flex items-center justify-center font-serif text-lg text-secondary-foreground">
+                  <div className="h-10 w-10 shrink-0 rounded-full bg-secondary flex items-center justify-center font-serif text-lg text-secondary-foreground">
                     {profile.name[0]}
                   </div>
-                  <div>
-                    <p className="font-medium">{profile.name}</p>
+                  <div className="min-w-0">
+                    <p className="font-medium break-all">{profile.name}</p>
                     {activeProfileId === profile.id && <span className="text-xs text-primary font-medium">Active</span>}
                   </div>
                 </div>
