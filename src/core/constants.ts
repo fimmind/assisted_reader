@@ -16,7 +16,7 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   lineSpacing: 'Normal',
   fontChoice: 'Serif',
   pageWidth: 'Normal',
-  maxWordsPerParagraph: 2,
+  maxWordsPerParagraph: 1,
   knowledgeThreshold: 0.5,
   englishVariant: 'US',
 };
