@@ -1,6 +1,7 @@
 {
   "name": "easeword",
   "version": "0.0.0",
+  "homepage": "https://fimmind.github.io/assisted_reader",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +11,9 @@
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
     "prebuild": "pnpm run sync:data",
     "build": "pnpm run typecheck && vite build --config vite.config.ts",
+    "verify:deploy-assets": "node scripts/verify-deploy-assets.mjs",
+    "predeploy": "BASE_PATH=/assisted_reader/ pnpm run build && touch dist/.nojekyll && pnpm run verify:deploy-assets",
+    "deploy": "gh-pages -d dist --nojekyll",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:proper-nouns": "tsc -p tsconfig.tests.json && sed -i \"s|'./constants'|'./constants.js'|g; s|'./math'|'./math.js'|g; s|'./types'|'./types.js'|g\" .tmp-tests/src/core/nlp.js .tmp-tests/src/core/math.js && node --test .tmp-tests/tests/proper-nouns.test.js"
@@ -57,6 +61,7 @@
     "date-fns": "^3.6.0",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "catalog:",
+    "gh-pages": "^6.3.0",
     "input-otp": "^1.4.2",
     "lucide-react": "catalog:",
     "next-themes": "^0.4.6",

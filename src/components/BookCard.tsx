@@ -8,6 +8,27 @@ interface BookCardProps {
 }
 
 export function BookCard({ book, stats }: BookCardProps) {
+  const chapterCount = book.chapters.length;
+  const safeChapter = (() => {
+    if (chapterCount <= 0) {
+      return 0;
+    }
+    if (typeof book.currentChapter !== 'number' || !Number.isFinite(book.currentChapter)) {
+      return 1;
+    }
+    const integerChapter = Math.trunc(book.currentChapter);
+    if (integerChapter < 1) {
+      return 1;
+    }
+    if (integerChapter > chapterCount) {
+      return chapterCount;
+    }
+    return integerChapter;
+  })();
+  const safeProgressPercent = Number.isFinite(stats.progressPercent)
+    ? stats.progressPercent
+    : (chapterCount === 0 ? 0 : (safeChapter / chapterCount) * 100);
+
   return (
     <Link href={`/reader/${book.id}`} className="group flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg">
       <div className="aspect-[3/4] rounded-lg overflow-hidden border border-border bg-muted shadow-sm transition-all duration-300 group-hover:shadow-md group-hover:-translate-y-1 relative">
@@ -28,10 +49,10 @@ export function BookCard({ book, stats }: BookCardProps) {
 
       <div className="mt-2.5 sm:mt-3 md:mt-3 lg:mt-4 space-y-1.5 sm:space-y-1.5 lg:space-y-2">
         <div className="flex justify-between items-center text-[11px] sm:text-[11px] md:text-[11px] lg:text-xs text-muted-foreground">
-          <span>Chapter {book.currentChapter} of {book.chapters.length}</span>
-          <span>{Math.round(stats.progressPercent)}%</span>
+          <span>Chapter {safeChapter} of {chapterCount}</span>
+          <span>{Math.round(safeProgressPercent)}%</span>
         </div>
-        <Progress value={stats.progressPercent} className="h-1.5" />
+        <Progress value={safeProgressPercent} className="h-1.5" />
       </div>
 
       <div className="mt-2 sm:mt-2.5 md:mt-2.5 lg:mt-3 flex gap-2 sm:gap-2.5 lg:gap-3 text-[11px] sm:text-[11px] md:text-[11px] lg:text-xs text-muted-foreground">

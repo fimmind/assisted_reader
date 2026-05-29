@@ -31,21 +31,31 @@ export async function loadLexiconMap(): Promise<Map<string, LexiconEntry>> {
   }
 
   lexiconPromise = (async () => {
-    const indexResponse = await fetch(`${import.meta.env.BASE_URL}${LEXICON_INDEX_URL}`);
-    if (!indexResponse.ok) {
-      throw new Error(`Failed to load lexicon index: status=${indexResponse.status}`);
-    }
+    try {
+      const indexResponse = await fetch(`${import.meta.env.BASE_URL}${LEXICON_INDEX_URL}`);
+      if (!indexResponse.ok) {
+        throw new Error(`Failed to load lexicon index: status=${indexResponse.status}`);
+      }
 
-    const indexPayload = (await indexResponse.json()) as LexiconIndexPayload;
-    const fileNames = Object.values(indexPayload);
-    const chunkPromises = fileNames.map((fileName) => loadChunk(fileName));
-    const chunkResults = await Promise.all(chunkPromises);
-    const merged: LexiconEntry[] = [];
-    for (const chunk of chunkResults) {
-      merged.push(...chunk);
-    }
+      const indexPayload = (await indexResponse.json()) as LexiconIndexPayload;
+      const fileNames = Object.values(indexPayload);
+      const chunkResults = await Promise.allSettled(fileNames.map((fileName) => loadChunk(fileName)));
+      const merged: LexiconEntry[] = [];
+      for (let index = 0; index < chunkResults.length; index += 1) {
+        const result = chunkResults[index];
+        if (result.status === 'fulfilled') {
+          merged.push(...result.value);
+          continue;
+        }
+        const fileName = fileNames[index] ?? 'unknown';
+        console.warn('lexicon-chunk-load-failed', { fileName, error: result.reason });
+      }
 
-    return buildEntryMap(merged);
+      return buildEntryMap(merged);
+    } catch (error) {
+      console.warn('lexicon-map-load-failed', { error });
+      return new Map<string, LexiconEntry>();
+    }
   })();
 
   return lexiconPromise;

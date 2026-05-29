@@ -20,14 +20,18 @@ import { analyzeChapter } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
 import type { ImportedBook, LexiconEntry, ParagraphAnalysis, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
 
-function clampChapterNumber(book: ImportedBook, chapterNumber: number): number {
-  if (chapterNumber < 1) {
+function clampChapterNumber(book: ImportedBook, chapterNumber: number | undefined): number {
+  if (typeof chapterNumber !== 'number' || !Number.isFinite(chapterNumber)) {
     return 1;
   }
-  if (chapterNumber > book.chapters.length) {
+  const integerChapter = Math.trunc(chapterNumber);
+  if (integerChapter < 1) {
+    return 1;
+  }
+  if (integerChapter > book.chapters.length) {
     return book.chapters.length;
   }
-  return chapterNumber;
+  return integerChapter;
 }
 
 type NlpLike = ((text: string) => {
@@ -313,8 +317,9 @@ export default function ReaderPage() {
     if (!book) {
       return;
     }
-    const nextChapter = clampChapterNumber(book, book.currentChapter + delta);
-    if (nextChapter === book.currentChapter) {
+    const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
+    const nextChapter = clampChapterNumber(book, currentChapterNumber + delta);
+    if (nextChapter === currentChapterNumber) {
       return;
     }
 
@@ -463,7 +468,9 @@ export default function ReaderPage() {
   if (!book) {
     return <div className="min-h-screen bg-background text-foreground p-6">No books found in your library.</div>;
   }
-  const chapterParagraphs = book.chapters[book.currentChapter - 1]?.paragraphs ?? [];
+  const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
+  const currentChapter = book.chapters[currentChapterNumber - 1];
+  const chapterParagraphs = currentChapter?.paragraphs ?? [];
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -478,7 +485,7 @@ export default function ReaderPage() {
             </Button>
           </Link>
           <div className="font-serif text-sm font-medium text-muted-foreground hidden md:block">
-            {book.title} — Chapter {book.currentChapter}
+            {book.title} — Chapter {currentChapterNumber}
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon"
@@ -567,7 +574,7 @@ export default function ReaderPage() {
         >
           <div className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
             <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
-              {book.chapters[book.currentChapter - 1]?.title ?? `Chapter ${book.currentChapter}`}
+              {currentChapter?.title ?? `Chapter ${currentChapterNumber}`}
             </h1>
 
             <div
@@ -615,7 +622,7 @@ export default function ReaderPage() {
                 <ChevronLeft size={16} /> Previous Chapter
               </Button>
               <span className="text-sm" data-testid="text-page-info">
-                Chapter {book.currentChapter} of {book.chapters.length}
+                Chapter {currentChapterNumber} of {book.chapters.length}
               </span>
               <Button variant="ghost" className="gap-2" data-testid="button-next-chapter" onClick={() => void updateCurrentChapter(1)}>
                 Next Chapter <ChevronLeft size={16} className="rotate-180" />
