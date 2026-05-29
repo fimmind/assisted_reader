@@ -222,6 +222,7 @@ export async function importBookFromFile(file: File): Promise<ImportedBook> {
     createdAt: nowIso,
     updatedAt: nowIso,
     currentChapter: 1,
+    currentChapterProgress: 0,
     chapters: parsed.chapters,
   };
 

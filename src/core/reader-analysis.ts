@@ -197,7 +197,7 @@ export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[]
 }
 
 export function calculateBookStats(
-  book: { chapters: BookChapter[]; currentChapter: number },
+  book: { chapters: BookChapter[]; currentChapter: number; currentChapterProgress?: number },
   settings: ReaderSettings,
   model: VocabularyModel,
   profile: UserProfile,
@@ -240,7 +240,20 @@ export function calculateBookStats(
 
   const unknownTokenPercent = totalTokenCount === 0 ? 0 : (unknownTokenCount / totalTokenCount) * 100;
   const chapterCount = book.chapters.length;
-  const progressPercent = chapterCount === 0 ? 0 : (book.currentChapter / chapterCount) * 100;
+  const normalizedChapterProgress = (() => {
+    if (typeof book.currentChapterProgress !== 'number' || !Number.isFinite(book.currentChapterProgress)) {
+      return 0;
+    }
+    if (book.currentChapterProgress < 0) {
+      return 0;
+    }
+    if (book.currentChapterProgress > 1) {
+      return 1;
+    }
+    return book.currentChapterProgress;
+  })();
+  const completedChapters = Math.max(0, Math.min(chapterCount, book.currentChapter - 1));
+  const progressPercent = chapterCount === 0 ? 0 : ((completedChapters + normalizedChapterProgress) / chapterCount) * 100;
 
   return {
     unknownTokenCount,

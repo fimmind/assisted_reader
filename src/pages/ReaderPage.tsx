@@ -34,6 +34,19 @@ function clampChapterNumber(book: ImportedBook, chapterNumber: number | undefine
   return integerChapter;
 }
 
+function clampChapterProgress(progress: number | undefined): number {
+  if (typeof progress !== 'number' || !Number.isFinite(progress)) {
+    return 0;
+  }
+  if (progress < 0) {
+    return 0;
+  }
+  if (progress > 1) {
+    return 1;
+  }
+  return progress;
+}
+
 type NlpLike = ((text: string) => {
   terms: () => {
     json: () => Array<{ text?: string; normal?: string; tags?: string[]; terms?: Array<{ text?: string; normal?: string; tags?: string[] }> }>;
@@ -80,6 +93,22 @@ function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHand
   }
   const id = window.setTimeout(task, timeoutMs);
   return { kind: 'timeout', id };
+}
+
+function calculateScrollProgressFromDocument(): number {
+  const documentElement = document.documentElement;
+  const maxScrollTop = Math.max(0, documentElement.scrollHeight - window.innerHeight);
+  if (maxScrollTop <= 0) {
+    return 0;
+  }
+  return clampChapterProgress(window.scrollY / maxScrollTop);
+}
+
+function calculateScrollTopFromProgress(progress: number): number {
+  const normalized = clampChapterProgress(progress);
+  const documentElement = document.documentElement;
+  const maxScrollTop = Math.max(0, documentElement.scrollHeight - window.innerHeight);
+  return maxScrollTop * normalized;
 }
 
 function buildParagraphAnalysisAtIndex(
@@ -197,6 +226,10 @@ export default function ReaderPage() {
   const assistanceEnabledRef = useRef<boolean>(assistanceEnabled);
   const analysisRunIdRef = useRef(0);
   const deferredAnalysisHandleRef = useRef<DeferredHandle | null>(null);
+  const progressPersistTimeoutRef = useRef<number | null>(null);
+  const delayedRestoreTimeoutRef = useRef<number | null>(null);
+  const isRestoringProgressRef = useRef(false);
+  const lastPersistedChapterProgressRef = useRef(0);
 
   const lastScrollY = useRef(0);
 
@@ -367,10 +400,51 @@ export default function ReaderPage() {
     }
   };
 
+  const persistCurrentChapterProgress = useCallback((force: boolean) => {
+    const currentBook = bookRef.current;
+    if (!currentBook) {
+      return;
+    }
+    if (!force && isRestoringProgressRef.current) {
+      return;
+    }
+
+    const progress = calculateScrollProgressFromDocument();
+    if (!force && Math.abs(progress - lastPersistedChapterProgressRef.current) < 0.01) {
+      return;
+    }
+    lastPersistedChapterProgressRef.current = progress;
+
+    const nextBook: ImportedBook = {
+      ...currentBook,
+      currentChapterProgress: progress,
+    };
+    bookRef.current = nextBook;
+    void upsertBook(nextBook).catch((error) => {
+      console.warn('reader-scroll-progress-save-failed', { bookId: nextBook.id, chapter: nextBook.currentChapter, progress, error });
+    });
+  }, []);
+
+  const scheduleChapterProgressPersist = useCallback(() => {
+    if (progressPersistTimeoutRef.current !== null) {
+      window.clearTimeout(progressPersistTimeoutRef.current);
+    }
+    progressPersistTimeoutRef.current = window.setTimeout(() => {
+      progressPersistTimeoutRef.current = null;
+      persistCurrentChapterProgress(false);
+    }, 250);
+  }, [persistCurrentChapterProgress]);
+
+  const restoreCurrentChapterProgress = useCallback((targetBook: ImportedBook) => {
+    const targetScrollTop = calculateScrollTopFromProgress(targetBook.currentChapterProgress);
+    window.scrollTo({ top: targetScrollTop, behavior: 'auto' });
+  }, []);
+
   const updateCurrentChapter = async (delta: number) => {
     if (!book) {
       return;
     }
+    persistCurrentChapterProgress(true);
     const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
     const nextChapter = clampChapterNumber(book, currentChapterNumber + delta);
     if (nextChapter === currentChapterNumber) {
@@ -380,6 +454,7 @@ export default function ReaderPage() {
     const nextBook: ImportedBook = {
       ...book,
       currentChapter: nextChapter,
+      currentChapterProgress: 0,
       updatedAt: new Date().toISOString(),
     };
     setBook(nextBook);
@@ -452,15 +527,71 @@ export default function ReaderPage() {
   }, [measure]);
 
   useEffect(() => {
+    if (!book || isLoading) {
+      return;
+    }
+    isRestoringProgressRef.current = true;
+    lastPersistedChapterProgressRef.current = clampChapterProgress(book.currentChapterProgress);
+    if (delayedRestoreTimeoutRef.current !== null) {
+      window.clearTimeout(delayedRestoreTimeoutRef.current);
+      delayedRestoreTimeoutRef.current = null;
+    }
+
+    requestAnimationFrame(() => {
+      restoreCurrentChapterProgress(book);
+    });
+    delayedRestoreTimeoutRef.current = window.setTimeout(() => {
+      restoreCurrentChapterProgress(book);
+      isRestoringProgressRef.current = false;
+      delayedRestoreTimeoutRef.current = null;
+    }, 900);
+  }, [book, isLoading, restoreCurrentChapterProgress]);
+
+  useEffect(() => {
     const handleScroll = () => {
       const y = window.scrollY;
       if (y > lastScrollY.current && y > 100) setHeaderVisible(false);
       else if (y < lastScrollY.current) setHeaderVisible(true);
       lastScrollY.current = y;
+      if (isRestoringProgressRef.current) {
+        return;
+      }
+      scheduleChapterProgressPersist();
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, [scheduleChapterProgressPersist]);
+
+  useEffect(() => () => {
+    if (progressPersistTimeoutRef.current !== null) {
+      window.clearTimeout(progressPersistTimeoutRef.current);
+      progressPersistTimeoutRef.current = null;
+    }
+    if (delayedRestoreTimeoutRef.current !== null) {
+      window.clearTimeout(delayedRestoreTimeoutRef.current);
+      delayedRestoreTimeoutRef.current = null;
+    }
+    isRestoringProgressRef.current = false;
   }, []);
+
+  useEffect(() => {
+    const persistOnPageHide = () => {
+      persistCurrentChapterProgress(true);
+    };
+    const persistOnVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persistCurrentChapterProgress(true);
+      }
+    };
+    window.addEventListener('pagehide', persistOnPageHide);
+    document.addEventListener('visibilitychange', persistOnVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', persistOnPageHide);
+      document.removeEventListener('visibilitychange', persistOnVisibilityChange);
+    };
+  }, [persistCurrentChapterProgress]);
 
   const getTextFontClasses = () => cn(
     settings.fontChoice === 'Sans' ? 'font-sans' : 'font-serif',
@@ -556,7 +687,13 @@ export default function ReaderPage() {
       )}>
         <div className="container mx-auto px-4 h-14 flex items-center justify-between">
           <Link href="/">
-            <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground" data-testid="button-back-library">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-2 text-muted-foreground hover:text-foreground"
+              data-testid="button-back-library"
+              onClick={() => persistCurrentChapterProgress(true)}
+            >
               <ChevronLeft size={18} /><span className="hidden sm:inline">Library</span>
             </Button>
           </Link>

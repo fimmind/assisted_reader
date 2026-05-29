@@ -70,7 +70,20 @@ function calculateProgressPercent(book: ImportedBook): number {
   if (chapterCount === 0) {
     return 0;
   }
-  return (book.currentChapter / chapterCount) * 100;
+  const completedChapters = Math.max(0, Math.min(chapterCount, book.currentChapter - 1));
+  const chapterProgress = (() => {
+    if (typeof book.currentChapterProgress !== 'number' || !Number.isFinite(book.currentChapterProgress)) {
+      return 0;
+    }
+    if (book.currentChapterProgress < 0) {
+      return 0;
+    }
+    if (book.currentChapterProgress > 1) {
+      return 1;
+    }
+    return book.currentChapterProgress;
+  })();
+  return ((completedChapters + chapterProgress) / chapterCount) * 100;
 }
 
 function hashTokenSegment(value: string, seed: number): number {

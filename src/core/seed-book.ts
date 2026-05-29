@@ -12,6 +12,7 @@ function createFallbackSeedBook(nowIso: string): ImportedBook {
     createdAt: nowIso,
     updatedAt: nowIso,
     currentChapter: 1,
+    currentChapterProgress: 0,
     chapters: [
       {
         title: 'Chapter 1',
@@ -44,6 +45,7 @@ export async function createSeedBook(): Promise<ImportedBook> {
       createdAt: nowIso,
       updatedAt: nowIso,
       currentChapter: 1,
+      currentChapterProgress: 0,
       chapters,
     };
   } catch (error) {

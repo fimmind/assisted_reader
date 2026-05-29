@@ -26,6 +26,19 @@ function normalizeChapterNumber(rawValue: unknown, chapterCount: number): number
   return integer;
 }
 
+function normalizeChapterProgress(rawValue: unknown): number {
+  if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) {
+    return 0;
+  }
+  if (rawValue < 0) {
+    return 0;
+  }
+  if (rawValue > 1) {
+    return 1;
+  }
+  return rawValue;
+}
+
 function normalizeBook(raw: unknown): ImportedBook | null {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -57,6 +70,7 @@ function normalizeBook(raw: unknown): ImportedBook | null {
     createdAt: typeof candidate.createdAt === 'string' && candidate.createdAt.length > 0 ? candidate.createdAt : new Date().toISOString(),
     updatedAt: typeof candidate.updatedAt === 'string' && candidate.updatedAt.length > 0 ? candidate.updatedAt : new Date().toISOString(),
     currentChapter: normalizeChapterNumber(candidate.currentChapter, normalizedChapters.length),
+    currentChapterProgress: normalizeChapterProgress(candidate.currentChapterProgress),
     chapters: normalizedChapters,
   };
 }

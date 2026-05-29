@@ -20,6 +20,7 @@ export interface ImportedBook {
   createdAt: string;
   updatedAt: string;
   currentChapter: number;
+  currentChapterProgress: number;
   chapters: BookChapter[];
 }
 
