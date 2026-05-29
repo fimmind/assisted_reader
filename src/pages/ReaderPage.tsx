@@ -1123,6 +1123,7 @@ export default function ReaderPage() {
                             onMarkUnknown={() => markLemma(lemma, false)}
                             isMarkedKnown={observation === 1}
                             isMarkedUnknown={observation === 0}
+                            compact
                           />
                         );
                       })}
@@ -1174,6 +1175,7 @@ export default function ReaderPage() {
                         onMarkUnknown={() => markLemma(lemma, false)}
                         isMarkedKnown={observation === 1}
                         isMarkedUnknown={observation === 0}
+                        compact
                       />
                     );
                   })}
