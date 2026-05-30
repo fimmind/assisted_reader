@@ -70,6 +70,7 @@ interface WordPopupState {
   lemma: string;
   top: number;
   left: number;
+  sourceParagraphIndex: number;
 }
 
 type AnalysisRefreshMode = 'reset' | 'preserve';
@@ -468,7 +469,14 @@ export default function ReaderPage() {
     return fallbackIndex;
   }, []);
 
-  const recomputeVisibleAnalysis = useCallback((selectedBook: ImportedBook, resources: ReaderResources, mode: AnalysisRefreshMode) => {
+  const pendingAnalysisAnchorIndexRef = useRef<number | null>(null);
+
+  const recomputeVisibleAnalysis = useCallback((
+    selectedBook: ImportedBook,
+    resources: ReaderResources,
+    mode: AnalysisRefreshMode,
+    anchorParagraphIndex?: number,
+  ) => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
     const currentRunId = analysisRunIdRef.current + 1;
@@ -509,11 +517,13 @@ export default function ReaderPage() {
           const deduplicationRadius = resolveDeduplicationRadius(settingsRef.current.deduplicationRadius);
           const threshold = resolveKnowledgeThreshold(settingsRef.current.knowledgeThreshold);
           const maxCardsPerParagraph = Math.max(1, Math.min(5, settingsRef.current.maxWordsPerParagraph));
-          const anchorIndex = resolveAnalysisAnchorIndex(
-            expectedParagraphCount,
-            selectedBook.currentChapterProgress,
-          );
-          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, anchorIndex);
+          const resolvedAnchorIndex = typeof anchorParagraphIndex === 'number' && Number.isFinite(anchorParagraphIndex)
+            ? clampParagraphIndex(anchorParagraphIndex, expectedParagraphCount)
+            : resolveAnalysisAnchorIndex(
+              expectedParagraphCount,
+              selectedBook.currentChapterProgress,
+            );
+          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, resolvedAnchorIndex);
 
           for (const paragraphIndex of paragraphOrder) {
             if (analysisRunIdRef.current !== currentRunId) {
@@ -664,7 +674,9 @@ export default function ReaderPage() {
         void loadReaderState();
         return;
       }
-      recomputeVisibleAnalysis(currentBook, resources, 'preserve');
+      const anchorParagraphIndex = pendingAnalysisAnchorIndexRef.current;
+      pendingAnalysisAnchorIndexRef.current = null;
+      recomputeVisibleAnalysis(currentBook, resources, 'preserve', anchorParagraphIndex ?? undefined);
     });
     return unsubscribe;
   }, [loadReaderState, recomputeVisibleAnalysis]);
@@ -674,7 +686,12 @@ export default function ReaderPage() {
     deferredAnalysisHandleRef.current = null;
   }, []);
 
-  const markLemma = (lemma: string, known: boolean) => {
+  const markLemma = (lemma: string, known: boolean, sourceParagraphIndex?: number) => {
+    if (typeof sourceParagraphIndex === 'number' && Number.isFinite(sourceParagraphIndex)) {
+      pendingAnalysisAnchorIndexRef.current = sourceParagraphIndex;
+    } else {
+      pendingAnalysisAnchorIndexRef.current = null;
+    }
     upsertObservation(lemma, known);
   };
 
@@ -933,13 +950,14 @@ export default function ReaderPage() {
     return { top, left };
   }, []);
 
-  const openWordPopup = useCallback((element: HTMLElement, lemma: string) => {
+  const openWordPopup = useCallback((element: HTMLElement, lemma: string, sourceParagraphIndex: number) => {
     const rect = element.getBoundingClientRect();
     const position = calculateWordPopupPosition(rect);
     setWordPopup({
       lemma: normalizeToken(lemma),
       top: position.top,
       left: position.left,
+      sourceParagraphIndex,
     });
   }, [calculateWordPopupPosition]);
 
@@ -994,7 +1012,7 @@ export default function ReaderPage() {
     };
   }, [closeWordPopup, wordPopup]);
 
-  const renderParagraphWithHighlights = (analysis: ParagraphAnalysis): ReactNode => {
+  const renderParagraphWithHighlights = (analysis: ParagraphAnalysis, sourceParagraphIndex: number): ReactNode => {
     const highlightedLemmas = assistanceEnabled
       ? new Set<string>(analysis.cardLemmas.map((lemma) => normalizeToken(lemma)))
       : new Set<string>();
@@ -1030,7 +1048,7 @@ export default function ReaderPage() {
             shouldHighlight && 'rounded-sm px-0.5 -mx-0.5',
             shouldHighlight && (isPriority ? 'unknown-word priority' : 'unknown-word'),
           )}
-          onClick={(event) => openWordPopup(event.currentTarget, lemma)}
+          onClick={(event) => openWordPopup(event.currentTarget, lemma, sourceParagraphIndex)}
         >
           {tokenText}
         </span>,
@@ -1222,7 +1240,7 @@ export default function ReaderPage() {
                     className="text-foreground/90 reader-text"
                     data-testid={`paragraph-${entry.visibleIndex}`}
                   >
-                    {renderParagraphWithHighlights(analysis)}
+                    {renderParagraphWithHighlights(analysis, entry.sourceIndex)}
                   </p>
                   {assistanceEnabled && analysis.cardLemmas.length > 0 && (
                     <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
@@ -1233,8 +1251,8 @@ export default function ReaderPage() {
                           <WordDefinitionCard
                             key={lemma}
                             definition={definition}
-                            onMarkKnown={() => markLemma(lemma, true)}
-                            onMarkUnknown={() => markLemma(lemma, false)}
+                            onMarkKnown={() => markLemma(lemma, true, entry.sourceIndex)}
+                            onMarkUnknown={() => markLemma(lemma, false, entry.sourceIndex)}
                             isMarkedKnown={observation === 1}
                             isMarkedUnknown={observation === 0}
                             pronunciationVariant={settings.englishVariant}
@@ -1286,8 +1304,8 @@ export default function ReaderPage() {
                       <WordDefinitionCard
                         key={lemma}
                         definition={definition}
-                        onMarkKnown={() => markLemma(lemma, true)}
-                        onMarkUnknown={() => markLemma(lemma, false)}
+                        onMarkKnown={() => markLemma(lemma, true, entry.sourceIndex)}
+                        onMarkUnknown={() => markLemma(lemma, false, entry.sourceIndex)}
                         isMarkedKnown={observation === 1}
                         isMarkedUnknown={observation === 0}
                         pronunciationVariant={settings.englishVariant}
@@ -1311,10 +1329,13 @@ export default function ReaderPage() {
           <WordDefinitionCard
             definition={popupDefinition}
             onMarkKnown={() => {
-              markLemma(wordPopup.lemma, true);
+              markLemma(wordPopup.lemma, true, wordPopup.sourceParagraphIndex);
               closeWordPopup();
             }}
-            onMarkUnknown={() => markLemma(wordPopup.lemma, false)}
+            onMarkUnknown={() => {
+              markLemma(wordPopup.lemma, false, wordPopup.sourceParagraphIndex);
+              closeWordPopup();
+            }}
             isMarkedKnown={popupObservation === 1}
             isMarkedUnknown={popupObservation === 0}
             pronunciationVariant={settings.englishVariant}
