@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Link } from 'wouter';
 import type { BookStats, ImportedBook } from '@/core/types';
 import { Progress } from './ui/progress';
@@ -10,7 +11,7 @@ interface BookCardProps {
   analysisProgressPercent: number;
 }
 
-export function BookCard({ book, stats, isAnalyzing, analysisProgressPercent }: BookCardProps) {
+function BookCardComponent({ book, stats, isAnalyzing, analysisProgressPercent }: BookCardProps) {
   const chapterCount = book.chapters.length;
   const safeChapter = (() => {
     if (chapterCount <= 0) {
@@ -80,3 +81,5 @@ export function BookCard({ book, stats, isAnalyzing, analysisProgressPercent }: 
     </Link>
   );
 }
+
+export const BookCard = memo(BookCardComponent);

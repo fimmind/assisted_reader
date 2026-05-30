@@ -63,6 +63,10 @@ function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHand
 
 async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => {
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
     window.setTimeout(resolve, 0);
   });
 }
@@ -242,7 +246,7 @@ export default function LibraryPage() {
             }
           },
           onYield: yieldToEventLoop,
-          yieldEveryParagraphs: 40,
+          yieldEveryParagraphs: 8,
         },
       );
       if (histogram === null) {
