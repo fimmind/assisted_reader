@@ -43,6 +43,8 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
 
   const resetQuizState = () => {
     setStep('setup');
+    setTotalWordsInput(DEFAULT_TOTAL_WORDS);
+    setBatchSizeInput(DEFAULT_BATCH_SIZE);
     setCheckedWords(new Set());
     setActiveQuiz(null);
     setLoading(false);
@@ -176,7 +178,11 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
         return;
       }
       const activeElement = document.activeElement;
-      if (activeElement === totalWordsInputRef.current || activeElement === batchSizeInputRef.current) {
+      if (
+        activeElement === totalWordsInputRef.current ||
+        activeElement === batchSizeInputRef.current ||
+        activeElement === takeQuizButtonRef.current
+      ) {
         return;
       }
       if (
