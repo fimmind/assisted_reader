@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,7 +7,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { getActiveProfile, loadProfileState, upsertObservationsBatch } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { selectAdaptiveBatchWords } from '@/core/quiz';
-import { parseInteger } from '@/core/math';
 
 interface QuizModalProps {
   open: boolean;
@@ -29,13 +28,18 @@ function getTotalBatches(totalWords: number, batchSize: number): number {
 }
 
 export function QuizModal({ open, onOpenChange }: QuizModalProps) {
+  const DEFAULT_TOTAL_WORDS = '60';
+  const DEFAULT_BATCH_SIZE = '20';
   const [step, setStep] = useState<'setup' | 'quiz'>('setup');
-  const [totalWords, setTotalWords] = useState(60);
-  const [batchSize, setBatchSize] = useState(20);
+  const [totalWordsInput, setTotalWordsInput] = useState(DEFAULT_TOTAL_WORDS);
+  const [batchSizeInput, setBatchSizeInput] = useState(DEFAULT_BATCH_SIZE);
   const [checkedWords, setCheckedWords] = useState<Set<string>>(new Set());
   const [activeQuiz, setActiveQuiz] = useState<ActiveQuiz | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const totalWordsInputRef = useRef<HTMLInputElement | null>(null);
+  const batchSizeInputRef = useRef<HTMLInputElement | null>(null);
+  const takeQuizButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const resetQuizState = () => {
     setStep('setup');
@@ -45,9 +49,25 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
     setErrorMessage('');
   };
 
+  const parsePositiveInteger = (value: string): number | null => {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return null;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  };
+
   const startQuiz = async () => {
-    const normalizedTotalWords = Math.max(1, totalWords);
-    const normalizedBatchSize = Math.max(1, batchSize);
+    const normalizedTotalWords = parsePositiveInteger(totalWordsInput);
+    const normalizedBatchSize = parsePositiveInteger(batchSizeInput);
+    if (normalizedTotalWords === null || normalizedBatchSize === null) {
+      setErrorMessage('Please leave both fields nonempty and positive.');
+      return;
+    }
     setLoading(true);
     setErrorMessage('');
 
@@ -146,6 +166,36 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
     }
   };
 
+  useEffect(() => {
+    if (!open || step !== 'setup') {
+      return undefined;
+    }
+
+    const handleDocumentEnter = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || loading) {
+        return;
+      }
+      const activeElement = document.activeElement;
+      if (activeElement === totalWordsInputRef.current || activeElement === batchSizeInputRef.current) {
+        return;
+      }
+      if (
+        activeElement instanceof HTMLInputElement
+        || activeElement instanceof HTMLTextAreaElement
+        || activeElement instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void startQuiz();
+    };
+
+    document.addEventListener('keydown', handleDocumentEnter);
+    return () => {
+      document.removeEventListener('keydown', handleDocumentEnter);
+    };
+  }, [loading, open, step]);
+
   return (
     <Dialog
       open={open}
@@ -170,20 +220,46 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="total-words" className="text-right">Total words</Label>
                 <Input
+                  ref={totalWordsInputRef}
                   id="total-words"
                   type="number"
-                  value={totalWords}
-                  onChange={(event) => setTotalWords(Math.max(1, parseInteger(event.target.value)))}
+                  value={totalWordsInput}
+                  onChange={(event) => setTotalWordsInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (totalWordsInput.trim().length === 0) {
+                      setTotalWordsInput(DEFAULT_TOTAL_WORDS);
+                    }
+                    batchSizeInputRef.current?.focus();
+                  }}
                   className="col-span-3"
                 />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="batch-size" className="text-right">Batch size</Label>
                 <Input
+                  ref={batchSizeInputRef}
                   id="batch-size"
                   type="number"
-                  value={batchSize}
-                  onChange={(event) => setBatchSize(Math.max(1, parseInteger(event.target.value)))}
+                  value={batchSizeInput}
+                  onChange={(event) => setBatchSizeInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (batchSizeInput.trim().length === 0) {
+                      setBatchSizeInput(DEFAULT_BATCH_SIZE);
+                    }
+                    window.setTimeout(() => {
+                      takeQuizButtonRef.current?.focus();
+                    }, 0);
+                  }}
                   className="col-span-3"
                 />
               </div>
@@ -193,8 +269,9 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
             </div>
             <DialogFooter>
               <Button
+                ref={takeQuizButtonRef}
                 onClick={startQuiz}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
                 disabled={loading}
               >
                 {loading ? 'Preparing...' : 'Take Quiz'}
@@ -205,7 +282,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
           <>
             <DialogHeader>
               <DialogTitle className="font-serif text-2xl">
-                Batch {activeQuiz?.currentBatch ?? 1} of {getTotalBatches(activeQuiz?.totalWords ?? totalWords, activeQuiz?.batchSize ?? batchSize)}
+                Batch {activeQuiz?.currentBatch ?? 1} of {getTotalBatches(activeQuiz?.totalWords ?? 1, activeQuiz?.batchSize ?? 1)}
               </DialogTitle>
             </DialogHeader>
             <div className="py-4">
@@ -236,7 +313,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
             <DialogFooter>
               <Button
                 onClick={submitBatch}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
                 disabled={loading}
               >
                 {loading
