@@ -237,39 +237,24 @@ Formal objective used during grouped-estimator user-state updates:
   - `maxiter=200`, `ftol=1e-9`
   - initialization: bounded scalar theta fit on `[-6, 6]` + previous delta (or zeros)
 
-Export path for site:
+Runtime source file:
 
-- `scripts/export_site_models.py` fits estimator and exports **cold-start probabilities** for all words:
-  - `state = initialize_user_state()`
-  - `state = update_user_state(state, empty_obs)`
-  - `probs = predict_proba(state, all_words)`
-
-Saved payload:
-
-- `site/data/best_grouped_irt_model_model_data.json`
-- Fields: `words`, `accuracy`, `query_pool`, `model_key`, `model_name`
-
-Exact model payload contract expected by runtime algorithms:
-
-- `model_key`: string (informational)
-- `model_name`: string (informational)
-- `words`: string array of length `N`
-- `accuracy`: number array of length `N`, interpreted as probabilities
-- `query_pool`: string array used for quiz candidate generation
-- optional `adaptive_candidate_pool`: string array; if present and non-empty, supersedes `query_pool`
+- `data/words.csv`
+- Required columns:
+  - `word`: lemma/token string
+  - `accuracy`: probability in `[0, 1]`
 
 Hard invariants:
 
-1. `len(words) == len(accuracy)` (enforced by CLI parity reference).
+1. `len(words) == len(accuracy)` after CSV parsing.
 2. Runtime vocabulary map is `wordToIdx = Map(words[i] -> i)`.
-3. Candidate pool entries not found in `wordToIdx` are dropped.
-4. Candidate ordering is semantically significant (tie-break behavior depends on original position).
+3. Quiz candidate pool is the full parsed vocabulary in CSV order.
 
 #### 3.2.2 Runtime Personalized Inference in Browser
 
-Runtime model load (`loadModel`):
+Runtime model load (`loadVocabularyModel`):
 
-1. Load `accuracy` vector from JSON
+1. Load and parse `data/words.csv`
 2. Convert to per-word difficulty:
    - `b_i = -logit(clip(accuracy_i, 1e-6, 1-1e-6))`
 3. Build `wordToIdx` map
@@ -300,33 +285,21 @@ Unknown set:
 
 Minimum for runtime:
 
-- `site/data/best_grouped_irt_model_model_data.json`
+- `data/words.csv`
 
-To regenerate exports:
+To regenerate runtime vocabulary asset:
 
-1. Build processed dataset (`docs/data_preparation.md`)
-2. Run:
-   - `.venv/bin/python scripts/export_site_models.py`
-
-This script reads:
-
-- `data/processed/responses_static.csv`
-- `data/processed/words.csv`
-- `data/processed/frequency.csv`
-- `data/processed/embeddings.npy`
-- `data/processed/embeddings_metadata.json`
+1. Update or replace `data/words.csv` with the target `word`/`accuracy` rows.
+2. Run `pnpm run sync:data` (or any command that triggers `sync:data`) to mirror into `public/data/`.
 
 Additional algorithmic asset contracts:
 
-- `site/data/lemma_dict.json`:
+- `data/lemma_dict.json`:
   - JSON object map `{ inflected_lower_word: lemma_lower_word }`
   - if missing/unreadable, runtime uses `{}`.
-- `site/data/lexicon_full.json`:
-  - JSON array of `{ word: string, ipa: string, pos: string, definition: string }`
-  - preferred load path for definition lookup.
-- `site/data/lexicon/index.json` + `site/data/lexicon/*.json`:
+- `data/lexicon/index.json` + `data/lexicon/*.json`:
   - index shape: `{ bucket_key: file_name }`
-  - each chunk file shape: array of lexicon entries with the same fields as full lexicon.
+  - each chunk file shape: array of `{ word: string, ipa: string, pos: string, definition: string }`.
 
 ---
 
@@ -520,30 +493,27 @@ Word definition cards use static lexicon artifacts built offline.
 
 ### 6.2.2 Technical Specification
 
-Script: `scripts/build_site_lexicon.py`
+Script: `scripts/build-lexicon-from-wiktextract.mjs`
 
-1. Read model vocabulary from `site/data/best_grouped_irt_model_model_data.json`
-2. Optional overrides from `site/data/lexicon_overrides.json`
-3. For words without override definitions:
-   - Query WordNet first synset (`nltk.corpus.wordnet`)
-   - Use synset definition + mapped POS label
-4. Fallbacks:
+1. Read vocabulary from `data/words.csv`
+2. Optional overrides from `data/lexicon_overrides.json`
+3. Ensure local archive `downloads/raw-wiktextract-data.jsonl.gz`:
+   - if missing, download from `https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz`
+   - if present, reuse local archive
+4. Reuse any already bundled entries from existing chunk files referenced by `data/lexicon/index.json`
+5. Fallbacks:
    - definition: `"Definition unavailable in this build."`
-   - IPA: `"/<word>/"`
-5. Emit:
-   - full file `site/data/lexicon_full.json`
-   - chunked files `site/data/lexicon/{a..z,_.json}` + `index.json`
+   - IPA: empty string
+6. Emit:
+   - chunked files `data/lexicon/{a..z,_.json}` + `index.json`
 
 Runtime load strategy:
 
-- Try full file first, else load chunk index then all chunk files.
+- Load chunk index, then load all referenced chunk files.
 
 Dependency note:
 
-- Requires NLTK WordNet corpus locally available.
-- If missing, install/download via:
-  - `.venv/bin/pip install -e .`
-  - `.venv/bin/python -m nltk.downloader wordnet`
+- Archive source URL is fixed to `https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz`.
 
 ## 6.3 Persistent Storage and Static-Only Runtime
 

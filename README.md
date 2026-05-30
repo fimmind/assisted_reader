@@ -121,7 +121,7 @@ Top-level:
 
 The app depends on files under `data/`, including:
 
-- vocabulary model payload
+- vocabulary Rasch source CSV (`words.csv` with `word` + `accuracy`)
 - lemma dictionary
 - lexicon index + chunk files
 - seeded default book text
@@ -131,15 +131,18 @@ The app depends on files under `data/`, including:
 Definition entries are sourced from **Wiktionary** via **Wiktextract** exports.
 
 - Runtime files consumed by the app:
-  - `data/lexicon_full.json`
   - `data/lexicon/index.json`
   - `data/lexicon/*.json`
 - Build script:
   - `scripts/build-lexicon-from-wiktextract.mjs`
 - Rebuild command:
-  - `pnpm run build:lexicon:wiktextract -- <path-to-wiktextract.jsonl-or-jsonl.gz>`
+  - `pnpm run build:lexicon:wiktextract`
 
-The builder matches entries to words from `data/best_grouped_irt_model_model_data.json`, prefers English (`lang_code = "en"`), and falls back to `"Definition unavailable in this build."` when no usable definition is found.
+`pnpm run build` and `pnpm run deploy` automatically run `ensure:lexicon`, which generates chunked lexicon files if they are missing.
+
+The script auto-downloads the Wiktextract archive from [kaikki.org](https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz) into `downloads/` when missing, and reuses it when already present.
+
+The builder matches entries to words from `data/words.csv`, prefers English (`lang_code = "en"`), and falls back to `"Definition unavailable in this build."` when no usable definition is found.
 
 Generated lexicon entry behavior:
 
@@ -159,17 +162,16 @@ These assets must exist in `public/data/` for runtime fetches. `sync:data` handl
 
 `pnpm run verify:deploy-assets` validates that deploy output (`dist/`) includes:
 
-- `data/lexicon_full.json`
 - `data/lexicon/index.json`
 - every chunk file referenced by `index.json`
 
-and performs schema sanity checks on `lexicon_full.json` entries to ensure definitions are present.
+and performs schema sanity checks on sampled chunk entries to ensure definitions are present.
 
 ## Useful commands
 
 ```bash
 pnpm run sync:data
-pnpm run build:lexicon:wiktextract -- /path/to/wiktextract.jsonl.gz
+pnpm run build:lexicon:wiktextract
 pnpm run typecheck
 pnpm run test:proper-nouns
 pnpm run build

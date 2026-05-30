@@ -838,7 +838,9 @@ test('reader analysis excludes one-letter and two-letter words from excerpt', ()
     fontChoice: 'Serif',
     pageWidth: 'Normal',
     maxWordsPerParagraph: 3,
+    deduplicationRadius: 0,
     knowledgeThreshold: 0.6,
+    englishVariant: 'US',
   };
   const model: VocabularyModel = {
     modelKey: 'test',

@@ -4,10 +4,9 @@ import path from 'node:path';
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
 const requiredFiles = [
   'index.html',
-  'data/best_grouped_irt_model_model_data.json',
+  'data/words.csv',
   'data/lemma_dict.json',
   'data/hitchhikers_guide.txt',
-  'data/lexicon_full.json',
   'data/lexicon/index.json',
 ];
 
@@ -31,38 +30,49 @@ async function verifyLexiconChunks() {
   if (chunkNames.length === 0) {
     throw new Error('Lexicon index has no chunk entries.');
   }
+
+  let sampledEntryCount = 0;
+  const sampleLimit = 50;
   for (const chunkName of chunkNames) {
     if (typeof chunkName !== 'string' || chunkName.length === 0) {
       throw new Error('Lexicon index contains an invalid chunk name.');
     }
-    await assertFileExists(`data/lexicon/${chunkName}`);
+    const relativePath = `data/lexicon/${chunkName}`;
+    await assertFileExists(relativePath);
+
+    if (sampledEntryCount >= sampleLimit) {
+      continue;
+    }
+
+    const chunkPath = path.join(DIST_DIR, relativePath);
+    const chunkRaw = await readFile(chunkPath, 'utf8');
+    const chunkPayload = JSON.parse(chunkRaw);
+    if (!Array.isArray(chunkPayload)) {
+      throw new Error(`Invalid lexicon chunk payload in ${relativePath}`);
+    }
+
+    for (const entry of chunkPayload) {
+      if (sampledEntryCount >= sampleLimit) {
+        break;
+      }
+      if (!entry || typeof entry !== 'object') {
+        throw new Error(`Invalid lexicon entry in ${relativePath}`);
+      }
+      if (typeof entry.word !== 'string' || entry.word.trim().length === 0) {
+        throw new Error(`Invalid lexicon word in ${relativePath}`);
+      }
+      const hasDefinition = typeof entry.definition === 'string' && entry.definition.trim().length > 0;
+      const hasDefinitionsArray = Array.isArray(entry.definitions)
+        && entry.definitions.some((value) => typeof value === 'string' && value.trim().length > 0);
+      if (!hasDefinition && !hasDefinitionsArray) {
+        throw new Error(`Missing definition content in ${relativePath}`);
+      }
+      sampledEntryCount += 1;
+    }
   }
-}
 
-async function verifyLexiconFull() {
-  const fullPath = path.join(DIST_DIR, 'data/lexicon_full.json');
-  const raw = await readFile(fullPath, 'utf8');
-  const payload = JSON.parse(raw);
-  if (!Array.isArray(payload) || payload.length === 0) {
-    throw new Error('Invalid lexicon payload in dist/data/lexicon_full.json');
-  }
-
-  const sampleSize = Math.min(payload.length, 50);
-  for (let index = 0; index < sampleSize; index += 1) {
-    const entry = payload[index];
-    if (!entry || typeof entry !== 'object') {
-      throw new Error(`Invalid lexicon entry at index=${index} in dist/data/lexicon_full.json`);
-    }
-    if (typeof entry.word !== 'string' || entry.word.trim().length === 0) {
-      throw new Error(`Invalid lexicon word at index=${index} in dist/data/lexicon_full.json`);
-    }
-
-    const hasDefinition = typeof entry.definition === 'string' && entry.definition.trim().length > 0;
-    const hasDefinitionsArray = Array.isArray(entry.definitions)
-      && entry.definitions.some((value) => typeof value === 'string' && value.trim().length > 0);
-    if (!hasDefinition && !hasDefinitionsArray) {
-      throw new Error(`Missing definition content at index=${index} in dist/data/lexicon_full.json`);
-    }
+  if (sampledEntryCount === 0) {
+    throw new Error('Lexicon chunks contain no entries.');
   }
 }
 
@@ -70,7 +80,6 @@ async function main() {
   for (const file of requiredFiles) {
     await assertFileExists(file);
   }
-  await verifyLexiconFull();
   await verifyLexiconChunks();
   console.log('Deploy asset verification passed.');
 }

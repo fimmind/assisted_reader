@@ -1,7 +1,6 @@
 import type { LexiconEntry } from './types';
 
 const LEXICON_INDEX_URL = 'data/lexicon/index.json';
-const LEXICON_FULL_URL = 'data/lexicon_full.json';
 
 type LexiconIndexPayload = Record<string, string>;
 
@@ -73,27 +72,6 @@ async function loadChunk(fileName: string): Promise<LexiconEntry[]> {
     .filter((entry): entry is LexiconEntry => entry !== null);
 }
 
-async function loadFullLexicon(): Promise<LexiconEntry[] | null> {
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}${LEXICON_FULL_URL}`);
-    if (!response.ok) {
-      console.warn('lexicon-full-load-failed', { status: response.status });
-      return null;
-    }
-    const payload = await response.json();
-    if (!Array.isArray(payload)) {
-      console.warn('lexicon-full-invalid-payload', { payloadType: typeof payload });
-      return null;
-    }
-    return payload
-      .map((candidate) => toLexiconEntry(candidate))
-      .filter((entry): entry is LexiconEntry => entry !== null);
-  } catch (error) {
-    console.warn('lexicon-full-load-error', { error });
-    return null;
-  }
-}
-
 export async function loadLexiconMap(): Promise<Map<string, LexiconEntry>> {
   if (lexiconPromise) {
     return lexiconPromise;
@@ -101,11 +79,6 @@ export async function loadLexiconMap(): Promise<Map<string, LexiconEntry>> {
 
   lexiconPromise = (async () => {
     try {
-      const fullLexicon = await loadFullLexicon();
-      if (fullLexicon) {
-        return buildEntryMap(fullLexicon);
-      }
-
       const indexResponse = await fetch(`${import.meta.env.BASE_URL}${LEXICON_INDEX_URL}`);
       if (!indexResponse.ok) {
         throw new Error(`Failed to load lexicon index: status=${indexResponse.status}`);

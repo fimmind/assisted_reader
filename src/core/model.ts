@@ -1,14 +1,112 @@
-import type { UserProfile, VocabularyModel, VocabularyModelPayload } from './types';
+import type { UserProfile, VocabularyModel } from './types';
 import { clip01, logit, sigmoid } from './math';
 
-const MODEL_URL = 'data/best_grouped_irt_model_model_data.json';
+const MODEL_URL = 'data/words.csv';
+const MODEL_KEY = 'rasch_words_csv_v1';
+const MODEL_NAME = 'Basic Rasch from words.csv';
 
 let modelPromise: Promise<VocabularyModel> | null = null;
 
-function validatePayload(payload: VocabularyModelPayload): void {
-  if (payload.words.length !== payload.accuracy.length) {
-    throw new Error('Model payload invariant failed: words length must equal accuracy length.');
+function parseCsvRow(line: string): string[] {
+  const cells: string[] = [];
+  let cursor = 0;
+  let current = '';
+  let inQuotes = false;
+
+  while (cursor < line.length) {
+    const char = line[cursor];
+    if (char === '"') {
+      const nextChar = line[cursor + 1];
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        cursor += 2;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      cursor += 1;
+      continue;
+    }
+    if (char === ',' && !inQuotes) {
+      cells.push(current);
+      current = '';
+      cursor += 1;
+      continue;
+    }
+    current += char;
+    cursor += 1;
   }
+
+  cells.push(current);
+  return cells;
+}
+
+function parseVocabularyCsv(rawCsv: string): VocabularyModel {
+  const lines = rawCsv.split(/\r?\n/);
+  if (lines.length < 2) {
+    throw new Error('Vocabulary CSV is empty or missing header.');
+  }
+
+  const header = parseCsvRow(lines[0]).map((cell) => cell.trim());
+  const wordIndex = header.indexOf('word');
+  const accuracyIndex = header.indexOf('accuracy');
+  if (wordIndex < 0 || accuracyIndex < 0) {
+    throw new Error('Vocabulary CSV must include "word" and "accuracy" columns.');
+  }
+
+  const words: string[] = [];
+  const accuracy: number[] = [];
+  const difficulties: number[] = [];
+  const wordToIdx = new Map<string, number>();
+  const candidatePositions = new Map<string, number>();
+
+  for (let lineNumber = 2; lineNumber <= lines.length; lineNumber += 1) {
+    const line = lines[lineNumber - 1];
+    if (line.trim().length === 0) {
+      continue;
+    }
+
+    const cells = parseCsvRow(line);
+    const rawWord = cells[wordIndex] ?? '';
+    const normalizedWord = rawWord.trim().toLowerCase();
+    if (normalizedWord.length === 0) {
+      throw new Error(`Vocabulary CSV has empty word value at line=${lineNumber}.`);
+    }
+
+    if (wordToIdx.has(normalizedWord)) {
+      throw new Error(`Vocabulary CSV has duplicate word value="${normalizedWord}" at line=${lineNumber}.`);
+    }
+
+    const accuracyRaw = cells[accuracyIndex] ?? '';
+    const accuracyValue = Number(accuracyRaw);
+    if (!Number.isFinite(accuracyValue)) {
+      throw new Error(`Vocabulary CSV has invalid accuracy value="${accuracyRaw}" at line=${lineNumber}.`);
+    }
+
+    const clippedAccuracy = clip01(accuracyValue);
+    const difficulty = -logit(clippedAccuracy);
+    const idx = words.length;
+
+    words.push(normalizedWord);
+    accuracy.push(clippedAccuracy);
+    difficulties.push(difficulty);
+    wordToIdx.set(normalizedWord, idx);
+    candidatePositions.set(normalizedWord, idx);
+  }
+
+  if (words.length === 0) {
+    throw new Error('Vocabulary CSV has no usable rows.');
+  }
+
+  return {
+    modelKey: MODEL_KEY,
+    modelName: MODEL_NAME,
+    words,
+    accuracy,
+    difficulties,
+    wordToIdx,
+    candidatePool: words,
+    candidatePositions,
+  };
 }
 
 export function getModelUrl(): string {
@@ -23,40 +121,10 @@ export async function loadVocabularyModel(): Promise<VocabularyModel> {
   modelPromise = (async () => {
     const response = await fetch(getModelUrl());
     if (!response.ok) {
-      throw new Error(`Failed to load model payload: status=${response.status}`);
+      throw new Error(`Failed to load vocabulary CSV: status=${response.status}`);
     }
-    const payload = (await response.json()) as VocabularyModelPayload;
-    validatePayload(payload);
-
-    const difficulties = payload.accuracy.map((value) => -logit(clip01(value)));
-    const wordToIdx = new Map<string, number>();
-    payload.words.forEach((word, index) => {
-      wordToIdx.set(word.toLowerCase(), index);
-    });
-
-    const rawPool = payload.adaptive_candidate_pool && payload.adaptive_candidate_pool.length > 0
-      ? payload.adaptive_candidate_pool
-      : payload.query_pool;
-
-    const candidatePool = rawPool.filter((word) => wordToIdx.has(word.toLowerCase()));
-    const candidatePositions = new Map<string, number>();
-    candidatePool.forEach((word, index) => {
-      candidatePositions.set(word, index);
-      candidatePositions.set(word.toLowerCase(), index);
-    });
-
-    const model: VocabularyModel = {
-      modelKey: payload.model_key,
-      modelName: payload.model_name,
-      words: payload.words,
-      accuracy: payload.accuracy,
-      difficulties,
-      wordToIdx,
-      candidatePool,
-      candidatePositions,
-    };
-
-    return model;
+    const rawCsv = await response.text();
+    return parseVocabularyCsv(rawCsv);
   })();
 
   return modelPromise;

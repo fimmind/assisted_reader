@@ -26,15 +26,6 @@ export interface ImportedBook {
   chapters: BookChapter[];
 }
 
-export interface VocabularyModelPayload {
-  model_key: string;
-  model_name: string;
-  words: string[];
-  accuracy: number[];
-  query_pool: string[];
-  adaptive_candidate_pool?: string[];
-}
-
 export interface VocabularyModel {
   modelKey: string;
   modelName: string;

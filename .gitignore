@@ -54,3 +54,7 @@ public/data/
 
 # generated test artifacts
 .tmp-tests/
+downloads
+
+# generated lexicon artifacts
+data/lexicon/

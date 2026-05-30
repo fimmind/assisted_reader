@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import readline from 'node:readline';
 import zlib from 'node:zlib';
 
 const ROOT_DIR = process.cwd();
 const DATA_DIR = path.join(ROOT_DIR, 'data');
-const MODEL_PATH = path.join(DATA_DIR, 'best_grouped_irt_model_model_data.json');
-const FULL_OUTPUT_PATH = path.join(DATA_DIR, 'lexicon_full.json');
+const DOWNLOADS_DIR = path.join(ROOT_DIR, 'downloads');
+const WIKTEXTRACT_URL = 'https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz';
+const WIKTEXTRACT_ARCHIVE_PATH = path.join(DOWNLOADS_DIR, 'raw-wiktextract-data.jsonl.gz');
+const MAX_DOWNLOAD_RETRIES = 3;
+const MAX_REDIRECTS = 5;
+const WORDS_CSV_PATH = path.join(DATA_DIR, 'words.csv');
 const CHUNK_DIR = path.join(DATA_DIR, 'lexicon');
 const INDEX_OUTPUT_PATH = path.join(CHUNK_DIR, 'index.json');
 const OVERRIDES_PATH = path.join(DATA_DIR, 'lexicon_overrides.json');
@@ -26,20 +31,129 @@ function resolveChunkKey(word) {
   return /^[a-z]$/.test(firstChar) ? firstChar : '_';
 }
 
-function loadModelWords() {
-  const payload = JSON.parse(fs.readFileSync(MODEL_PATH, 'utf8'));
-  if (!Array.isArray(payload.words)) {
-    throw new Error(`Invalid model payload at ${MODEL_PATH}: "words" array is missing`);
+function parseCsvRow(line) {
+  const cells = [];
+  let cursor = 0;
+  let current = '';
+  let inQuotes = false;
+
+  while (cursor < line.length) {
+    const char = line[cursor];
+    if (char === '"') {
+      const nextChar = line[cursor + 1];
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        cursor += 2;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      cursor += 1;
+      continue;
+    }
+    if (char === ',' && !inQuotes) {
+      cells.push(current);
+      current = '';
+      cursor += 1;
+      continue;
+    }
+    current += char;
+    cursor += 1;
+  }
+  cells.push(current);
+  return cells;
+}
+
+function loadTargetWords() {
+  const rawCsv = fs.readFileSync(WORDS_CSV_PATH, 'utf8');
+  const lines = rawCsv.split(/\r?\n/);
+  if (lines.length < 2) {
+    throw new Error(`Invalid words CSV at ${WORDS_CSV_PATH}: expected header + rows`);
+  }
+
+  const header = parseCsvRow(lines[0]).map((cell) => cell.trim());
+  const wordIndex = header.indexOf('word');
+  if (wordIndex < 0) {
+    throw new Error(`Invalid words CSV at ${WORDS_CSV_PATH}: "word" column is missing`);
   }
 
   const words = new Set();
-  for (const word of payload.words) {
-    const normalized = normalizeWord(word);
+  for (let lineNumber = 2; lineNumber <= lines.length; lineNumber += 1) {
+    const line = lines[lineNumber - 1];
+    if (line.trim().length === 0) {
+      continue;
+    }
+    const cells = parseCsvRow(line);
+    const normalized = normalizeWord(cells[wordIndex] ?? '');
     if (normalized.length > 0) {
       words.add(normalized);
     }
   }
   return words;
+}
+
+function loadExistingLexiconFromChunks() {
+  if (!fs.existsSync(INDEX_OUTPUT_PATH)) {
+    return new Map();
+  }
+
+  const indexPayload = JSON.parse(fs.readFileSync(INDEX_OUTPUT_PATH, 'utf8'));
+  if (!indexPayload || typeof indexPayload !== 'object') {
+    throw new Error(`Invalid existing lexicon index payload at ${INDEX_OUTPUT_PATH}: expected object`);
+  }
+
+  const map = new Map();
+  const chunkNames = Object.values(indexPayload);
+  for (const chunkName of chunkNames) {
+    if (typeof chunkName !== 'string' || chunkName.length === 0) {
+      continue;
+    }
+    const chunkPath = path.join(CHUNK_DIR, chunkName);
+    if (!fs.existsSync(chunkPath)) {
+      continue;
+    }
+
+    const chunkPayload = JSON.parse(fs.readFileSync(chunkPath, 'utf8'));
+    if (!Array.isArray(chunkPayload)) {
+      continue;
+    }
+
+    for (const entry of chunkPayload) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      const word = normalizeWord(entry.word);
+      if (word.length === 0 || map.has(word)) {
+        continue;
+      }
+      const definition = typeof entry.definition === 'string' ? normalizeSpaces(entry.definition) : '';
+      if (definition.length === 0) {
+        continue;
+      }
+
+      const definitions = Array.isArray(entry.definitions)
+        ? entry.definitions
+          .filter((item) => typeof item === 'string')
+          .map((item) => normalizeSpaces(item))
+          .filter((item) => item.length > 0)
+          .slice(0, 2)
+        : [definition];
+      const pos = typeof entry.pos === 'string' ? entry.pos.trim() : '';
+      const ipa = typeof entry.ipa === 'string' ? normalizeSpaces(entry.ipa) : '';
+      const ipaUs = typeof entry.ipaUs === 'string' ? normalizeSpaces(entry.ipaUs) : '';
+      const ipaUk = typeof entry.ipaUk === 'string' ? normalizeSpaces(entry.ipaUk) : '';
+      map.set(word, {
+        word,
+        ipa: ipa.length > 0 ? ipa : (ipaUs || ipaUk),
+        ipaUs: ipaUs.length > 0 ? ipaUs : undefined,
+        ipaUk: ipaUk.length > 0 ? ipaUk : undefined,
+        pos,
+        definition,
+        definitions: definitions.length > 0 ? definitions : [definition],
+      });
+    }
+  }
+
+  return map;
 }
 
 function loadOverrides() {
@@ -319,20 +433,128 @@ async function writeJsonFile(filePath, value) {
   await fs.promises.writeFile(filePath, serialized, 'utf8');
 }
 
-async function main() {
-  const inputPath = process.argv[2];
-  if (typeof inputPath !== 'string' || inputPath.trim().length === 0) {
-    throw new Error('Usage: node scripts/build-lexicon-from-wiktextract.mjs <wiktextract.jsonl|wiktextract.jsonl.gz>');
+function delay(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function removeFileIfExists(filePath) {
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (error) {
+    const code = error && typeof error === 'object' ? error.code : undefined;
+    if (code !== 'ENOENT') {
+      throw error;
+    }
   }
-  if (!fs.existsSync(inputPath)) {
-    throw new Error(`Input file does not exist: ${inputPath}`);
+}
+
+function downloadFileWithRedirects(url, destinationPath, redirectCount) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, (response) => {
+      const statusCode = response.statusCode ?? 0;
+      const location = response.headers.location;
+      const isRedirect = statusCode >= 300 && statusCode < 400;
+
+      if (isRedirect && typeof location === 'string') {
+        response.resume();
+        if (redirectCount >= MAX_REDIRECTS) {
+          reject(new Error(`Too many redirects while downloading wiktextract archive: status=${statusCode} url=${url}`));
+          return;
+        }
+        const nextUrl = new URL(location, url).toString();
+        resolve(downloadFileWithRedirects(nextUrl, destinationPath, redirectCount + 1));
+        return;
+      }
+
+      if (statusCode !== 200) {
+        response.resume();
+        reject(new Error(`Wiktextract download failed: status=${statusCode} url=${url}`));
+        return;
+      }
+
+      const output = fs.createWriteStream(destinationPath);
+      response.pipe(output);
+      output.on('finish', () => {
+        output.close(() => resolve());
+      });
+      output.on('error', (error) => {
+        output.destroy();
+        reject(error);
+      });
+      response.on('error', (error) => {
+        output.destroy(error);
+        reject(error);
+      });
+    });
+
+    request.on('error', (error) => {
+      reject(error);
+    });
+  });
+}
+
+async function downloadWiktextractArchive(destinationPath) {
+  await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+  const partialPath = `${destinationPath}.partial`;
+  await removeFileIfExists(partialPath);
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_RETRIES; attempt += 1) {
+    try {
+      console.log('wiktextract-download-start', {
+        attempt,
+        maxAttempts: MAX_DOWNLOAD_RETRIES,
+        url: WIKTEXTRACT_URL,
+        destinationPath,
+      });
+      await downloadFileWithRedirects(WIKTEXTRACT_URL, partialPath, 0);
+      await fs.promises.rename(partialPath, destinationPath);
+      console.log('wiktextract-download-complete', {
+        destinationPath,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      await removeFileIfExists(partialPath);
+      console.warn('wiktextract-download-attempt-failed', {
+        attempt,
+        maxAttempts: MAX_DOWNLOAD_RETRIES,
+        error: String(error),
+      });
+      if (attempt < MAX_DOWNLOAD_RETRIES) {
+        await delay(attempt * 1000);
+      }
+    }
   }
 
-  const targetWords = loadModelWords();
+  throw lastError;
+}
+
+async function ensureWiktextractArchivePath() {
+  if (fs.existsSync(WIKTEXTRACT_ARCHIVE_PATH)) {
+    console.log('wiktextract-archive-reused', {
+      archivePath: WIKTEXTRACT_ARCHIVE_PATH,
+    });
+    return WIKTEXTRACT_ARCHIVE_PATH;
+  }
+
+  await downloadWiktextractArchive(WIKTEXTRACT_ARCHIVE_PATH);
+  return WIKTEXTRACT_ARCHIVE_PATH;
+}
+
+async function main() {
+  const archivePath = await ensureWiktextractArchivePath();
+
+  const targetWords = loadTargetWords();
   const overridesMap = loadOverrides();
-  const extractedMap = await streamExtractLexicon(inputPath, targetWords, overridesMap);
+  const existingLexiconMap = loadExistingLexiconFromChunks();
+  const extractedMap = await streamExtractLexicon(archivePath, targetWords, overridesMap);
 
   const entries = [];
+  let reusedEntries = 0;
+  let fallbackCount = 0;
   for (const word of Array.from(targetWords).sort()) {
     const overrideEntry = overridesMap.get(word);
     if (overrideEntry) {
@@ -344,7 +566,14 @@ async function main() {
       entries.push(extracted);
       continue;
     }
+    const existing = existingLexiconMap.get(word);
+    if (existing) {
+      entries.push(existing);
+      reusedEntries += 1;
+      continue;
+    }
     entries.push(toFallbackEntry(word));
+    fallbackCount += 1;
   }
 
   const chunkMap = new Map();
@@ -364,14 +593,14 @@ async function main() {
     await writeJsonFile(path.join(CHUNK_DIR, chunkName), chunkEntries);
   }
 
-  await writeJsonFile(FULL_OUTPUT_PATH, entries);
   await writeJsonFile(INDEX_OUTPUT_PATH, indexPayload);
 
   console.log('lexicon-build-complete', {
     totalWords: targetWords.size,
     extractedDefinitions: extractedMap.size,
+    reusedExistingEntries: reusedEntries,
     overrides: overridesMap.size,
-    fallbackDefinitions: entries.length - extractedMap.size - overridesMap.size,
+    fallbackDefinitions: fallbackCount,
   });
 }
 
