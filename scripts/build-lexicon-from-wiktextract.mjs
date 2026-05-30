@@ -13,6 +13,8 @@ const WIKTEXTRACT_URL = 'https://kaikki.org/dictionary/raw-wiktextract-data.json
 const WIKTEXTRACT_ARCHIVE_PATH = path.join(DOWNLOADS_DIR, 'raw-wiktextract-data.jsonl.gz');
 const MAX_DOWNLOAD_RETRIES = 3;
 const MAX_REDIRECTS = 5;
+const EXTRACT_PROGRESS_LINE_INTERVAL = 100000;
+const WORD_PROGRESS_LOG_INTERVAL = 1000;
 const WORDS_CSV_PATH = path.join(DATA_DIR, 'words.csv');
 const CHUNK_DIR = path.join(DATA_DIR, 'lexicon');
 const INDEX_OUTPUT_PATH = path.join(CHUNK_DIR, 'index.json');
@@ -380,8 +382,20 @@ async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
   });
 
   let scanned = 0;
+  console.log('lexicon-extract-progress', {
+    scannedLines: 0,
+    extractedDefinitions: 0,
+    targetWords: targetWords.size,
+  });
   for await (const line of lineReader) {
     scanned += 1;
+    if (scanned % EXTRACT_PROGRESS_LINE_INTERVAL === 0) {
+      console.log('lexicon-extract-progress', {
+        scannedLines: scanned,
+        extractedDefinitions: extractedMap.size,
+        targetWords: targetWords.size,
+      });
+    }
     if (line.trim().length === 0) {
       continue;
     }
@@ -423,6 +437,12 @@ async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
       definitions,
     });
   }
+
+  console.log('lexicon-extract-progress', {
+    scannedLines: scanned,
+    extractedDefinitions: extractedMap.size,
+    targetWords: targetWords.size,
+  });
 
   return extractedMap;
 }
@@ -553,27 +573,46 @@ async function main() {
   const extractedMap = await streamExtractLexicon(archivePath, targetWords, overridesMap);
 
   const entries = [];
+  const sortedWords = Array.from(targetWords).sort();
+  const totalWords = sortedWords.length;
   let reusedEntries = 0;
   let fallbackCount = 0;
-  for (const word of Array.from(targetWords).sort()) {
+  console.log('lexicon-build-word-progress', {
+    processed: 0,
+    totalWords,
+    percent: 0,
+  });
+
+  for (let wordIndex = 0; wordIndex < sortedWords.length; wordIndex += 1) {
+    const word = sortedWords[wordIndex];
     const overrideEntry = overridesMap.get(word);
     if (overrideEntry) {
       entries.push(overrideEntry);
-      continue;
+    } else {
+      const extracted = extractedMap.get(word);
+      if (extracted) {
+        entries.push(extracted);
+      } else {
+        const existing = existingLexiconMap.get(word);
+        if (existing) {
+          entries.push(existing);
+          reusedEntries += 1;
+        } else {
+          entries.push(toFallbackEntry(word));
+          fallbackCount += 1;
+        }
+      }
     }
-    const extracted = extractedMap.get(word);
-    if (extracted) {
-      entries.push(extracted);
-      continue;
+
+    const processed = wordIndex + 1;
+    if (processed % WORD_PROGRESS_LOG_INTERVAL === 0 || processed === totalWords) {
+      const percent = Number(((processed / totalWords) * 100).toFixed(2));
+      console.log('lexicon-build-word-progress', {
+        processed,
+        totalWords,
+        percent,
+      });
     }
-    const existing = existingLexiconMap.get(word);
-    if (existing) {
-      entries.push(existing);
-      reusedEntries += 1;
-      continue;
-    }
-    entries.push(toFallbackEntry(word));
-    fallbackCount += 1;
   }
 
   const chunkMap = new Map();
