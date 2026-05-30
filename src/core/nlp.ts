@@ -38,6 +38,24 @@ const COMPROMISE_PROPER_TAGS = new Set<string>([
   'Nationality',
 ]);
 
+const NEGATIVE_CONTRACTION_STEM_OVERRIDES: Record<string, string> = {
+  ca: 'can',
+  wo: 'will',
+  sha: 'shall',
+};
+
+const NEGATIVE_CONTRACTION_LEMMA_OVERRIDES: Record<string, string> = {
+  am: 'be',
+  are: 'be',
+  did: 'do',
+  does: 'do',
+  had: 'have',
+  has: 'have',
+  is: 'be',
+  was: 'be',
+  were: 'be',
+};
+
 function buildFallbackTerms(sentence: string): TaggedTerm[] {
   const terms: TaggedTerm[] = [];
   WORD_RE.lastIndex = 0;
@@ -354,26 +372,105 @@ function extractConjugatedAdjective(doc: ReturnType<NlpLike>): string {
   return values[0] ?? '';
 }
 
-export function makeLemmaCandidates(term: TaggedTerm, lemmaDict: Record<string, string>, nlp: NlpLike | null): string[] {
-  const normalized = normalizeToken(term.raw);
-  const candidates: string[] = [];
+function buildApostropheLemmaCandidates(normalizedToken: string): string[] {
+  if (!normalizedToken.includes('\'')) {
+    return [];
+  }
 
+  const candidates: string[] = [];
+  const addCandidate = (value: string): void => {
+    const normalized = normalizeToken(value);
+    if (normalized.length === 0 || !WORD_TOKEN_RE.test(normalized)) {
+      return;
+    }
+    candidates.push(normalized);
+  };
+
+  if (normalizedToken.endsWith("'s")) {
+    addCandidate(normalizedToken.slice(0, -2));
+  }
+  if (normalizedToken.endsWith("s'")) {
+    addCandidate(normalizedToken.slice(0, -1));
+  }
+
+  const detachableSuffixes = ["'re", "'ve", "'ll", "'d", "'m"];
+  for (const suffix of detachableSuffixes) {
+    if (normalizedToken.endsWith(suffix) && normalizedToken.length > suffix.length) {
+      addCandidate(normalizedToken.slice(0, -suffix.length));
+    }
+  }
+
+  if (normalizedToken.endsWith("n't") && normalizedToken.length > 3) {
+    const contractionStem = normalizeToken(normalizedToken.slice(0, -3));
+    addCandidate(contractionStem);
+
+    const expandedStem = NEGATIVE_CONTRACTION_STEM_OVERRIDES[contractionStem] ?? contractionStem;
+    addCandidate(expandedStem);
+
+    const normalizedLemma = NEGATIVE_CONTRACTION_LEMMA_OVERRIDES[expandedStem]
+      ?? NEGATIVE_CONTRACTION_LEMMA_OVERRIDES[contractionStem];
+    if (typeof normalizedLemma === 'string' && normalizedLemma.length > 0) {
+      addCandidate(normalizedLemma);
+    }
+  }
+
+  return orderedUnique(candidates);
+}
+
+function buildLemmaCandidateCacheKey(
+  term: TaggedTerm,
+  classes: { verb: boolean; noun: boolean; adjective: boolean },
+  lemmaFromDict: string | undefined,
+  hasNlp: boolean,
+): string {
+  const normalizedLemmaFromDict = typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
+    ? normalizeToken(lemmaFromDict)
+    : '';
+  return `${term.raw}\n${classes.verb ? '1' : '0'}${classes.noun ? '1' : '0'}${classes.adjective ? '1' : '0'}\n${hasNlp ? '1' : '0'}\n${normalizedLemmaFromDict}`;
+}
+
+export function makeLemmaCandidates(
+  term: TaggedTerm,
+  lemmaDict: Record<string, string>,
+  nlp: NlpLike | null,
+  cache?: Map<string, string[]>,
+): string[] {
+  const normalized = normalizeToken(term.raw);
+  const classes = mapTagsToWordClass(term.tags);
   const hasOwnLemma = Object.prototype.hasOwnProperty.call(lemmaDict, normalized);
   const lemmaFromDict = hasOwnLemma ? lemmaDict[normalized] : undefined;
+  const cacheKey = cache
+    ? buildLemmaCandidateCacheKey(term, classes, lemmaFromDict, nlp !== null)
+    : '';
+  if (cache) {
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const candidates: string[] = [];
+
   if (typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0) {
     candidates.push(normalizeToken(lemmaFromDict));
+  }
+
+  const apostropheCandidates = buildApostropheLemmaCandidates(normalized);
+  for (const candidate of apostropheCandidates) {
+    candidates.push(candidate);
   }
 
   if (nlp) {
     try {
       const doc = nlp(term.raw);
-      const classes = mapTagsToWordClass(term.tags);
+      const verbInfinitive = normalizeToken(doc.verbs().toInfinitive().out('text'));
+      const nounSingular = normalizeToken(doc.nouns().toSingular().out('text'));
 
       if (classes.verb) {
-        candidates.push(normalizeToken(doc.verbs().toInfinitive().out('text')));
+        candidates.push(verbInfinitive);
       }
       if (classes.noun) {
-        candidates.push(normalizeToken(doc.nouns().toSingular().out('text')));
+        candidates.push(nounSingular);
       }
       if (classes.adjective) {
         const adjective = extractConjugatedAdjective(doc);
@@ -382,8 +479,8 @@ export function makeLemmaCandidates(term: TaggedTerm, lemmaDict: Record<string, 
         }
       }
 
-      candidates.push(normalizeToken(doc.verbs().toInfinitive().out('text')));
-      candidates.push(normalizeToken(doc.nouns().toSingular().out('text')));
+      candidates.push(verbInfinitive);
+      candidates.push(nounSingular);
     } catch (error) {
       console.warn('compromise-lemmatization-failed', { raw: term.raw, error });
     }
@@ -392,7 +489,11 @@ export function makeLemmaCandidates(term: TaggedTerm, lemmaDict: Record<string, 
   candidates.push(normalized);
 
   const cleaned = candidates.filter((candidate) => candidate.length > 0 && WORD_TOKEN_RE.test(candidate));
-  return orderedUnique(cleaned);
+  const unique = orderedUnique(cleaned);
+  if (cache) {
+    cache.set(cacheKey, unique);
+  }
+  return unique;
 }
 
 export function contextualDeinflectTaggedTerms(
@@ -402,6 +503,7 @@ export function contextualDeinflectTaggedTerms(
   properNounLexicon: Set<string>,
   excludeProperNouns: boolean,
   nlp: NlpLike | null,
+  lemmaCandidateCache?: Map<string, string[]>,
 ): DeinflectionResult {
   const tokens: string[] = [];
   const properFlags: boolean[] = [];
@@ -421,7 +523,7 @@ export function contextualDeinflectTaggedTerms(
       continue;
     }
 
-    const candidates = makeLemmaCandidates(term, lemmaDict, nlp);
+    const candidates = makeLemmaCandidates(term, lemmaDict, nlp, lemmaCandidateCache);
     const selectedFromVocab = candidates.find((candidate) => lowerToIdx.has(candidate));
     const selected = selectedFromVocab ?? candidates[0] ?? normalized;
 

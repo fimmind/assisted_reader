@@ -1,13 +1,16 @@
 import { Link } from 'wouter';
 import type { BookStats, ImportedBook } from '@/core/types';
 import { Progress } from './ui/progress';
+import { Spinner } from './ui/spinner';
 
 interface BookCardProps {
   book: ImportedBook;
   stats: BookStats;
+  isAnalyzing: boolean;
+  analysisProgressPercent: number;
 }
 
-export function BookCard({ book, stats }: BookCardProps) {
+export function BookCard({ book, stats, isAnalyzing, analysisProgressPercent }: BookCardProps) {
   const chapterCount = book.chapters.length;
   const safeChapter = (() => {
     if (chapterCount <= 0) {
@@ -57,7 +60,15 @@ export function BookCard({ book, stats }: BookCardProps) {
 
       <div className="mt-2 sm:mt-2.5 md:mt-2.5 lg:mt-3 flex gap-2 sm:gap-2.5 lg:gap-3 text-[11px] sm:text-[11px] md:text-[11px] lg:text-xs text-muted-foreground">
         <div className="flex flex-col">
-          <span className="font-medium text-foreground text-xs sm:text-xs md:text-xs lg:text-sm">{stats.unknownTokenCount}</span>
+          <span className="font-medium text-foreground text-xs sm:text-xs md:text-xs lg:text-sm inline-flex items-center gap-1">
+            {stats.unknownTokenCount}
+            {isAnalyzing ? (
+              <>
+                <Spinner className="size-3 text-muted-foreground" aria-label="Analyzing book" />
+                <span className="text-[10px] text-muted-foreground">{analysisProgressPercent}%</span>
+              </>
+            ) : null}
+          </span>
           <span>unknown words</span>
         </div>
         <div className="w-px h-full bg-border" />

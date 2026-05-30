@@ -9,11 +9,13 @@ import { QuizModal } from '../components/QuizModal';
 import { importBookFromFile } from '@/core/book-parser';
 import { deleteBookById, listBooks, seedBooksIfEmpty, upsertBook } from '@/core/books-store';
 import { createSeedBook } from '@/core/seed-book';
-import { analyzeChapter } from '@/core/reader-analysis';
+import { buildBookLemmaHistogramAsync, calculateBookStatsFromLemmaHistogram } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
+import { getCachedBookLemmaHistogram, saveCachedBookLemmaHistogram } from '@/core/book-lemma-histogram-cache';
+import { loadBundledBookLemmaHistogram } from '@/core/bundled-book-lemma-histogram';
 import type { BookStats, ImportedBook } from '@/core/types';
 
 type DeferredHandle = {
@@ -165,12 +167,12 @@ export default function LibraryPage() {
   const [quizOpen, setQuizOpen] = useState(false);
   const [books, setBooks] = useState<ImportedBook[]>([]);
   const [statsByBookId, setStatsByBookId] = useState<Record<string, BookStats>>({});
+  const [analyzingBookProgressById, setAnalyzingBookProgressById] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const refreshRunIdRef = useRef(0);
   const fastStatsHandleRef = useRef<DeferredHandle | null>(null);
-  const nlpStatsHandleRef = useRef<DeferredHandle | null>(null);
   const seedHandleRef = useRef<DeferredHandle | null>(null);
   const hasLoadedOnceRef = useRef(false);
 
@@ -188,6 +190,7 @@ export default function LibraryPage() {
     runId: number,
     activeProfile: ReturnType<typeof getActiveProfile>,
     settings: ReturnType<typeof loadReaderSettings>,
+    onProgress: (percent: number) => void,
   ): Promise<BookStats | null> => {
     const chapterCount = book.chapters.length;
     const progressPercent = calculateProgressPercent(book);
@@ -197,64 +200,58 @@ export default function LibraryPage() {
         progressPercent,
       };
     }
-    const safeChapterIndex = Math.max(0, Math.min(chapterCount - 1, book.currentChapter - 1));
-    const chapter = book.chapters[safeChapterIndex];
-    const sampleLimit = nlp === null ? 12 : 24;
-    const sampledParagraphs = chapter.paragraphs.slice(0, sampleLimit);
-    if (sampledParagraphs.length === 0) {
-      return {
-        ...fallbackStats,
-        progressPercent,
-      };
-    }
-
     try {
-      let sampledUnknownTokens = 0;
-      let sampledTotalTokens = 0;
-      for (let paragraphIndex = 0; paragraphIndex < sampledParagraphs.length; paragraphIndex += 1) {
-        if (refreshRunIdRef.current !== runId) {
-          return null;
-        }
-
-        const paragraphText = sampledParagraphs[paragraphIndex];
-        const analyses = analyzeChapter({
-          chapter: {
-            title: chapter.title,
-            paragraphs: [paragraphText],
-          },
-          settings,
-          model,
-          profile: activeProfile,
-          lemmaDict,
-          nlp,
-          maxCardsPerParagraph: 1,
-        });
-        const paragraph = analyses[0];
-        if (!paragraph) {
-          continue;
-        }
-
-        for (const token of paragraph.tokens) {
-          sampledTotalTokens += 1;
-          if (token.unknown) {
-            sampledUnknownTokens += 1;
-          }
-        }
-
-        await yieldToEventLoop();
+      const cachedHistogram = getCachedBookLemmaHistogram(book.id, book.updatedAt, model.modelKey);
+      if (cachedHistogram) {
+        onProgress(100);
+        const cachedStats = calculateBookStatsFromLemmaHistogram(cachedHistogram, settings, model, activeProfile);
+        return {
+          ...cachedStats,
+          progressPercent,
+        };
       }
 
-      if (refreshRunIdRef.current !== runId) {
+      const bundledHistogram = await loadBundledBookLemmaHistogram(book.id);
+      if (bundledHistogram) {
+        saveCachedBookLemmaHistogram(book.id, book.updatedAt, model.modelKey, bundledHistogram);
+        onProgress(100);
+        const bundledStats = calculateBookStatsFromLemmaHistogram(bundledHistogram, settings, model, activeProfile);
+        return {
+          ...bundledStats,
+          progressPercent,
+        };
+      }
+
+      let lastReportedPercent = -1;
+      onProgress(0);
+      const histogram = await buildBookLemmaHistogramAsync(
+        book,
+        model,
+        lemmaDict,
+        nlp,
+        {
+          shouldContinue: () => refreshRunIdRef.current === runId,
+          onParagraphProcessed: (processedParagraphs, totalParagraphs) => {
+            if (totalParagraphs <= 0) {
+              return;
+            }
+            const percent = Math.round((processedParagraphs / totalParagraphs) * 100);
+            if (percent !== lastReportedPercent) {
+              onProgress(percent);
+              lastReportedPercent = percent;
+            }
+          },
+          onYield: yieldToEventLoop,
+          yieldEveryParagraphs: 40,
+        },
+      );
+      if (histogram === null) {
         return null;
       }
-
-      const unknownTokenPercent = sampledTotalTokens === 0 ? 0 : (sampledUnknownTokens / sampledTotalTokens) * 100;
-      const scale = chapter.paragraphs.length / sampledParagraphs.length;
-      const unknownTokenCount = Math.max(0, Math.round(sampledUnknownTokens * scale));
-
+      saveCachedBookLemmaHistogram(book.id, book.updatedAt, model.modelKey, histogram);
+      const stats = calculateBookStatsFromLemmaHistogram(histogram, settings, model, activeProfile);
       return {
-        unknownTokenCount,
-        unknownTokenPercent,
+        ...stats,
         progressPercent,
       };
     } catch (error) {
@@ -269,10 +266,9 @@ export default function LibraryPage() {
   const refreshBooksAndStats = async () => {
     const runId = refreshRunIdRef.current + 1;
     refreshRunIdRef.current = runId;
+    setAnalyzingBookProgressById({});
     clearDeferredHandle(fastStatsHandleRef.current);
     fastStatsHandleRef.current = null;
-    clearDeferredHandle(nlpStatsHandleRef.current);
-    nlpStatsHandleRef.current = null;
     clearDeferredHandle(seedHandleRef.current);
     seedHandleRef.current = null;
     if (!hasLoadedOnceRef.current) {
@@ -309,7 +305,6 @@ export default function LibraryPage() {
       }
       setBooks(loadedBooks);
       const booksNeedingRefresh: ImportedBook[] = [];
-      const booksForFastRefresh: ImportedBook[] = [];
       const cachedStatsByBookId: Record<string, BookStats> = {};
       const progressByBookId: Record<string, number> = {};
       for (const book of loadedBooks) {
@@ -333,10 +328,6 @@ export default function LibraryPage() {
 
         if (!isFresh) {
           booksNeedingRefresh.push(book);
-          const hasDisplayedBaseline = !!cached || !!statsByBookId[book.id];
-          if (!hasDisplayedBaseline) {
-            booksForFastRefresh.push(book);
-          }
         }
       }
       setStatsByBookId((previous) => {
@@ -384,88 +375,74 @@ export default function LibraryPage() {
       }
 
       if (booksNeedingRefresh.length === 0) {
+        setAnalyzingBookProgressById({});
         return;
       }
+
+      setAnalyzingBookProgressById(() => {
+        const next: Record<string, number> = {};
+        for (const book of booksNeedingRefresh) {
+          next[book.id] = 0;
+        }
+        return next;
+      });
 
       fastStatsHandleRef.current = scheduleDeferredTask(() => {
         void (async () => {
           try {
-            const [model, lemmaDict] = await Promise.all([
+            const [model, lemmaDict, nlp] = await Promise.all([
               loadVocabularyModel(),
               loadLemmaDict(),
+              loadCompromise(),
             ]);
             if (refreshRunIdRef.current !== runId) {
               return;
             }
-            let fastIndex = 0;
-            const processFastNext = async () => {
+
+            const processNext = async (bookIndex: number) => {
               if (refreshRunIdRef.current !== runId) {
                 return;
               }
-              const book = booksForFastRefresh[fastIndex];
+              const book = booksNeedingRefresh[bookIndex];
               if (!book) {
-                nlpStatsHandleRef.current = scheduleDeferredTask(() => {
-                  void (async () => {
-                    try {
-                      const nlp = await loadCompromise();
-                      if (refreshRunIdRef.current !== runId || nlp === null) {
-                        return;
-                      }
-                      let nlpIndex = 0;
-                      const processNlpNext = async () => {
-                        if (refreshRunIdRef.current !== runId) {
-                          return;
-                        }
-                        const nlpBook = booksNeedingRefresh[nlpIndex];
-                        if (!nlpBook) {
-                          return;
-                        }
-                        const stat = await calculateBookStatsSafe(
-                          nlpBook,
-                          model,
-                          lemmaDict,
-                          nlp,
-                          runId,
-                          activeProfile,
-                          settings,
-                        );
-                        if (stat === null || refreshRunIdRef.current !== runId) {
-                          return;
-                        }
-                        setStatsByBookId((previous) => ({ ...previous, [nlpBook.id]: stat }));
-                        cacheMap[nlpBook.id] = {
-                          stats: stat,
-                          observationFingerprint,
-                          bookUpdatedAt: nlpBook.updatedAt,
-                          currentChapter: nlpBook.currentChapter,
-                        };
-                        saveCachedBookStatsMap(cacheMap);
-                        nlpIndex += 1;
-                        nlpStatsHandleRef.current = scheduleDeferredTask(() => {
-                          void processNlpNext();
-                        }, 80);
-                      };
-                      void processNlpNext();
-                    } catch (error) {
-                      console.warn('library-nlp-stats-refresh-failed', { error });
-                    }
-                  })();
-                }, 1000);
                 return;
               }
+
               const stat = await calculateBookStatsSafe(
                 book,
                 model,
                 lemmaDict,
-                null,
+                nlp,
                 runId,
                 activeProfile,
                 settings,
+                (percent) => {
+                  if (refreshRunIdRef.current !== runId) {
+                    return;
+                  }
+                  setAnalyzingBookProgressById((previous) => {
+                    if (previous[book.id] === undefined) {
+                      return previous;
+                    }
+                    if (previous[book.id] === percent) {
+                      return previous;
+                    }
+                    return { ...previous, [book.id]: percent };
+                  });
+                },
               );
               if (stat === null || refreshRunIdRef.current !== runId) {
                 return;
               }
               setStatsByBookId((previous) => ({ ...previous, [book.id]: stat }));
+              setAnalyzingBookProgressById((previous) => {
+                if (previous[book.id] === undefined) {
+                  return previous;
+                }
+                const next = { ...previous };
+                delete next[book.id];
+                return next;
+              });
               cacheMap[book.id] = {
                 stats: stat,
                 observationFingerprint,
@@ -473,19 +450,23 @@ export default function LibraryPage() {
                 currentChapter: book.currentChapter,
               };
               saveCachedBookStatsMap(cacheMap);
-              fastIndex += 1;
-              fastStatsHandleRef.current = scheduleDeferredTask(() => {
-                void processFastNext();
-              }, 60);
+              await yieldToEventLoop();
+              await processNext(bookIndex + 1);
             };
-            void processFastNext();
+            await processNext(0);
           } catch (error) {
             console.warn('library-fast-stats-refresh-failed', { error });
+            if (refreshRunIdRef.current === runId) {
+              setAnalyzingBookProgressById({});
+            }
           }
         })();
-      }, 300);
+      }, 0);
     } catch (error) {
       console.error('library-refresh-failed', { error });
+      if (refreshRunIdRef.current === runId) {
+        setAnalyzingBookProgressById({});
+      }
     } finally {
       if (refreshRunIdRef.current === runId) {
         setIsLoading(false);
@@ -494,6 +475,7 @@ export default function LibraryPage() {
   };
 
   useEffect(() => {
+    void loadCompromise();
     void refreshBooksAndStats();
     const unsubscribe = listenStateUpdated(() => {
       void refreshBooksAndStats();
@@ -504,8 +486,6 @@ export default function LibraryPage() {
   useEffect(() => () => {
     clearDeferredHandle(fastStatsHandleRef.current);
     fastStatsHandleRef.current = null;
-    clearDeferredHandle(nlpStatsHandleRef.current);
-    nlpStatsHandleRef.current = null;
     clearDeferredHandle(seedHandleRef.current);
     seedHandleRef.current = null;
   }, []);
@@ -596,7 +576,13 @@ export default function LibraryPage() {
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(130px,1fr))] sm:gap-4 md:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] md:gap-5 lg:grid-cols-[repeat(auto-fill,minmax(170px,1fr))] lg:gap-8">
             {books.map((book) => (
-              <BookCard key={book.id} book={book} stats={statsByBookId[book.id] ?? fallbackStats} />
+              <BookCard
+                key={book.id}
+                book={book}
+                stats={statsByBookId[book.id] ?? fallbackStats}
+                isAnalyzing={analyzingBookProgressById[book.id] !== undefined}
+                analysisProgressPercent={analyzingBookProgressById[book.id] ?? 0}
+              />
             ))}
           </div>
         )}

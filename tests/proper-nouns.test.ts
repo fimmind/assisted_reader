@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import nlp from 'compromise';
 import {
   buildTaggedSentences,
   buildHighConfidenceProperNounLexicon,
@@ -120,6 +121,38 @@ function assertSentenceDeinflection(
   const terms = tagSentenceTerms(sentence, null);
   const lowerToIdx = buildLowerToIdxForExpectedLemmas(terms, expectedPairs);
   const nlp = createLemmaNlp(formsByToken);
+  const result = contextualDeinflectTaggedTerms(terms, {}, lowerToIdx, new Set<string>(), false, nlp);
+
+  assert.equal(result.tokens.length, terms.length, `Token count mismatch for sentence: ${sentence}`);
+  for (const token of result.tokens) {
+    assert.notEqual(token, '', `Unexpected filtered token while deinflecting: ${sentence}`);
+  }
+
+  for (const pair of expectedPairs) {
+    const normalizedToken = normalizeToken(pair.token);
+    const normalizedLemma = normalizeToken(pair.lemma);
+    let found = false;
+    for (let index = 0; index < terms.length; index += 1) {
+      if (terms[index].normalized !== normalizedToken) {
+        continue;
+      }
+      found = true;
+      assert.equal(
+        result.tokens[index],
+        normalizedLemma,
+        `Expected '${pair.token}' -> '${pair.lemma}' in sentence: ${sentence}`,
+      );
+    }
+    assert.equal(found, true, `Token '${pair.token}' not found in sentence: ${sentence}`);
+  }
+}
+
+function assertSentenceDeinflectionWithCompromiseRuntime(
+  sentence: string,
+  expectedPairs: Array<{ token: string; lemma: string }>,
+) {
+  const terms = tagSentenceTerms(sentence, nlp);
+  const lowerToIdx = buildLowerToIdxForExpectedLemmas(terms, expectedPairs);
   const result = contextualDeinflectTaggedTerms(terms, {}, lowerToIdx, new Set<string>(), false, nlp);
 
   assert.equal(result.tokens.length, terms.length, `Token count mismatch for sentence: ${sentence}`);
@@ -822,6 +855,55 @@ test('ten Hitchhikers sentences run contextual deinflection with expected lemmas
 
   for (const sample of cases) {
     assertSentenceDeinflection(sample.sentence, sample.expectedPairs, formsByToken);
+  }
+});
+
+test('Hitchhiker apostrophe forms deinflect to expected lemmas', () => {
+  const formsByToken: Record<string, LemmaForms> = {
+    "didn't": { verbInfinitive: 'do', nounSingular: '', adjectiveBase: '' },
+    "arthur's": { verbInfinitive: '', nounSingular: 'Arthur', adjectiveBase: '' },
+    "dingo's": { verbInfinitive: '', nounSingular: 'dingo', adjectiveBase: '' },
+    "far's": { verbInfinitive: '', nounSingular: 'far', adjectiveBase: '' },
+  };
+
+  const cases: Array<{ sentence: string; expectedPairs: Array<{ token: string; lemma: string }> }> = [
+    {
+      sentence: 'Ford Prefect knew that it didn’t matter a pair of dingo’s kidneys whether Arthur’s house got knocked down or not now.',
+      expectedPairs: [
+        { token: "didn’t", lemma: 'do' },
+        { token: "Arthur’s", lemma: 'Arthur' },
+        { token: "dingo’s", lemma: 'dingo' },
+      ],
+    },
+    {
+      sentence: '“Oh yes,” said Arthur, “and how far’s that?”',
+      expectedPairs: [{ token: "far’s", lemma: 'far' }],
+    },
+  ];
+
+  for (const sample of cases) {
+    assertSentenceDeinflection(sample.sentence, sample.expectedPairs, formsByToken);
+  }
+});
+
+test('Hitchhiker apostrophe forms deinflect to expected lemmas with compromise runtime', () => {
+  const cases: Array<{ sentence: string; expectedPairs: Array<{ token: string; lemma: string }> }> = [
+    {
+      sentence: 'Ford Prefect knew that it didn’t matter a pair of dingo’s kidneys whether Arthur’s house got knocked down or not now.',
+      expectedPairs: [
+        { token: "didn’t", lemma: 'do' },
+        { token: "Arthur’s", lemma: 'Arthur' },
+        { token: "dingo’s", lemma: 'dingo' },
+      ],
+    },
+    {
+      sentence: '“Oh yes,” said Arthur, “and how far’s that?”',
+      expectedPairs: [{ token: "far’s", lemma: 'far' }],
+    },
+  ];
+
+  for (const sample of cases) {
+    assertSentenceDeinflectionWithCompromiseRuntime(sample.sentence, sample.expectedPairs);
   }
 });
 

@@ -178,3 +178,25 @@ pnpm run build
 pnpm run serve
 pnpm run deploy
 ```
+
+## Chrome debug launcher
+
+Use the helper script to launch Chrome/Chromium in app mode with remote debugging enabled:
+
+```bash
+scripts/launch-chrome-debug.sh
+```
+
+Default app URL is `http://127.0.0.1:5173/` (the expected `pnpm run dev` URL).
+
+Optional custom URL:
+
+```bash
+scripts/launch-chrome-debug.sh http://127.0.0.1:5173/assisted_reader/
+```
+
+Optional environment overrides:
+
+- `CHROME_BIN` (explicit browser binary)
+- `DEBUG_PORT` (default `9222`)
+- `CHROME_DEBUG_PROFILE_DIR` (default `/tmp/assisted_reader_chrome_debug`)
