@@ -93,6 +93,11 @@ interface PopupAnchorRect {
   left: number;
 }
 
+interface ReaderActivityIndicatorProps {
+  ariaLabel: string;
+  testId: string;
+}
+
 interface ReaderParagraphTextProps {
   analysis: ParagraphAnalysis;
   assistanceEnabled: boolean;
@@ -124,6 +129,17 @@ type IdleWindow = Window & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
   cancelIdleCallback?: (id: number) => void;
 };
+
+function ReaderActivityIndicator({ ariaLabel, testId }: ReaderActivityIndicatorProps) {
+  return (
+    <div role="status" aria-label={ariaLabel} aria-live="polite" data-testid={testId}>
+      <span
+        aria-hidden="true"
+        className="block size-5 rounded-full border-2 border-current border-t-transparent animate-spin motion-reduce:animate-none will-change-transform [animation-duration:1200ms]"
+      />
+    </div>
+  );
+}
 
 const ANALYSIS_TIME_SLICE_MS = 8;
 const ANALYSIS_PUBLISH_INTERVAL_MS = 1000;
@@ -280,6 +296,24 @@ function calculateWordPopupPosition(
   }
   top = Math.max(edgePadding, Math.min(top, viewportHeight - boundedPopupHeight - edgePadding));
 
+  return { top, left };
+}
+
+function calculateWordLookupIndicatorPosition(
+  anchorRect: PopupAnchorRect,
+  viewportWidth: number,
+  viewportHeight: number,
+): { top: number; left: number } {
+  const edgePadding = 8;
+  const sideOffset = 6;
+  const indicatorSize = 20;
+  let left = anchorRect.right + sideOffset;
+  if (left + indicatorSize > viewportWidth - edgePadding) {
+    left = anchorRect.left - indicatorSize - sideOffset;
+  }
+  left = Math.max(edgePadding, Math.min(left, viewportWidth - indicatorSize - edgePadding));
+  const centeredTop = anchorRect.top + ((anchorRect.bottom - anchorRect.top - indicatorSize) / 2);
+  const top = Math.max(edgePadding, Math.min(centeredTop, viewportHeight - indicatorSize - edgePadding));
   return { top, left };
 }
 
@@ -1866,20 +1900,39 @@ export default function ReaderPage() {
         </div>
       </main>
       {activeAnalysisRunId !== null && (
-        <div
-          role="status"
-          aria-label="Analyzing text"
-          aria-live="polite"
-          data-testid="reader-analysis-indicator"
-          className="pointer-events-none fixed bottom-4 right-4 z-30 text-muted-foreground"
-        >
-          <span
-            aria-hidden="true"
-            className="block size-5 rounded-full border-2 border-current border-t-transparent animate-spin motion-reduce:animate-none will-change-transform [animation-duration:1200ms]"
+        <div className="pointer-events-none fixed bottom-4 right-4 z-30 text-muted-foreground">
+          <ReaderActivityIndicator
+            ariaLabel="Analyzing text"
+            testId="reader-analysis-indicator"
           />
         </div>
       )}
       {wordPopups.map((popup, popupIndex) => {
+        if (popup.definitionStatus === 'loading') {
+          const indicatorPosition = calculateWordLookupIndicatorPosition(
+            popup.anchorRect,
+            window.innerWidth,
+            window.innerHeight,
+          );
+          return (
+            <div
+              key={popup.id}
+              className="pointer-events-none fixed text-muted-foreground"
+              style={{
+                top: indicatorPosition.top,
+                left: indicatorPosition.left,
+                zIndex: 40 + popupIndex,
+              }}
+            >
+              <ReaderActivityIndicator
+                ariaLabel={`Looking up definition for ${popup.lookupWord || popup.target.lemma}`}
+                testId={popupIndex === 0
+                  ? 'reader-definition-lookup-indicator'
+                  : `reader-definition-lookup-indicator-${popupIndex}`}
+              />
+            </div>
+          );
+        }
         const rawDefinition = popup.definition
           ?? createFallbackLexiconEntry(popup.lookupWord || popup.target.lemma);
         const definition = resolveLexiconEntry(rawDefinition, popup.target);
