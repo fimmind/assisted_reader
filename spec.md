@@ -30,7 +30,7 @@ The UI is minimal. There is a hidable top-bar with dedicated buttons for reader 
 
 The text is displayed centered in the page. For every paragraph, the system identifies the list of words that are unknown by the user, picks up to 2 words which are estimated to be the most important (the exact upper bound for the number of displayed words is adjustable in the settings), highlights them and displays their definition next to the paragraph. The rest of the unknown words are only highlighted and their definition is only displayed when the user clicks on them. On larger screens the definitions are displayed on the right, in a separate dedicated column. The definition cards should align vertically with the corresponding paragraph where possible. On smaller mobile screens the definition cards are displayed right below the corresponding paragraph
 
-The definition card for a given word includes the word itself in its base form, the transcription and the definition. No example sentences. In the top-right corner of the card there are two small buttons for marking the word as known/unknown. 
+The definition card for a given word includes the word itself in its base form, the inferred part of speech, the transcription and the definition. Definitions and pronunciations are selected for the word's contextual part of speech. If the part of speech cannot be inferred or is unavailable, all available definitions are grouped and labeled by part of speech. No example sentences. In the top-right corner of the card there are two small buttons for marking the word as known/unknown. Known/unknown state remains attached to the base word rather than its part of speech.
 
 ### Quiz
 

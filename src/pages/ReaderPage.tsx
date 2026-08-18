@@ -15,14 +15,15 @@ import type { DefinitionWordClick } from '@/components/WordDefinitionCard';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { WORD_RE } from '@/core/constants';
-import { createFallbackLexiconEntry, loadLexiconMap } from '@/core/lexicon';
+import { createFallbackLexiconEntry, loadLexiconMap, resolveLexiconEntry } from '@/core/lexicon';
+import { areDefinitionTargetsEqual, createDefinitionTarget, definitionTargetKey } from '@/core/definition-target';
 import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
 import { analyzeChapter } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
-import type { ImportedBook, LexiconEntry, ParagraphAnalysis, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
+import type { DefinitionTarget, ImportedBook, LexiconEntry, ParagraphAnalysis, PartOfSpeech, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
 
 function clampChapterNumber(book: ImportedBook, chapterNumber: number | undefined): number {
   if (typeof chapterNumber !== 'number' || !Number.isFinite(chapterNumber)) {
@@ -68,10 +69,19 @@ interface ReaderResources {
 }
 
 interface WordPopupState {
-  lemma: string;
+  target: DefinitionTarget;
   top: number;
   left: number;
+  anchorRect: PopupAnchorRect;
+  horizontalAnchorRect: PopupAnchorRect;
   sourceParagraphIndex: number;
+}
+
+interface PopupAnchorRect {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
 }
 
 type AnalysisRefreshMode = 'reset' | 'preserve';
@@ -106,6 +116,43 @@ function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHand
   }
   const id = window.setTimeout(task, timeoutMs);
   return { kind: 'timeout', id };
+}
+
+function capturePopupAnchorRect(rect: DOMRect): PopupAnchorRect {
+  return {
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    left: rect.left,
+  };
+}
+
+function calculateWordPopupPosition(
+  anchorRect: PopupAnchorRect,
+  horizontalAnchorRect: PopupAnchorRect,
+  popupWidth: number,
+  popupHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): { top: number; left: number } {
+  const edgePadding = 8;
+  const sideOffset = 8;
+  const boundedPopupWidth = Math.min(popupWidth, viewportWidth - (edgePadding * 2));
+  const boundedPopupHeight = Math.min(popupHeight, viewportHeight - (edgePadding * 2));
+
+  let left = horizontalAnchorRect.right + sideOffset;
+  if (left + boundedPopupWidth > viewportWidth - edgePadding) {
+    left = horizontalAnchorRect.left - boundedPopupWidth - sideOffset;
+  }
+  left = Math.max(edgePadding, Math.min(left, viewportWidth - boundedPopupWidth - edgePadding));
+
+  let top = anchorRect.top;
+  if (top + boundedPopupHeight > viewportHeight - edgePadding) {
+    top = anchorRect.bottom - boundedPopupHeight;
+  }
+  top = Math.max(edgePadding, Math.min(top, viewportHeight - boundedPopupHeight - edgePadding));
+
+  return { top, left };
 }
 
 function calculateScrollProgressFromDocument(): number {
@@ -172,11 +219,11 @@ function buildParagraphAnalysisAtIndex(
   const chapterIndex = chapterNumber - 1;
   const chapter = selectedBook.chapters[chapterIndex];
   if (!chapter) {
-    return { paragraphText: '', tokens: [], cardLemmas: [] };
+    return { paragraphText: '', tokens: [], cardTargets: [] };
   }
   const paragraphText = chapter.paragraphs[paragraphIndex] ?? '';
   if (!assistanceEnabled) {
-    return { paragraphText, tokens: [], cardLemmas: [] };
+    return { paragraphText, tokens: [], cardTargets: [] };
   }
 
   const analyses = analyzeChapter({
@@ -192,18 +239,18 @@ function buildParagraphAnalysisAtIndex(
     maxCardsPerParagraph: Math.max(1, Math.min(3, settings.maxWordsPerParagraph)),
   });
 
-  return analyses[0] ?? { paragraphText, tokens: [], cardLemmas: [] };
+  return analyses[0] ?? { paragraphText, tokens: [], cardTargets: [] };
 }
 
 function areParagraphAnalysesVisuallyEquivalent(left: ParagraphAnalysis, right: ParagraphAnalysis): boolean {
   if (left.paragraphText !== right.paragraphText) {
     return false;
   }
-  if (left.cardLemmas.length !== right.cardLemmas.length) {
+  if (left.cardTargets.length !== right.cardTargets.length) {
     return false;
   }
-  for (let index = 0; index < left.cardLemmas.length; index += 1) {
-    if (left.cardLemmas[index] !== right.cardLemmas[index]) {
+  for (let index = 0; index < left.cardTargets.length; index += 1) {
+    if (!areDefinitionTargetsEqual(left.cardTargets[index], right.cardTargets[index])) {
       return false;
     }
   }
@@ -219,6 +266,7 @@ function areParagraphAnalysesVisuallyEquivalent(left: ParagraphAnalysis, right: 
       || leftToken.lemma !== rightToken.lemma
       || leftToken.unknown !== rightToken.unknown
       || leftToken.proper !== rightToken.proper
+      || leftToken.partOfSpeech !== rightToken.partOfSpeech
     ) {
       return false;
     }
@@ -233,7 +281,7 @@ function buildPlainChapterAnalysis(selectedBook: ImportedBook): ParagraphAnalysi
   if (!chapter) {
     return [];
   }
-  return chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardLemmas: [] }));
+  return chapter.paragraphs.map((paragraphText) => ({ paragraphText, tokens: [], cardTargets: [] }));
 }
 
 function resolveKnowledgeThreshold(value: number): number {
@@ -263,16 +311,23 @@ function resolveDeduplicationRadius(value: number): number {
   return integer;
 }
 
-function rankParagraphCardLemmas(tokens: ParagraphAnalysis['tokens'], threshold: number): string[] {
-  const frequencies = new Map<string, { count: number; pKnown: number; firstIndex: number }>();
+function rankParagraphCardTargets(tokens: ParagraphAnalysis['tokens'], threshold: number): DefinitionTarget[] {
+  const frequencies = new Map<string, {
+    target: DefinitionTarget;
+    count: number;
+    pKnown: number;
+    firstIndex: number;
+  }>();
   tokens.forEach((token, index) => {
     if (!token.unknown) {
       return;
     }
 
-    const current = frequencies.get(token.lemma);
+    const target = createDefinitionTarget(token.lemma, token.partOfSpeech);
+    const key = definitionTargetKey(target);
+    const current = frequencies.get(key);
     if (!current) {
-      frequencies.set(token.lemma, { count: 1, pKnown: token.pKnown, firstIndex: index });
+      frequencies.set(key, { target, count: 1, pKnown: token.pKnown, firstIndex: index });
       return;
     }
 
@@ -283,11 +338,11 @@ function rankParagraphCardLemmas(tokens: ParagraphAnalysis['tokens'], threshold:
   });
 
   const denominator = 1 - threshold;
-  const scored = Array.from(frequencies.entries()).map(([lemma, value]) => {
+  const scored = Array.from(frequencies.values()).map((value) => {
     const uncertaintyScore = denominator <= 0 ? 1 : (1 - value.pKnown) / denominator;
     const importance = (0.7 * value.count) + (0.3 * uncertaintyScore);
     return {
-      lemma,
+      target: value.target,
       importance,
       firstIndex: value.firstIndex,
     };
@@ -300,29 +355,29 @@ function rankParagraphCardLemmas(tokens: ParagraphAnalysis['tokens'], threshold:
     return left.firstIndex - right.firstIndex;
   });
 
-  return scored.map((entry) => entry.lemma);
+  return scored.map((entry) => entry.target);
 }
 
-function selectDeduplicatedCardLemmas(
+function selectDeduplicatedCardTargets(
   tokens: ParagraphAnalysis['tokens'],
   maxCardsPerParagraph: number,
   threshold: number,
-  suppressedLemmas: Set<string>,
-): string[] {
+  suppressedTargetKeys: Set<string>,
+): DefinitionTarget[] {
   if (maxCardsPerParagraph <= 0) {
     return [];
   }
 
-  const ranked = rankParagraphCardLemmas(tokens, threshold);
-  const selected: string[] = [];
-  for (const lemma of ranked) {
+  const ranked = rankParagraphCardTargets(tokens, threshold);
+  const selected: DefinitionTarget[] = [];
+  for (const target of ranked) {
     if (selected.length >= maxCardsPerParagraph) {
       break;
     }
-    if (suppressedLemmas.has(lemma.toLowerCase())) {
+    if (suppressedTargetKeys.has(definitionTargetKey(target))) {
       continue;
     }
-    selected.push(lemma);
+    selected.push(target);
   }
   return selected;
 }
@@ -412,6 +467,7 @@ export default function ReaderPage() {
   const textColRef = useRef<HTMLDivElement>(null);
   const paraRefs = useRef<(HTMLParagraphElement | null)[]>([]);
   const cardGrpRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const wordPopupRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const [paraOffsets, setParaOffsets] = useState<number[]>([]);
   const extraPaddingRef = useRef(0);
@@ -540,33 +596,33 @@ export default function ReaderPage() {
                 paragraphIndex,
                 true,
               );
-              const suppressedLemmas = new Set<string>();
+              const suppressedTargetKeys = new Set<string>();
               if (deduplicationRadius > 0) {
                 for (const seenIndex of processedParagraphIndices) {
                   if (Math.abs(seenIndex - paragraphIndex) > deduplicationRadius) {
                     continue;
                   }
                   const nearbyAnalysis = nextAnalyses[seenIndex];
-                  for (const lemma of nearbyAnalysis.cardLemmas) {
-                    suppressedLemmas.add(lemma.toLowerCase());
+                  for (const target of nearbyAnalysis.cardTargets) {
+                    suppressedTargetKeys.add(definitionTargetKey(target));
                   }
                 }
               }
-              const deduplicatedCardLemmas = selectDeduplicatedCardLemmas(
+              const deduplicatedCardTargets = selectDeduplicatedCardTargets(
                 analysis.tokens,
                 maxCardsPerParagraph,
                 threshold,
-                suppressedLemmas,
+                suppressedTargetKeys,
               );
               const nextAnalysis: ParagraphAnalysis = {
                 ...analysis,
-                cardLemmas: deduplicatedCardLemmas,
+                cardTargets: deduplicatedCardTargets,
               };
               nextAnalyses[paragraphIndex] = nextAnalysis;
 
-              for (const lemma of nextAnalysis.cardLemmas) {
-                const found = resources.lexiconMap.get(lemma) ?? createFallbackLexiconEntry(lemma);
-                definitionMap.set(lemma, found);
+              for (const target of nextAnalysis.cardTargets) {
+                const found = resources.lexiconMap.get(target.lemma) ?? createFallbackLexiconEntry(target.lemma);
+                definitionMap.set(target.lemma, found);
               }
               processedParagraphIndices.add(paragraphIndex);
             } catch (error) {
@@ -917,69 +973,90 @@ export default function ReaderPage() {
     }
   };
 
-  const resolveDefinitionByLemma = useCallback((lemma: string): LexiconEntry => {
-    const normalizedLemma = normalizeToken(lemma);
+  const resolveDefinition = useCallback((target: DefinitionTarget): LexiconEntry => {
+    const normalizedLemma = normalizeToken(target.lemma);
     const fromLoaded = definitionsByLemmaRef.current.get(normalizedLemma);
     if (fromLoaded) {
-      return fromLoaded;
+      return resolveLexiconEntry(fromLoaded, target);
     }
     const fromLexicon = resourcesRef.current?.lexiconMap.get(normalizedLemma);
     if (fromLexicon) {
-      return fromLexicon;
+      return resolveLexiconEntry(fromLexicon, target);
     }
     return createFallbackLexiconEntry(normalizedLemma);
   }, []);
 
-  const calculateWordPopupPosition = useCallback((
-    anchorRect: DOMRect,
-    horizontalAnchorRect: DOMRect,
-  ): { top: number; left: number } => {
-    const popupWidth = 280;
-    const popupHeight = 240;
-    const edgePadding = 8;
-    const sideOffset = 8;
-
-    let left = horizontalAnchorRect.right + sideOffset;
-    if (left + popupWidth > window.innerWidth - edgePadding) {
-      left = horizontalAnchorRect.left - popupWidth - sideOffset;
-    }
-    left = Math.max(edgePadding, Math.min(left, window.innerWidth - popupWidth - edgePadding));
-
-    let top = anchorRect.top;
-    if (top + popupHeight > window.innerHeight - edgePadding) {
-      top = anchorRect.bottom - popupHeight;
-    }
-    top = Math.max(edgePadding, Math.min(top, window.innerHeight - popupHeight - edgePadding));
-
-    return { top, left };
-  }, []);
-
   const createWordPopup = useCallback((
     element: HTMLElement,
-    lemma: string,
+    target: DefinitionTarget,
     sourceParagraphIndex: number,
   ): WordPopupState => {
     const rect = element.getBoundingClientRect();
     const definitionCard = element.closest<HTMLElement>('[data-definition-card="true"]');
     const horizontalAnchorRect = definitionCard?.getBoundingClientRect() ?? rect;
-    const position = calculateWordPopupPosition(rect, horizontalAnchorRect);
+    const anchor = capturePopupAnchorRect(rect);
+    const horizontalAnchor = capturePopupAnchorRect(horizontalAnchorRect);
+    const position = calculateWordPopupPosition(
+      anchor,
+      horizontalAnchor,
+      280,
+      0,
+      window.innerWidth,
+      window.innerHeight,
+    );
     return {
-      lemma: normalizeToken(lemma),
+      target: createDefinitionTarget(target.lemma, target.partOfSpeech),
       top: position.top,
       left: position.left,
+      anchorRect: anchor,
+      horizontalAnchorRect: horizontalAnchor,
       sourceParagraphIndex,
     };
-  }, [calculateWordPopupPosition]);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (wordPopups.length === 0) {
+      return;
+    }
+
+    const measuredPositions = wordPopups.map((popup, popupIndex) => {
+      const popupElement = wordPopupRefs.current[popupIndex];
+      if (!popupElement) {
+        return { top: popup.top, left: popup.left };
+      }
+      const popupRect = popupElement.getBoundingClientRect();
+      return calculateWordPopupPosition(
+        popup.anchorRect,
+        popup.horizontalAnchorRect,
+        popupRect.width,
+        popupRect.height,
+        window.innerWidth,
+        window.innerHeight,
+      );
+    });
+
+    const positionChanged = measuredPositions.some((position, index) => (
+      position.top !== wordPopups[index].top || position.left !== wordPopups[index].left
+    ));
+    if (!positionChanged) {
+      return;
+    }
+    setWordPopups((previous) => previous.map((popup, index) => ({
+      ...popup,
+      top: measuredPositions[index]?.top ?? popup.top,
+      left: measuredPositions[index]?.left ?? popup.left,
+    })));
+  }, [definitionsByLemma, settings.englishVariant, wordPopups]);
 
   const openRootWordPopup = useCallback((
     element: HTMLElement,
-    lemma: string,
+    target: DefinitionTarget,
     sourceParagraphIndex: number,
   ) => {
-    setWordPopups([createWordPopup(element, lemma, sourceParagraphIndex)]);
+    setWordPopups([createWordPopup(element, target, sourceParagraphIndex)]);
   }, [createWordPopup]);
 
-  const resolveDefinitionWordLemma = useCallback((click: DefinitionWordClick): string => {
+  const resolveDefinitionWordTarget = useCallback((click: DefinitionWordClick): DefinitionTarget => {
     const resources = resourcesRef.current;
     if (!resources) {
       throw new Error('Cannot analyze a definition word before reader resources are loaded.');
@@ -1003,9 +1080,12 @@ export default function ReaderPage() {
       candidate.start === click.start && candidate.end === click.end
     ));
     if (token && token.lemma.length > 0) {
-      return token.lemma;
+      return createDefinitionTarget(token.lemma, token.partOfSpeech);
     }
-    return normalizeToken(click.definitionText.slice(click.start, click.end));
+    return createDefinitionTarget(
+      click.definitionText.slice(click.start, click.end),
+      null,
+    );
   }, []);
 
   const openDefinitionWordPopup = useCallback((
@@ -1013,15 +1093,15 @@ export default function ReaderPage() {
     click: DefinitionWordClick,
     sourceParagraphIndex: number,
   ) => {
-    const lemma = resolveDefinitionWordLemma(click);
-    const popup = createWordPopup(click.element, lemma, sourceParagraphIndex);
+    const target = resolveDefinitionWordTarget(click);
+    const popup = createWordPopup(click.element, target, sourceParagraphIndex);
     setWordPopups((previous) => {
       const ancestors = parentPopupIndex === null
         ? []
         : previous.slice(0, parentPopupIndex + 1);
       return [...ancestors, popup];
     });
-  }, [createWordPopup, resolveDefinitionWordLemma]);
+  }, [createWordPopup, resolveDefinitionWordTarget]);
 
   const closeAllWordPopups = useCallback(() => {
     setWordPopups([]);
@@ -1083,8 +1163,8 @@ export default function ReaderPage() {
   }, [closeAllWordPopups, wordPopups.length]);
 
   const renderParagraphWithHighlights = (analysis: ParagraphAnalysis, sourceParagraphIndex: number): ReactNode => {
-    const highlightedLemmas = assistanceEnabled
-      ? new Set<string>(analysis.cardLemmas.map((lemma) => normalizeToken(lemma)))
+    const highlightedTargetKeys = assistanceEnabled
+      ? new Set<string>(analysis.cardTargets.map((target) => definitionTargetKey(target)))
       : new Set<string>();
     const tokenByRange = new Map<string, ParagraphAnalysis['tokens'][number]>();
     for (const token of analysis.tokens) {
@@ -1106,7 +1186,10 @@ export default function ReaderPage() {
 
       const analyzedToken = tokenByRange.get(`${start}:${end}`);
       const lemma = analyzedToken?.lemma ?? normalizeToken(tokenText);
-      const shouldHighlight = assistanceEnabled && Boolean(analyzedToken?.unknown) && highlightedLemmas.has(lemma);
+      const target = createDefinitionTarget(lemma, analyzedToken?.partOfSpeech ?? null);
+      const shouldHighlight = assistanceEnabled
+        && Boolean(analyzedToken?.unknown)
+        && highlightedTargetKeys.has(definitionTargetKey(target));
       const isPriority = shouldHighlight && analyzedToken ? ((1 - analyzedToken.pKnown) > 0.6) : false;
 
       nodes.push(
@@ -1118,7 +1201,7 @@ export default function ReaderPage() {
             shouldHighlight && 'rounded-sm px-0.5 -mx-0.5',
             shouldHighlight && (isPriority ? 'unknown-word priority' : 'unknown-word'),
           )}
-          onClick={(event) => openRootWordPopup(event.currentTarget, lemma, sourceParagraphIndex)}
+          onClick={(event) => openRootWordPopup(event.currentTarget, target, sourceParagraphIndex)}
         >
           {tokenText}
         </span>,
@@ -1300,7 +1383,7 @@ export default function ReaderPage() {
               data-testid="text-column"
             >
               {visibleParagraphEntries.map((entry) => {
-                const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardLemmas: [] };
+                const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardTargets: [] };
                 return (
                 <div key={entry.sourceIndex} className="mb-2" data-testid={`paragraph-block-${entry.visibleIndex}`}>
                   <p
@@ -1310,20 +1393,22 @@ export default function ReaderPage() {
                   >
                     {renderParagraphWithHighlights(analysis, entry.sourceIndex)}
                   </p>
-                  {assistanceEnabled && analysis.cardLemmas.length > 0 && (
+                  {assistanceEnabled && analysis.cardTargets.length > 0 && (
                     <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
-                      {analysis.cardLemmas.map((lemma) => {
-                        const definition = definitionsByLemma.get(lemma) ?? createFallbackLexiconEntry(lemma);
-                        const observation = observationLabels[lemma.toLowerCase()];
+                      {analysis.cardTargets.map((target) => {
+                        const rawDefinition = definitionsByLemma.get(target.lemma)
+                          ?? createFallbackLexiconEntry(target.lemma);
+                        const definition = resolveLexiconEntry(rawDefinition, target);
+                        const observation = observationLabels[target.lemma];
                         return (
                           <WordDefinitionCard
-                            key={lemma}
+                            key={definitionTargetKey(target)}
                             definition={definition}
                             onDefinitionWordClick={(click) => {
                               openDefinitionWordPopup(null, click, entry.sourceIndex);
                             }}
-                            onMarkKnown={() => markLemma(lemma, true, entry.sourceIndex)}
-                            onMarkUnknown={() => markLemma(lemma, false, entry.sourceIndex)}
+                            onMarkKnown={() => markLemma(target.lemma, true, entry.sourceIndex)}
+                            onMarkUnknown={() => markLemma(target.lemma, false, entry.sourceIndex)}
                             isMarkedKnown={observation === 1}
                             isMarkedUnknown={observation === 0}
                             pronunciationVariant={settings.englishVariant}
@@ -1358,8 +1443,8 @@ export default function ReaderPage() {
             data-testid="card-column"
           >
             {visibleParagraphEntries.map((entry) => {
-              const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardLemmas: [] };
-              if (!analysis.cardLemmas.length || !assistanceEnabled) return null;
+              const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardTargets: [] };
+              if (!analysis.cardTargets.length || !assistanceEnabled) return null;
               return (
                 <div
                   key={entry.sourceIndex}
@@ -1368,18 +1453,20 @@ export default function ReaderPage() {
                   className="flex flex-col gap-3 w-full"
                   data-testid={`card-group-${entry.visibleIndex}`}
                 >
-                  {analysis.cardLemmas.map((lemma) => {
-                    const definition = definitionsByLemma.get(lemma) ?? createFallbackLexiconEntry(lemma);
-                    const observation = observationLabels[lemma.toLowerCase()];
+                  {analysis.cardTargets.map((target) => {
+                    const rawDefinition = definitionsByLemma.get(target.lemma)
+                      ?? createFallbackLexiconEntry(target.lemma);
+                    const definition = resolveLexiconEntry(rawDefinition, target);
+                    const observation = observationLabels[target.lemma];
                     return (
                       <WordDefinitionCard
-                        key={lemma}
+                        key={definitionTargetKey(target)}
                         definition={definition}
                         onDefinitionWordClick={(click) => {
                           openDefinitionWordPopup(null, click, entry.sourceIndex);
                         }}
-                        onMarkKnown={() => markLemma(lemma, true, entry.sourceIndex)}
-                        onMarkUnknown={() => markLemma(lemma, false, entry.sourceIndex)}
+                        onMarkKnown={() => markLemma(target.lemma, true, entry.sourceIndex)}
+                        onMarkUnknown={() => markLemma(target.lemma, false, entry.sourceIndex)}
                         isMarkedKnown={observation === 1}
                         isMarkedUnknown={observation === 0}
                         pronunciationVariant={settings.englishVariant}
@@ -1394,13 +1481,16 @@ export default function ReaderPage() {
         </div>
       </main>
       {wordPopups.map((popup, popupIndex) => {
-        const definition = resolveDefinitionByLemma(popup.lemma);
-        const observation = observationLabels[popup.lemma];
+        const definition = resolveDefinition(popup.target);
+        const observation = observationLabels[popup.target.lemma];
         return (
           <div
-            key={`${popupIndex}-${popup.lemma}-${popup.top}-${popup.left}`}
+            key={`${popupIndex}-${definitionTargetKey(popup.target)}-${popup.top}-${popup.left}`}
             className="fixed"
             style={{ top: popup.top, left: popup.left, zIndex: 40 + popupIndex }}
+            ref={(element) => {
+              wordPopupRefs.current[popupIndex] = element;
+            }}
             data-word-popup-index={popupIndex}
             data-testid={popupIndex === 0 ? 'word-definition-popup' : `word-definition-popup-${popupIndex}`}
           >
@@ -1410,11 +1500,11 @@ export default function ReaderPage() {
                 openDefinitionWordPopup(popupIndex, click, popup.sourceParagraphIndex);
               }}
               onMarkKnown={() => {
-                markLemma(popup.lemma, true, popup.sourceParagraphIndex);
+                markLemma(popup.target.lemma, true, popup.sourceParagraphIndex);
                 closeWordPopupAtIndex(popupIndex);
               }}
               onMarkUnknown={() => {
-                markLemma(popup.lemma, false, popup.sourceParagraphIndex);
+                markLemma(popup.target.lemma, false, popup.sourceParagraphIndex);
                 closeWordPopupAtIndex(popupIndex);
               }}
               isMarkedKnown={observation === 1}

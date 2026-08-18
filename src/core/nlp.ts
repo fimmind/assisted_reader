@@ -1,6 +1,6 @@
 import { CALENDAR_EXCLUSIONS, SENTENCE_RE, TITLE_CASE_NOISE, WORD_RE, WORD_TOKEN_RE } from './constants';
 import { isWordToken, normalizeToken, orderedUnique } from './math';
-import type { DeinflectionResult, TaggedSentence, TaggedTerm } from './types';
+import type { DeinflectionResult, PartOfSpeech, TaggedSentence, TaggedTerm } from './types';
 
 type CompromiseTags = string[] | Record<string, unknown>;
 type CompromiseTermNode = {
@@ -55,6 +55,22 @@ const NEGATIVE_CONTRACTION_LEMMA_OVERRIDES: Record<string, string> = {
   was: 'be',
   were: 'be',
 };
+
+const ARTICLES = new Set<string>(['a', 'an', 'the']);
+
+const CALENDAR_TIME_NOUNS = new Set<string>([
+  'afternoon',
+  'dawn',
+  'day',
+  'evening',
+  'midday',
+  'midnight',
+  'morning',
+  'night',
+  'noon',
+]);
+
+const ADVERBIAL_QUESTION_WORDS = new Set<string>(['how', 'when', 'where', 'why']);
 
 function buildFallbackTerms(sentence: string): TaggedTerm[] {
   const terms: TaggedTerm[] = [];
@@ -359,6 +375,99 @@ function mapTagsToWordClass(tags: Set<string>): { verb: boolean; noun: boolean; 
   };
 }
 
+export function inferPartOfSpeech(term: TaggedTerm): PartOfSpeech | null {
+  const tags = term.tags;
+  if (ARTICLES.has(term.normalized) && tags.has('Determiner')) {
+    return 'article';
+  }
+  if (tags.has('Pronoun')) {
+    return 'pronoun';
+  }
+  if (tags.has('Determiner')) {
+    return 'determiner';
+  }
+  if (tags.has('Adverb')) {
+    return 'adverb';
+  }
+  if (tags.has('Adjective')) {
+    return 'adjective';
+  }
+  if (tags.has('Verb')) {
+    return 'verb';
+  }
+  for (const tag of COMPROMISE_PROPER_TAGS) {
+    if (tags.has(tag)) {
+      return 'proper-noun';
+    }
+  }
+  if (tags.has('Noun')) {
+    return 'noun';
+  }
+  if (tags.has('Preposition')) {
+    return 'preposition';
+  }
+  if (tags.has('Conjunction')) {
+    return 'conjunction';
+  }
+  if (tags.has('Interjection')) {
+    return 'interjection';
+  }
+  if (tags.has('Cardinal') || tags.has('Ordinal') || tags.has('Value')) {
+    return 'numeral';
+  }
+  if (tags.has('Particle')) {
+    return 'particle';
+  }
+  return null;
+}
+
+function isCalendarTimeNoun(
+  term: TaggedTerm,
+  previous: TaggedTerm | null,
+): boolean {
+  if (!term.tags.has('Verb') || !CALENDAR_TIME_NOUNS.has(term.normalized) || previous === null) {
+    return false;
+  }
+  return previous.tags.has('Date') || previous.tags.has('WeekDay') || previous.tags.has('Month');
+}
+
+function inferQuestionWordPartOfSpeech(
+  term: TaggedTerm,
+  next: TaggedTerm | null,
+): PartOfSpeech | null {
+  if (!term.tags.has('QuestionWord')) {
+    return null;
+  }
+  if (ADVERBIAL_QUESTION_WORDS.has(term.normalized)) {
+    return 'adverb';
+  }
+  if (next !== null && (next.tags.has('Noun') || next.tags.has('Adjective'))) {
+    return 'determiner';
+  }
+  return 'pronoun';
+}
+
+export function inferPartsOfSpeech(terms: TaggedTerm[]): Array<PartOfSpeech | null> {
+  return terms.map((term, index) => {
+    const previous = index > 0 ? terms[index - 1] : null;
+    const next = index < (terms.length - 1) ? terms[index + 1] : null;
+
+    if (isCalendarTimeNoun(term, previous)) {
+      return 'noun';
+    }
+    if (
+      term.normalized === 'to'
+      && next !== null
+      && next.tags.has('Verb')
+      && next.tags.has('Infinitive')
+    ) {
+      return 'particle';
+    }
+    const questionWordPartOfSpeech = inferQuestionWordPartOfSpeech(term, next);
+    return questionWordPartOfSpeech ?? inferPartOfSpeech(term);
+  });
+}
+
 function extractConjugatedAdjective(doc: ReturnType<NlpLike>): string {
   const conjugation = doc.adjectives().conjugate();
   if (conjugation.length === 0) {
@@ -507,6 +616,8 @@ export function contextualDeinflectTaggedTerms(
 ): DeinflectionResult {
   const tokens: string[] = [];
   const properFlags: boolean[] = [];
+  const partsOfSpeech: Array<PartOfSpeech | null> = [];
+  const inferredPartsOfSpeech = inferPartsOfSpeech(terms);
 
   for (let index = 0; index < terms.length; index += 1) {
     const term = terms[index];
@@ -517,6 +628,7 @@ export function contextualDeinflectTaggedTerms(
     const strongShapeProper = isStrongProperShapeTerm(term, next);
     const properByLexicon = explicitProperTag || strongShapeProper || (tagProper && properNounLexicon.has(normalized));
     properFlags.push(properByLexicon);
+    partsOfSpeech.push(properByLexicon ? 'proper-noun' : inferredPartsOfSpeech[index]);
 
     if (excludeProperNouns && properByLexicon) {
       tokens.push('');
@@ -530,5 +642,5 @@ export function contextualDeinflectTaggedTerms(
     tokens.push(selected);
   }
 
-  return { tokens, properFlags };
+  return { tokens, properFlags, partsOfSpeech };
 }

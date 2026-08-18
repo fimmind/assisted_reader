@@ -1,8 +1,9 @@
 import { WORD_RE } from './constants';
 import { buildHighConfidenceProperNounLexicon, buildTaggedSentences, contextualDeinflectTaggedTerms } from './nlp';
+import { createDefinitionTarget, definitionTargetKey } from './definition-target';
 import { normalizeToken } from './math';
 import { estimateTheta, predictKnownProbability } from './model';
-import type { BookChapter, BookStats, ParagraphAnalysis, ParagraphToken, ReaderSettings, TaggedSentence, UserProfile, VocabularyModel } from './types';
+import type { BookChapter, BookStats, DefinitionTarget, ParagraphAnalysis, ParagraphToken, PartOfSpeech, ReaderSettings, TaggedSentence, UserProfile, VocabularyModel } from './types';
 
 function resolveKnowledgeThreshold(value: number): number {
   if (!Number.isFinite(value)) {
@@ -80,8 +81,13 @@ function buildDeinflectedTerms(
   lemmaDict: Record<string, string>,
   nlp: ChapterAnalysisInput['nlp'],
   lemmaCandidateCache: Map<string, string[]>,
-): Array<{ lemma: string; proper: boolean; raw: string }> {
-  const deinflectedTerms: Array<{ lemma: string; proper: boolean; raw: string }> = [];
+): Array<{ lemma: string; proper: boolean; raw: string; partOfSpeech: PartOfSpeech | null }> {
+  const deinflectedTerms: Array<{
+    lemma: string;
+    proper: boolean;
+    raw: string;
+    partOfSpeech: PartOfSpeech | null;
+  }> = [];
 
   for (const sentence of taggedSentences) {
     const deinflected = contextualDeinflectTaggedTerms(
@@ -99,6 +105,7 @@ function buildDeinflectedTerms(
         raw: sentence.terms[index].raw,
         lemma: deinflected.tokens[index],
         proper: deinflected.properFlags[index],
+        partOfSpeech: deinflected.partsOfSpeech[index] ?? null,
       });
     }
   }
@@ -139,21 +146,21 @@ function buildParagraphTokenList(
     const aligned = deinflectedTerms[sequentialIndex];
     const lemma = aligned?.lemma && aligned.lemma.length > 0 ? aligned.lemma : normalizeToken(raw);
     const proper = aligned?.proper ?? false;
+    const partOfSpeech = aligned?.partOfSpeech ?? null;
     sequentialIndex += 1;
 
-    if (!isAnalyzableLemma(lemma)) {
-      match = WORD_RE.exec(paragraph);
-      continue;
+    const analyzable = isAnalyzableLemma(lemma);
+    let pKnown = 1;
+    if (analyzable) {
+      const cachedKnownProbability = knownProbabilityCache.get(lemma);
+      pKnown = cachedKnownProbability === undefined
+        ? predictKnownProbability(model, profile, theta, lemma)
+        : cachedKnownProbability;
+      if (cachedKnownProbability === undefined) {
+        knownProbabilityCache.set(lemma, pKnown);
+      }
     }
-
-    const cachedKnownProbability = knownProbabilityCache.get(lemma);
-    const pKnown = cachedKnownProbability === undefined
-      ? predictKnownProbability(model, profile, theta, lemma)
-      : cachedKnownProbability;
-    if (cachedKnownProbability === undefined) {
-      knownProbabilityCache.set(lemma, pKnown);
-    }
-    const unknown = !proper && lemma.length > 0 && pKnown < threshold;
+    const unknown = analyzable && !proper && lemma.length > 0 && pKnown < threshold;
 
     tokens.push({
       raw,
@@ -163,6 +170,7 @@ function buildParagraphTokenList(
       pKnown,
       unknown,
       proper,
+      partOfSpeech,
     });
     match = WORD_RE.exec(paragraph);
   }
@@ -275,16 +283,28 @@ function collectParagraphLemmaHistogram(
   return { totalTokenCount, nonProperLemmaCounts };
 }
 
-function scoreCardLemmas(tokens: ParagraphToken[], threshold: number): string[] {
-  const frequencies = new Map<string, { count: number; pKnown: number; firstIndex: number }>();
+function scoreCardTargets(tokens: ParagraphToken[], threshold: number): DefinitionTarget[] {
+  const frequencies = new Map<string, {
+    target: DefinitionTarget;
+    count: number;
+    pKnown: number;
+    firstIndex: number;
+  }>();
   tokens.forEach((token, index) => {
     if (!token.unknown) {
       return;
     }
 
-    const current = frequencies.get(token.lemma);
+    const target = createDefinitionTarget(token.lemma, token.partOfSpeech);
+    const key = definitionTargetKey(target);
+    const current = frequencies.get(key);
     if (!current) {
-      frequencies.set(token.lemma, { count: 1, pKnown: token.pKnown, firstIndex: index });
+      frequencies.set(key, {
+        target,
+        count: 1,
+        pKnown: token.pKnown,
+        firstIndex: index,
+      });
       return;
     }
 
@@ -295,11 +315,11 @@ function scoreCardLemmas(tokens: ParagraphToken[], threshold: number): string[] 
   });
 
   const denominator = 1 - threshold;
-  const scored = Array.from(frequencies.entries()).map(([lemma, value]) => {
+  const scored = Array.from(frequencies.values()).map((value) => {
     const uncertaintyScore = denominator <= 0 ? 1 : (1 - value.pKnown) / denominator;
     const importance = (0.7 * value.count) + (0.3 * uncertaintyScore);
     return {
-      lemma,
+      target: value.target,
       importance,
       firstIndex: value.firstIndex,
     };
@@ -312,7 +332,7 @@ function scoreCardLemmas(tokens: ParagraphToken[], threshold: number): string[] 
     return left.firstIndex - right.firstIndex;
   });
 
-  return scored.map((entry) => entry.lemma);
+  return scored.map((entry) => entry.target);
 }
 
 export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[] {
@@ -348,48 +368,49 @@ export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[]
     return tokens;
   });
 
-  const selectedCardLemmasByParagraph: string[][] = [];
+  const selectedCardTargetsByParagraph: DefinitionTarget[][] = [];
   if (includeCards) {
-    const rankedCardLemmasByParagraph = paragraphTokens.map((tokens) => scoreCardLemmas(tokens, threshold));
-    for (let paragraphIndex = 0; paragraphIndex < rankedCardLemmasByParagraph.length; paragraphIndex += 1) {
-      const rankedLemmas = rankedCardLemmasByParagraph[paragraphIndex];
-      const nearbyShownLemmas = new Set<string>();
+    const rankedCardTargetsByParagraph = paragraphTokens.map((tokens) => scoreCardTargets(tokens, threshold));
+    for (let paragraphIndex = 0; paragraphIndex < rankedCardTargetsByParagraph.length; paragraphIndex += 1) {
+      const rankedTargets = rankedCardTargetsByParagraph[paragraphIndex];
+      const nearbyShownTargetKeys = new Set<string>();
       if (deduplicationRadius > 0) {
         const fromIndex = Math.max(0, paragraphIndex - deduplicationRadius);
         for (let index = fromIndex; index < paragraphIndex; index += 1) {
-          const previousSelection = selectedCardLemmasByParagraph[index] ?? [];
-          for (const lemma of previousSelection) {
-            nearbyShownLemmas.add(lemma);
+          const previousSelection = selectedCardTargetsByParagraph[index] ?? [];
+          for (const target of previousSelection) {
+            nearbyShownTargetKeys.add(definitionTargetKey(target));
           }
         }
       }
 
-      const selectedLemmas: string[] = [];
-      for (const lemma of rankedLemmas) {
-        if (selectedLemmas.length >= input.maxCardsPerParagraph) {
+      const selectedTargets: DefinitionTarget[] = [];
+      for (const target of rankedTargets) {
+        if (selectedTargets.length >= input.maxCardsPerParagraph) {
           break;
         }
-        if (nearbyShownLemmas.has(lemma)) {
+        const key = definitionTargetKey(target);
+        if (nearbyShownTargetKeys.has(key)) {
           continue;
         }
-        selectedLemmas.push(lemma);
-        nearbyShownLemmas.add(lemma);
+        selectedTargets.push(target);
+        nearbyShownTargetKeys.add(key);
       }
-      selectedCardLemmasByParagraph.push(selectedLemmas);
+      selectedCardTargetsByParagraph.push(selectedTargets);
     }
   } else {
     for (let paragraphIndex = 0; paragraphIndex < paragraphTokens.length; paragraphIndex += 1) {
-      selectedCardLemmasByParagraph.push([]);
+      selectedCardTargetsByParagraph.push([]);
     }
   }
 
   return input.chapter.paragraphs.map((paragraph, paragraphIndex) => {
     const tokens = paragraphTokens[paragraphIndex] ?? [];
-    const cardLemmas = selectedCardLemmasByParagraph[paragraphIndex] ?? [];
+    const cardTargets = selectedCardTargetsByParagraph[paragraphIndex] ?? [];
     return {
       paragraphText: paragraph,
       tokens,
-      cardLemmas,
+      cardTargets,
     };
   });
 }

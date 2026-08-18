@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { LEXICON_SCHEMA_VERSION } from './lexicon-schema.mjs';
 
 const ROOT_DIR = process.cwd();
 const LEXICON_DIR = path.join(ROOT_DIR, 'data', 'lexicon');
@@ -24,11 +25,17 @@ function hasValidLexiconArtifacts() {
     return false;
   }
 
-  if (!indexPayload || typeof indexPayload !== 'object') {
+  if (
+    !indexPayload
+    || typeof indexPayload !== 'object'
+    || indexPayload.schemaVersion !== LEXICON_SCHEMA_VERSION
+    || !indexPayload.chunks
+    || typeof indexPayload.chunks !== 'object'
+  ) {
     return false;
   }
 
-  const chunkNames = Object.values(indexPayload);
+  const chunkNames = Object.values(indexPayload.chunks);
   if (chunkNames.length === 0) {
     return false;
   }

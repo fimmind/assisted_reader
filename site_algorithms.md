@@ -298,8 +298,9 @@ Additional algorithmic asset contracts:
   - JSON object map `{ inflected_lower_word: lemma_lower_word }`
   - if missing/unreadable, runtime uses `{}`.
 - `data/lexicon/index.json` + `data/lexicon/*.json`:
-  - index shape: `{ bucket_key: file_name }`
-  - each chunk file shape: array of `{ word: string, ipa: string, pos: string, definition: string }`.
+  - index shape: `{ schemaVersion: 2, chunks: { bucket_key: file_name } }`
+  - each chunk contains words with POS-specific sense groups:
+    `{ word: string, senses: Array<{ partOfSpeech, ipa, ipaUs?, ipaUk?, definitions }> }`.
 
 ---
 
@@ -501,11 +502,30 @@ Script: `scripts/build-lexicon-from-wiktextract.mjs`
    - if missing, download from `https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz`
    - if present, reuse local archive
 4. Reuse any already bundled entries from existing chunk files referenced by `data/lexicon/index.json`
+   only when their schema version is current
 5. Fallbacks:
-   - definition: `"Definition unavailable in this build."`
-   - IPA: empty string
+   - a word without extracted senses is emitted with an empty `senses` array
+   - runtime displays `"Definition unavailable in this build."`
 6. Emit:
    - chunked files `data/lexicon/{a..z,_.json}` + `index.json`
+
+Wiktextract records are accumulated by `(word, partOfSpeech)` rather than using
+the first record for a spelling. Each POS group retains up to two deduplicated
+definitions and its own pronunciation variants.
+
+Runtime POS selection:
+
+- Compromise tags are normalized to the same canonical POS vocabulary used by
+  the lexicon.
+- Deterministic contextual corrections cover articles, question words,
+  infinitival `to`, and calendar-time noun phrases where raw Compromise tags
+  are ambiguous or incorrect.
+- contextual deinflection returns aligned lemmas and parts of speech.
+- automatic card ranking and nearby-card deduplication use `(lemma, POS)` keys.
+- when the inferred POS exists, only that group is displayed.
+- when POS is unknown or the inferred POS is absent, all available groups are
+  displayed.
+- known/unknown observations remain keyed by lemma only.
 
 Runtime load strategy:
 

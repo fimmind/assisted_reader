@@ -5,11 +5,13 @@ import {
   buildTaggedSentences,
   buildHighConfidenceProperNounLexicon,
   contextualDeinflectTaggedTerms,
+  inferPartsOfSpeech,
   tagSentenceTerms,
 } from '../src/core/nlp.js';
 import { analyzeChapter } from '../src/core/reader-analysis.js';
+import { resolveLexiconEntry } from '../src/core/lexicon.js';
 import { normalizeToken } from '../src/core/math.js';
-import type { ReaderSettings, TaggedSentence, TaggedTerm, UserProfile, VocabularyModel } from '../src/core/types.js';
+import type { LexiconEntry, PartOfSpeech, ReaderSettings, TaggedSentence, TaggedTerm, UserProfile, VocabularyModel } from '../src/core/types.js';
 
 function createStubNlpWithTaggedTerms(terms: Array<{ text: string; tags: Record<string, boolean> | string[] }>) {
   return (_text: string) => ({
@@ -178,6 +180,81 @@ function assertSentenceDeinflectionWithCompromiseRuntime(
     assert.equal(found, true, `Token '${pair.token}' not found in sentence: ${sentence}`);
   }
 }
+
+function assertSentencePartsOfSpeech(
+  sentence: string,
+  expected: Array<{ token: string; partOfSpeech: PartOfSpeech | null }>,
+): void {
+  const terms = tagSentenceTerms(sentence, nlp);
+  const partsOfSpeech = inferPartsOfSpeech(terms);
+
+  assert.equal(partsOfSpeech.length, terms.length, `POS count mismatch for sentence: ${sentence}`);
+  assert.deepEqual(
+    terms.map((term, index) => ({ token: term.normalized, partOfSpeech: partsOfSpeech[index] })),
+    expected,
+  );
+}
+
+test('contextual POS inference handles the provided Hitchhiker sentence', () => {
+  const sentence = 'On Wednesday night it had rained very heavily, the lane was wet and muddy, but the Thursday morning sun was bright and clear as it shone on Arthur Dent’s house for what was to be the last time.';
+
+  assertSentencePartsOfSpeech(sentence, [
+    { token: 'on', partOfSpeech: 'preposition' },
+    { token: 'wednesday', partOfSpeech: 'noun' },
+    { token: 'night', partOfSpeech: 'noun' },
+    { token: 'it', partOfSpeech: 'pronoun' },
+    { token: 'had', partOfSpeech: 'verb' },
+    { token: 'rained', partOfSpeech: 'verb' },
+    { token: 'very', partOfSpeech: 'adverb' },
+    { token: 'heavily', partOfSpeech: 'adverb' },
+    { token: 'the', partOfSpeech: 'article' },
+    { token: 'lane', partOfSpeech: 'noun' },
+    { token: 'was', partOfSpeech: 'verb' },
+    { token: 'wet', partOfSpeech: 'adjective' },
+    { token: 'and', partOfSpeech: 'conjunction' },
+    { token: 'muddy', partOfSpeech: 'adjective' },
+    { token: 'but', partOfSpeech: 'conjunction' },
+    { token: 'the', partOfSpeech: 'article' },
+    { token: 'thursday', partOfSpeech: 'noun' },
+    { token: 'morning', partOfSpeech: 'noun' },
+    { token: 'sun', partOfSpeech: 'noun' },
+    { token: 'was', partOfSpeech: 'verb' },
+    { token: 'bright', partOfSpeech: 'adjective' },
+    { token: 'and', partOfSpeech: 'conjunction' },
+    { token: 'clear', partOfSpeech: 'adjective' },
+    { token: 'as', partOfSpeech: 'preposition' },
+    { token: 'it', partOfSpeech: 'pronoun' },
+    { token: 'shone', partOfSpeech: 'verb' },
+    { token: 'on', partOfSpeech: 'preposition' },
+    { token: 'arthur', partOfSpeech: 'proper-noun' },
+    { token: "dent's", partOfSpeech: 'proper-noun' },
+    { token: 'house', partOfSpeech: 'noun' },
+    { token: 'for', partOfSpeech: 'preposition' },
+    { token: 'what', partOfSpeech: 'pronoun' },
+    { token: 'was', partOfSpeech: 'verb' },
+    { token: 'to', partOfSpeech: 'particle' },
+    { token: 'be', partOfSpeech: 'verb' },
+    { token: 'the', partOfSpeech: 'article' },
+    { token: 'last', partOfSpeech: 'adjective' },
+    { token: 'time', partOfSpeech: 'noun' },
+  ]);
+});
+
+test('contextual POS inference preserves genuine verb and noun ambiguity', () => {
+  assertSentencePartsOfSpeech('They night the room.', [
+    { token: 'they', partOfSpeech: 'pronoun' },
+    { token: 'night', partOfSpeech: 'verb' },
+    { token: 'the', partOfSpeech: 'article' },
+    { token: 'room', partOfSpeech: 'noun' },
+  ]);
+
+  assertSentencePartsOfSpeech('I record the record.', [
+    { token: 'i', partOfSpeech: 'pronoun' },
+    { token: 'record', partOfSpeech: 'verb' },
+    { token: 'the', partOfSpeech: 'article' },
+    { token: 'record', partOfSpeech: 'noun' },
+  ]);
+});
 
 test('compromise object tags are parsed and explicit proper names are excluded', () => {
   const nlp = createStubNlpWithTaggedTerms([
@@ -907,7 +984,7 @@ test('Hitchhiker apostrophe forms deinflect to expected lemmas with compromise r
   }
 });
 
-test('reader analysis excludes one-letter and two-letter words from excerpt', () => {
+test('reader analysis retains short tokens without selecting them for cards', () => {
   const excerpt = '“Ah yes, Vogonity—sorry—of the poet’s compassionate soul”—Arthur felt he was on the homestretch now—“which contrives through the medium of the verse structure to sublimate this, transcend that, and come to terms with the fundamental dichotomies of the other”—he was reaching a triumphant crescendo—“and one is left with a profound and vivid insight into … into … er …” (which suddenly gave out on him). Ford leaped in with the coup de grace: “Into whatever it was the poem was about!” he yelled. Out of the corner of his mouth: “Well done, Arthur, that was very good.”';
 
   const chapter = {
@@ -963,24 +1040,81 @@ test('reader analysis excludes one-letter and two-letter words from excerpt', ()
   assert.equal(analyses.length, 1);
 
   const paragraph = analyses[0];
-  for (const token of paragraph.tokens) {
-    const letterCount = token.lemma.replace(/['’]/g, '').length;
+  for (const target of paragraph.cardTargets) {
+    const letterCount = target.lemma.replace(/['’]/g, '').length;
     assert.ok(
       letterCount > 2,
-      `Expected analyzed token lemma to be longer than 2 letters, got '${token.lemma}'`,
-    );
-  }
-  for (const lemma of paragraph.cardLemmas) {
-    const letterCount = lemma.replace(/['’]/g, '').length;
-    assert.ok(
-      letterCount > 2,
-      `Expected card lemma to be longer than 2 letters, got '${lemma}'`,
+      `Expected card lemma to be longer than 2 letters, got '${target.lemma}'`,
     );
   }
 
-  const containsShortLemma = paragraph.tokens.some((token) => {
+  const shortTokens = paragraph.tokens.filter((token) => {
     const normalized = normalizeToken(token.raw).replace(/['’]/g, '');
     return normalized.length <= 2;
   });
-  assert.equal(containsShortLemma, false);
+  assert.ok(shortTokens.length > 0);
+  assert.ok(shortTokens.every((token) => token.unknown === false));
+});
+
+test('reader analysis keeps separate automatic targets for noun and verb usages', () => {
+  const model: VocabularyModel = {
+    modelKey: 'pos-test',
+    modelName: 'pos-test',
+    words: ['record'],
+    accuracy: [0.4],
+    difficulties: [0],
+    wordToIdx: new Map<string, number>([['record', 0]]),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+  const profile: UserProfile = {
+    id: 'p1',
+    name: 'Test',
+    observations: {},
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  const settings: ReaderSettings = {
+    fontSize: 18,
+    lineSpacing: 'Normal',
+    fontChoice: 'Serif',
+    pageWidth: 'Normal',
+    maxWordsPerParagraph: 3,
+    deduplicationRadius: 0,
+    knowledgeThreshold: 0.6,
+    englishVariant: 'US',
+  };
+
+  const analysis = analyzeChapter({
+    chapter: { title: 'POS', paragraphs: ['I record the record.'] },
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp,
+    maxCardsPerParagraph: 3,
+  })[0];
+
+  assert.deepEqual(analysis.cardTargets, [
+    { lemma: 'record', partOfSpeech: 'verb' },
+    { lemma: 'record', partOfSpeech: 'noun' },
+  ]);
+});
+
+test('lexicon resolution selects matching POS and otherwise exposes every group', () => {
+  const entry: LexiconEntry = {
+    word: 'record',
+    senses: [
+      { partOfSpeech: 'noun', ipa: '/noun/', definitions: ['A stored item.'] },
+      { partOfSpeech: 'verb', ipa: '/verb/', definitions: ['To store information.'] },
+    ],
+  };
+
+  const verbEntry = resolveLexiconEntry(entry, { lemma: 'record', partOfSpeech: 'verb' });
+  assert.deepEqual(verbEntry.senses.map((sense) => sense.partOfSpeech), ['verb']);
+
+  const unmatchedEntry = resolveLexiconEntry(entry, { lemma: 'record', partOfSpeech: 'adjective' });
+  assert.deepEqual(unmatchedEntry.senses.map((sense) => sense.partOfSpeech), ['noun', 'verb']);
+
+  const ambiguousEntry = resolveLexiconEntry(entry, { lemma: 'record', partOfSpeech: null });
+  assert.deepEqual(ambiguousEntry.senses.map((sense) => sense.partOfSpeech), ['noun', 'verb']);
 });

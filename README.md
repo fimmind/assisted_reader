@@ -146,15 +146,17 @@ The builder matches entries to words from `data/words.csv`, prefers English (`la
 
 Generated lexicon entry behavior:
 
-- up to 2 bundled definitions per word (`definitions`), with near-identical inflection glosses filtered out
-- separate pronunciation fields for US/UK variants when available (`ipaUs`, `ipaUk`)
-- compatibility fields (`definition`, `ipa`) retained for runtime fallback
+- definitions are grouped by part of speech in each word's `senses` array
+- up to 2 bundled definitions per part of speech, with near-identical inflection glosses filtered out
+- each part-of-speech group carries its own US/UK pronunciation fields when available
+- the lexicon index is schema-versioned so incompatible generated assets are rebuilt automatically
 
 Runtime display behavior:
 
 - Settings include **English Variant** (`US` or `UK`)
 - definition cards select pronunciation by that variant (`ipaUs`/`ipaUk`) with fallback when one variant is missing
-- the same setting path is intended to influence definitions in future work
+- contextual POS inference selects the matching definition group for automatic cards, clicked words, and nested lookups
+- when POS is unknown or unavailable in the lexicon, cards display all available groups with visible POS labels
 
 These assets must exist in `public/data/` for runtime fetches. `sync:data` handles this.
 
@@ -165,7 +167,7 @@ These assets must exist in `public/data/` for runtime fetches. `sync:data` handl
 - `data/lexicon/index.json`
 - every chunk file referenced by `index.json`
 
-and performs schema sanity checks on sampled chunk entries to ensure definitions are present.
+and validates every chunk entry, POS group, and definition against the current schema.
 
 ## Useful commands
 

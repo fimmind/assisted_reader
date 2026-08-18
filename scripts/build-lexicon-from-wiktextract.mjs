@@ -5,6 +5,11 @@ import https from 'node:https';
 import path from 'node:path';
 import readline from 'node:readline';
 import zlib from 'node:zlib';
+import {
+  CANONICAL_PARTS_OF_SPEECH,
+  LEXICON_SCHEMA_VERSION,
+  WIKTEXTRACT_POS_MAP,
+} from './lexicon-schema.mjs';
 
 const ROOT_DIR = process.cwd();
 const DATA_DIR = path.join(ROOT_DIR, 'data');
@@ -31,6 +36,18 @@ function normalizeSpaces(value) {
 function resolveChunkKey(word) {
   const firstChar = word[0] ?? '_';
   return /^[a-z]$/.test(firstChar) ? firstChar : '_';
+}
+
+function normalizePartOfSpeech(value, unmappedPartsOfSpeech) {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  const mapped = WIKTEXTRACT_POS_MAP.get(raw);
+  if (mapped) {
+    return mapped;
+  }
+  if (raw.length > 0) {
+    unmappedPartsOfSpeech.add(raw);
+  }
+  return 'other';
 }
 
 function parseCsvRow(line) {
@@ -99,12 +116,18 @@ function loadExistingLexiconFromChunks() {
   }
 
   const indexPayload = JSON.parse(fs.readFileSync(INDEX_OUTPUT_PATH, 'utf8'));
-  if (!indexPayload || typeof indexPayload !== 'object') {
-    throw new Error(`Invalid existing lexicon index payload at ${INDEX_OUTPUT_PATH}: expected object`);
+  if (
+    !indexPayload
+    || typeof indexPayload !== 'object'
+    || indexPayload.schemaVersion !== LEXICON_SCHEMA_VERSION
+    || !indexPayload.chunks
+    || typeof indexPayload.chunks !== 'object'
+  ) {
+    return new Map();
   }
 
   const map = new Map();
-  const chunkNames = Object.values(indexPayload);
+  const chunkNames = Object.values(indexPayload.chunks);
   for (const chunkName of chunkNames) {
     if (typeof chunkName !== 'string' || chunkName.length === 0) {
       continue;
@@ -127,30 +150,35 @@ function loadExistingLexiconFromChunks() {
       if (word.length === 0 || map.has(word)) {
         continue;
       }
-      const definition = typeof entry.definition === 'string' ? normalizeSpaces(entry.definition) : '';
-      if (definition.length === 0) {
+      if (!Array.isArray(entry.senses)) {
         continue;
       }
-
-      const definitions = Array.isArray(entry.definitions)
-        ? entry.definitions
-          .filter((item) => typeof item === 'string')
-          .map((item) => normalizeSpaces(item))
-          .filter((item) => item.length > 0)
-          .slice(0, 2)
-        : [definition];
-      const pos = typeof entry.pos === 'string' ? entry.pos.trim() : '';
-      const ipa = typeof entry.ipa === 'string' ? normalizeSpaces(entry.ipa) : '';
-      const ipaUs = typeof entry.ipaUs === 'string' ? normalizeSpaces(entry.ipaUs) : '';
-      const ipaUk = typeof entry.ipaUk === 'string' ? normalizeSpaces(entry.ipaUk) : '';
+      const senses = entry.senses
+        .filter((sense) => sense && typeof sense === 'object')
+        .map((sense) => {
+          const definitions = Array.isArray(sense.definitions)
+            ? sense.definitions
+              .filter((item) => typeof item === 'string')
+              .map((item) => normalizeSpaces(item))
+              .filter((item) => item.length > 0)
+              .slice(0, 2)
+            : [];
+          return {
+            partOfSpeech: typeof sense.partOfSpeech === 'string' ? sense.partOfSpeech.trim() : 'other',
+            ipa: typeof sense.ipa === 'string' ? normalizeSpaces(sense.ipa) : '',
+            ipaUs: typeof sense.ipaUs === 'string' && sense.ipaUs.trim().length > 0
+              ? normalizeSpaces(sense.ipaUs)
+              : undefined,
+            ipaUk: typeof sense.ipaUk === 'string' && sense.ipaUk.trim().length > 0
+              ? normalizeSpaces(sense.ipaUk)
+              : undefined,
+            definitions,
+          };
+        })
+        .filter((sense) => sense.definitions.length > 0);
       map.set(word, {
         word,
-        ipa: ipa.length > 0 ? ipa : (ipaUs || ipaUk),
-        ipaUs: ipaUs.length > 0 ? ipaUs : undefined,
-        ipaUk: ipaUk.length > 0 ? ipaUk : undefined,
-        pos,
-        definition,
-        definitions: definitions.length > 0 ? definitions : [definition],
+        senses,
       });
     }
   }
@@ -174,40 +202,39 @@ function loadOverrides() {
       continue;
     }
     const word = normalizeWord(entry.word);
-    const definition = typeof entry.definition === 'string' ? normalizeSpaces(entry.definition) : '';
-    if (word.length === 0 || definition.length === 0) {
-      continue;
+    if (word.length === 0 || !Array.isArray(entry.senses)) {
+      throw new Error(`Invalid lexicon override: word=${word || '<empty>'} senses must be an array`);
     }
-    const ipa = typeof entry.ipa === 'string' ? normalizeSpaces(entry.ipa) : '';
-    const ipaUs = typeof entry.ipaUs === 'string' ? normalizeSpaces(entry.ipaUs) : '';
-    const ipaUk = typeof entry.ipaUk === 'string' ? normalizeSpaces(entry.ipaUk) : '';
-    const definitions = Array.isArray(entry.definitions)
-      ? entry.definitions
-        .filter((item) => typeof item === 'string')
-        .map((item) => normalizeSpaces(item))
-        .filter((item) => item.length > 0)
-      : [definition];
-    const uniqueDefinitions = [];
-    const seen = new Set();
-    for (const item of definitions) {
-      if (!seen.has(item)) {
-        uniqueDefinitions.push(item);
-        seen.add(item);
+    const senses = entry.senses.map((sense) => {
+      if (!sense || typeof sense !== 'object') {
+        throw new Error(`Invalid lexicon override sense: word=${word}`);
       }
-      if (uniqueDefinitions.length >= 2) {
-        break;
+      const partOfSpeech = typeof sense.partOfSpeech === 'string' ? sense.partOfSpeech.trim() : '';
+      if (!CANONICAL_PARTS_OF_SPEECH.has(partOfSpeech)) {
+        throw new Error(`Invalid lexicon override POS: word=${word} partOfSpeech=${partOfSpeech}`);
       }
-    }
-    const pos = typeof entry.pos === 'string' ? entry.pos.trim() : '';
-    map.set(word, {
-      word,
-      ipa: ipa.length > 0 ? ipa : (ipaUs || ipaUk),
-      ipaUs: ipaUs.length > 0 ? ipaUs : undefined,
-      ipaUk: ipaUk.length > 0 ? ipaUk : undefined,
-      pos,
-      definition: uniqueDefinitions[0] ?? definition,
-      definitions: uniqueDefinitions.length > 0 ? uniqueDefinitions : [definition],
+      const definitions = Array.isArray(sense.definitions)
+        ? sense.definitions
+          .filter((item) => typeof item === 'string')
+          .map((item) => normalizeSpaces(item))
+          .filter((item) => item.length > 0)
+          .slice(0, 2)
+        : [];
+      if (definitions.length === 0) {
+        throw new Error(`Invalid lexicon override definitions: word=${word} partOfSpeech=${partOfSpeech}`);
+      }
+      const ipa = typeof sense.ipa === 'string' ? normalizeSpaces(sense.ipa) : '';
+      const ipaUs = typeof sense.ipaUs === 'string' ? normalizeSpaces(sense.ipaUs) : '';
+      const ipaUk = typeof sense.ipaUk === 'string' ? normalizeSpaces(sense.ipaUk) : '';
+      return {
+        partOfSpeech,
+        ipa: ipa.length > 0 ? ipa : (ipaUs || ipaUk),
+        ipaUs: ipaUs.length > 0 ? ipaUs : undefined,
+        ipaUk: ipaUk.length > 0 ? ipaUk : undefined,
+        definitions,
+      };
     });
+    map.set(word, { word, senses });
   }
   return map;
 }
@@ -362,17 +389,13 @@ function collectPrimaryDefinitions(senses) {
 function toFallbackEntry(word) {
   return {
     word,
-    ipa: '',
-    ipaUs: undefined,
-    ipaUk: undefined,
-    pos: '',
-    definition: 'Definition unavailable in this build.',
-    definitions: ['Definition unavailable in this build.'],
+    senses: [],
   };
 }
 
 async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
   const extractedMap = new Map();
+  const unmappedPartsOfSpeech = new Set();
 
   const inputStream = fs.createReadStream(inputPath);
   const textStream = inputPath.endsWith('.gz') ? inputStream.pipe(zlib.createGunzip()) : inputStream;
@@ -416,7 +439,7 @@ async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
     }
 
     const word = normalizeWord(record.word);
-    if (!targetWords.has(word) || extractedMap.has(word) || overridesMap.has(word)) {
+    if (!targetWords.has(word) || overridesMap.has(word)) {
       continue;
     }
 
@@ -425,17 +448,38 @@ async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
       continue;
     }
 
-    const pos = typeof record.pos === 'string' ? record.pos.trim() : '';
+    const partOfSpeech = normalizePartOfSpeech(record.pos, unmappedPartsOfSpeech);
     const pronunciations = pickPronunciations(record.sounds);
-    extractedMap.set(word, {
-      word,
-      ipa: pronunciations.ipa,
-      ipaUs: pronunciations.ipaUs.length > 0 ? pronunciations.ipaUs : undefined,
-      ipaUk: pronunciations.ipaUk.length > 0 ? pronunciations.ipaUk : undefined,
-      pos,
-      definition: definitions[0],
-      definitions,
-    });
+    const entry = extractedMap.get(word) ?? { word, senses: [] };
+    const existingSense = entry.senses.find((sense) => sense.partOfSpeech === partOfSpeech);
+    if (existingSense) {
+      const seenDefinitions = new Set(existingSense.definitions.map((definition) => normalizeGlossIdentity(definition)));
+      for (const definition of definitions) {
+        const identity = normalizeGlossIdentity(definition);
+        if (!seenDefinitions.has(identity) && existingSense.definitions.length < 2) {
+          existingSense.definitions.push(definition);
+          seenDefinitions.add(identity);
+        }
+      }
+      if (existingSense.ipa.length === 0 && pronunciations.ipa.length > 0) {
+        existingSense.ipa = pronunciations.ipa;
+      }
+      if (!existingSense.ipaUs && pronunciations.ipaUs.length > 0) {
+        existingSense.ipaUs = pronunciations.ipaUs;
+      }
+      if (!existingSense.ipaUk && pronunciations.ipaUk.length > 0) {
+        existingSense.ipaUk = pronunciations.ipaUk;
+      }
+    } else {
+      entry.senses.push({
+        partOfSpeech,
+        ipa: pronunciations.ipa,
+        ipaUs: pronunciations.ipaUs.length > 0 ? pronunciations.ipaUs : undefined,
+        ipaUk: pronunciations.ipaUk.length > 0 ? pronunciations.ipaUk : undefined,
+        definitions: definitions.slice(0, 2),
+      });
+    }
+    extractedMap.set(word, entry);
   }
 
   console.log('lexicon-extract-progress', {
@@ -443,6 +487,11 @@ async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
     extractedDefinitions: extractedMap.size,
     targetWords: targetWords.size,
   });
+  if (unmappedPartsOfSpeech.size > 0) {
+    console.warn('lexicon-unmapped-parts-of-speech', {
+      values: Array.from(unmappedPartsOfSpeech).sort(),
+    });
+  }
 
   return extractedMap;
 }
@@ -623,19 +672,29 @@ async function main() {
     chunkMap.set(chunkKey, chunk);
   }
 
-  const indexPayload = {};
+  const chunkIndex = {};
   const orderedChunkKeys = ['_', ...'abcdefghijklmnopqrstuvwxyz'.split('')];
   for (const chunkKey of orderedChunkKeys) {
     const chunkEntries = chunkMap.get(chunkKey) ?? [];
     const chunkName = `${chunkKey}.json`;
-    indexPayload[chunkKey] = chunkName;
+    chunkIndex[chunkKey] = chunkName;
     await writeJsonFile(path.join(CHUNK_DIR, chunkName), chunkEntries);
   }
 
+  const indexPayload = {
+    schemaVersion: LEXICON_SCHEMA_VERSION,
+    chunks: chunkIndex,
+  };
   await writeJsonFile(INDEX_OUTPUT_PATH, indexPayload);
 
+  const totalSenseGroups = entries.reduce((total, entry) => total + entry.senses.length, 0);
+  const multiPartOfSpeechWords = entries.filter((entry) => entry.senses.length > 1).length;
+
   console.log('lexicon-build-complete', {
+    schemaVersion: LEXICON_SCHEMA_VERSION,
     totalWords: targetWords.size,
+    totalSenseGroups,
+    multiPartOfSpeechWords,
     extractedDefinitions: extractedMap.size,
     reusedExistingEntries: reusedEntries,
     overrides: overridesMap.size,

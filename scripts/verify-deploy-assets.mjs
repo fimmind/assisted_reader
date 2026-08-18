@@ -1,5 +1,6 @@
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { CANONICAL_PARTS_OF_SPEECH, LEXICON_SCHEMA_VERSION } from './lexicon-schema.mjs';
 
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
 const requiredFiles = [
@@ -26,23 +27,26 @@ async function verifyLexiconChunks() {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Invalid lexicon index payload in dist/data/lexicon/index.json');
   }
-  const chunkNames = Object.values(payload);
+  if (payload.schemaVersion !== LEXICON_SCHEMA_VERSION) {
+    throw new Error(
+      `Invalid lexicon schema version: expected=${LEXICON_SCHEMA_VERSION} actual=${String(payload.schemaVersion)}`,
+    );
+  }
+  if (!payload.chunks || typeof payload.chunks !== 'object') {
+    throw new Error('Invalid lexicon index chunks in dist/data/lexicon/index.json');
+  }
+  const chunkNames = Object.values(payload.chunks);
   if (chunkNames.length === 0) {
     throw new Error('Lexicon index has no chunk entries.');
   }
 
-  let sampledEntryCount = 0;
-  const sampleLimit = 50;
+  let entryCount = 0;
   for (const chunkName of chunkNames) {
     if (typeof chunkName !== 'string' || chunkName.length === 0) {
       throw new Error('Lexicon index contains an invalid chunk name.');
     }
     const relativePath = `data/lexicon/${chunkName}`;
     await assertFileExists(relativePath);
-
-    if (sampledEntryCount >= sampleLimit) {
-      continue;
-    }
 
     const chunkPath = path.join(DIST_DIR, relativePath);
     const chunkRaw = await readFile(chunkPath, 'utf8');
@@ -52,26 +56,40 @@ async function verifyLexiconChunks() {
     }
 
     for (const entry of chunkPayload) {
-      if (sampledEntryCount >= sampleLimit) {
-        break;
-      }
       if (!entry || typeof entry !== 'object') {
         throw new Error(`Invalid lexicon entry in ${relativePath}`);
       }
       if (typeof entry.word !== 'string' || entry.word.trim().length === 0) {
         throw new Error(`Invalid lexicon word in ${relativePath}`);
       }
-      const hasDefinition = typeof entry.definition === 'string' && entry.definition.trim().length > 0;
-      const hasDefinitionsArray = Array.isArray(entry.definitions)
-        && entry.definitions.some((value) => typeof value === 'string' && value.trim().length > 0);
-      if (!hasDefinition && !hasDefinitionsArray) {
-        throw new Error(`Missing definition content in ${relativePath}`);
+      if (!Array.isArray(entry.senses)) {
+        throw new Error(`Missing lexicon senses in ${relativePath}`);
       }
-      sampledEntryCount += 1;
+      const seenPartsOfSpeech = new Set();
+      for (const sense of entry.senses) {
+        if (!sense || typeof sense !== 'object') {
+          throw new Error(`Invalid lexicon sense in ${relativePath}`);
+        }
+        if (!CANONICAL_PARTS_OF_SPEECH.has(sense.partOfSpeech)) {
+          throw new Error(`Invalid part of speech in ${relativePath}: ${String(sense.partOfSpeech)}`);
+        }
+        if (seenPartsOfSpeech.has(sense.partOfSpeech)) {
+          throw new Error(`Duplicate part of speech for word=${entry.word} in ${relativePath}`);
+        }
+        seenPartsOfSpeech.add(sense.partOfSpeech);
+        const hasDefinitions = Array.isArray(sense.definitions)
+          && sense.definitions.length > 0
+          && sense.definitions.length <= 2
+          && sense.definitions.every((value) => typeof value === 'string' && value.trim().length > 0);
+        if (!hasDefinitions) {
+          throw new Error(`Missing POS-specific definition content in ${relativePath}`);
+        }
+      }
+      entryCount += 1;
     }
   }
 
-  if (sampledEntryCount === 0) {
+  if (entryCount === 0) {
     throw new Error('Lexicon chunks contain no entries.');
   }
 }

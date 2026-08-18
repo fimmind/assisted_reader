@@ -37,14 +37,47 @@ export interface VocabularyModel {
   candidatePositions: Map<string, number>;
 }
 
-export interface LexiconEntry {
-  word: string;
+export type PartOfSpeech =
+  | 'noun'
+  | 'proper-noun'
+  | 'verb'
+  | 'adjective'
+  | 'adverb'
+  | 'pronoun'
+  | 'determiner'
+  | 'article'
+  | 'preposition'
+  | 'postposition'
+  | 'conjunction'
+  | 'interjection'
+  | 'numeral'
+  | 'particle'
+  | 'classifier'
+  | 'phrase'
+  | 'abbreviation'
+  | 'contraction'
+  | 'prefix'
+  | 'infix'
+  | 'suffix'
+  | 'symbol'
+  | 'other';
+
+export interface LexiconSense {
+  partOfSpeech: PartOfSpeech;
   ipa: string;
   ipaUs?: string;
   ipaUk?: string;
-  pos: string;
-  definition: string;
-  definitions?: string[];
+  definitions: string[];
+}
+
+export interface LexiconEntry {
+  word: string;
+  senses: LexiconSense[];
+}
+
+export interface DefinitionTarget {
+  lemma: string;
+  partOfSpeech: PartOfSpeech | null;
 }
 
 export interface UserProfile {
@@ -74,6 +107,7 @@ export interface TaggedSentence {
 export interface DeinflectionResult {
   tokens: string[];
   properFlags: boolean[];
+  partsOfSpeech: Array<PartOfSpeech | null>;
 }
 
 export interface ParagraphToken {
@@ -84,12 +118,13 @@ export interface ParagraphToken {
   pKnown: number;
   unknown: boolean;
   proper: boolean;
+  partOfSpeech: PartOfSpeech | null;
 }
 
 export interface ParagraphAnalysis {
   paragraphText: string;
   tokens: ParagraphToken[];
-  cardLemmas: string[];
+  cardTargets: DefinitionTarget[];
 }
 
 export interface BookStats {
