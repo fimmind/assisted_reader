@@ -1470,7 +1470,7 @@ export default function ReaderPage() {
       top: measuredPositions[index]?.top ?? popup.top,
       left: measuredPositions[index]?.left ?? popup.left,
     })));
-  }, [settings.englishVariant, wordPopups]);
+  }, [settings.englishVariant, settings.fontSize, wordPopups]);
 
   const openRootWordPopup = useCallback((
     anchorRect: PopupAnchorRect,
@@ -1782,6 +1782,7 @@ export default function ReaderPage() {
                           <WordDefinitionCard
                             key={definitionTargetKey(target)}
                             definition={definition}
+                            fontSize={settings.fontSize}
                             definitionStatus={definitionStatus}
                             onDefinitionWordClick={(click) => {
                               openDefinitionWordPopup(null, click, entry.sourceIndex);
@@ -1844,6 +1845,7 @@ export default function ReaderPage() {
                       <WordDefinitionCard
                         key={definitionTargetKey(target)}
                         definition={definition}
+                        fontSize={settings.fontSize}
                         definitionStatus={definitionStatus}
                         onDefinitionWordClick={(click) => {
                           openDefinitionWordPopup(null, click, entry.sourceIndex);
@@ -1895,6 +1897,7 @@ export default function ReaderPage() {
           >
             <WordDefinitionCard
               definition={definition}
+              fontSize={settings.fontSize}
               definitionStatus={popup.definitionStatus}
               onDefinitionWordClick={(click) => {
                 openDefinitionWordPopup(popupIndex, click, popup.sourceParagraphIndex);

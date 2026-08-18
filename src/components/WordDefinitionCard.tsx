@@ -14,6 +14,7 @@ export interface DefinitionWordClick {
 
 interface WordDefinitionCardProps {
   definition: LexiconEntry;
+  fontSize: number;
   onDefinitionWordClick: (click: DefinitionWordClick) => void;
   onMarkKnown?: () => void;
   onMarkUnknown?: () => void;
@@ -22,6 +23,11 @@ interface WordDefinitionCardProps {
   isMarkedUnknown?: boolean;
   pronunciationVariant?: 'US' | 'UK';
   definitionStatus?: 'loading' | 'ready' | 'error';
+}
+
+function resolveDefinitionCardFontSize(readerFontSize: number): number {
+  const scaledFontSize = readerFontSize * 0.8;
+  return Math.min(20, Math.max(12, scaledFontSize));
 }
 
 function resolveIpa(sense: LexiconSense, pronunciationVariant: 'US' | 'UK'): string {
@@ -99,13 +105,13 @@ function renderCompactDefinitions(
 ): ReactNode {
   if (definitions.length === 1) {
     return (
-      <p className="text-sm text-foreground/80 leading-snug">
+      <p className="text-foreground/80 leading-snug">
         {renderClickableDefinition(definitions[0], onDefinitionWordClick)}
       </p>
     );
   }
   return (
-    <ol className="text-sm text-foreground/80 leading-snug list-decimal pl-4 space-y-1">
+    <ol className="text-foreground/80 leading-snug list-decimal pl-[1.25em] space-y-1">
       {definitions.map((definition) => (
         <li key={definition}>{renderClickableDefinition(definition, onDefinitionWordClick)}</li>
       ))}
@@ -119,13 +125,13 @@ function renderExpandedDefinitions(
 ): ReactNode {
   if (definitions.length === 1) {
     return (
-      <p className="text-foreground/90 text-sm leading-relaxed">
+      <p className="text-foreground/90 leading-relaxed">
         {renderClickableDefinition(definitions[0], onDefinitionWordClick)}
       </p>
     );
   }
   return (
-    <ol className="text-foreground/90 text-sm leading-relaxed list-decimal pl-5 space-y-1">
+    <ol className="text-foreground/90 leading-relaxed list-decimal pl-[1.25em] space-y-1">
       {definitions.map((definition) => (
         <li key={definition}>{renderClickableDefinition(definition, onDefinitionWordClick)}</li>
       ))}
@@ -135,6 +141,7 @@ function renderExpandedDefinitions(
 
 export function WordDefinitionCard({
   definition,
+  fontSize,
   onDefinitionWordClick,
   onMarkKnown,
   onMarkUnknown,
@@ -144,11 +151,13 @@ export function WordDefinitionCard({
   pronunciationVariant = 'US',
   definitionStatus = 'ready',
 }: WordDefinitionCardProps) {
+  const cardFontSize = resolveDefinitionCardFontSize(fontSize);
   if (compact) {
     return (
       <div
         data-definition-card="true"
         className="inline-flex flex-col bg-popover border border-border rounded-md shadow-sm px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] max-h-[70vh] overflow-y-auto align-middle"
+        style={{ fontSize: `${cardFontSize}px` }}
       >
         <div className="flex items-center justify-between gap-3 mb-1.5">
           <span className="font-serif font-medium text-[1.1em]">{definition.word}</span>
@@ -178,11 +187,11 @@ export function WordDefinitionCard({
           </div>
         </div>
         {definitionStatus === 'loading' ? (
-          <p className="text-sm text-muted-foreground leading-snug">Loading definition…</p>
+          <p className="text-muted-foreground leading-snug">Loading definition…</p>
         ) : definitionStatus === 'error' ? (
-          <p className="text-sm text-destructive leading-snug">Definition could not be loaded.</p>
+          <p className="text-destructive leading-snug">Definition could not be loaded.</p>
         ) : definition.senses.length === 0 ? (
-          <p className="text-sm text-foreground/80 leading-snug">Definition unavailable in this build.</p>
+          <p className="text-foreground/80 leading-snug">Definition unavailable in this build.</p>
         ) : (
           <div className="space-y-2.5">
             {definition.senses.map((sense) => {
@@ -190,11 +199,11 @@ export function WordDefinitionCard({
               return (
                 <section key={sense.partOfSpeech}>
                   <div className="flex items-baseline gap-2 mb-0.5">
-                    <span className="text-[0.68rem] font-medium uppercase tracking-wide text-primary">
+                    <span className="text-[0.68em] font-medium uppercase tracking-wide text-primary">
                       {formatPartOfSpeech(sense.partOfSpeech)}
                     </span>
                     {ipaText.length > 0 && (
-                      <span className="text-xs text-muted-foreground italic">{ipaText}</span>
+                      <span className="text-[0.75em] text-muted-foreground italic">{ipaText}</span>
                     )}
                   </div>
                   {renderCompactDefinitions(sense.definitions, onDefinitionWordClick)}
@@ -208,9 +217,13 @@ export function WordDefinitionCard({
   }
 
   return (
-    <div data-definition-card="true" className="bg-popover rounded-lg p-5 w-[300px]">
+    <div
+      data-definition-card="true"
+      className="bg-popover rounded-lg p-5 w-[300px]"
+      style={{ fontSize: `${cardFontSize}px` }}
+    >
       <div className="flex justify-between items-start mb-3">
-        <h3 className="font-serif text-2xl font-medium text-foreground">{definition.word}</h3>
+        <h3 className="font-serif text-[1.33em] font-medium text-foreground">{definition.word}</h3>
         <div className="flex gap-2">
           <Button
             variant="ghost"
@@ -239,11 +252,11 @@ export function WordDefinitionCard({
         </div>
       </div>
       {definitionStatus === 'loading' ? (
-        <p className="text-muted-foreground text-sm leading-relaxed">Loading definition…</p>
+        <p className="text-muted-foreground leading-relaxed">Loading definition…</p>
       ) : definitionStatus === 'error' ? (
-        <p className="text-destructive text-sm leading-relaxed">Definition could not be loaded.</p>
+        <p className="text-destructive leading-relaxed">Definition could not be loaded.</p>
       ) : definition.senses.length === 0 ? (
-        <p className="text-foreground/90 text-sm leading-relaxed">Definition unavailable in this build.</p>
+        <p className="text-foreground/90 leading-relaxed">Definition unavailable in this build.</p>
       ) : (
         <div className="space-y-3">
           {definition.senses.map((sense) => {
@@ -251,11 +264,11 @@ export function WordDefinitionCard({
             return (
               <section key={sense.partOfSpeech}>
                 <div className="flex items-baseline gap-2 mb-1">
-                  <span className="text-xs font-medium uppercase tracking-wide text-primary">
+                  <span className="text-[0.75em] font-medium uppercase tracking-wide text-primary">
                     {formatPartOfSpeech(sense.partOfSpeech)}
                   </span>
                   {ipaText.length > 0 && (
-                    <span className="text-sm text-muted-foreground italic">{ipaText}</span>
+                    <span className="text-[0.875em] text-muted-foreground italic">{ipaText}</span>
                   )}
                 </div>
                 {renderExpandedDefinitions(sense.definitions, onDefinitionWordClick)}
