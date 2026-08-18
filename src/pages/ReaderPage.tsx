@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
 import { WordDefinitionCard } from '@/components/WordDefinitionCard';
+import type { DefinitionWordClick } from '@/components/WordDefinitionCard';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { WORD_RE } from '@/core/constants';
@@ -390,7 +391,7 @@ export default function ReaderPage() {
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [chapterAnalysis, setChapterAnalysis] = useState<ParagraphAnalysis[]>([]);
   const [definitionsByLemma, setDefinitionsByLemma] = useState<Map<string, LexiconEntry>>(new Map());
-  const [wordPopup, setWordPopup] = useState<WordPopupState | null>(null);
+  const [wordPopups, setWordPopups] = useState<WordPopupState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
@@ -929,15 +930,18 @@ export default function ReaderPage() {
     return createFallbackLexiconEntry(normalizedLemma);
   }, []);
 
-  const calculateWordPopupPosition = useCallback((anchorRect: DOMRect): { top: number; left: number } => {
+  const calculateWordPopupPosition = useCallback((
+    anchorRect: DOMRect,
+    horizontalAnchorRect: DOMRect,
+  ): { top: number; left: number } => {
     const popupWidth = 280;
     const popupHeight = 240;
     const edgePadding = 8;
     const sideOffset = 8;
 
-    let left = anchorRect.right + sideOffset;
+    let left = horizontalAnchorRect.right + sideOffset;
     if (left + popupWidth > window.innerWidth - edgePadding) {
-      left = anchorRect.left - popupWidth - sideOffset;
+      left = horizontalAnchorRect.left - popupWidth - sideOffset;
     }
     left = Math.max(edgePadding, Math.min(left, window.innerWidth - popupWidth - edgePadding));
 
@@ -950,53 +954,119 @@ export default function ReaderPage() {
     return { top, left };
   }, []);
 
-  const openWordPopup = useCallback((element: HTMLElement, lemma: string, sourceParagraphIndex: number) => {
+  const createWordPopup = useCallback((
+    element: HTMLElement,
+    lemma: string,
+    sourceParagraphIndex: number,
+  ): WordPopupState => {
     const rect = element.getBoundingClientRect();
-    const position = calculateWordPopupPosition(rect);
-    setWordPopup({
+    const definitionCard = element.closest<HTMLElement>('[data-definition-card="true"]');
+    const horizontalAnchorRect = definitionCard?.getBoundingClientRect() ?? rect;
+    const position = calculateWordPopupPosition(rect, horizontalAnchorRect);
+    return {
       lemma: normalizeToken(lemma),
       top: position.top,
       left: position.left,
       sourceParagraphIndex,
-    });
+    };
   }, [calculateWordPopupPosition]);
 
-  const closeWordPopup = useCallback(() => {
-    setWordPopup(null);
+  const openRootWordPopup = useCallback((
+    element: HTMLElement,
+    lemma: string,
+    sourceParagraphIndex: number,
+  ) => {
+    setWordPopups([createWordPopup(element, lemma, sourceParagraphIndex)]);
+  }, [createWordPopup]);
+
+  const resolveDefinitionWordLemma = useCallback((click: DefinitionWordClick): string => {
+    const resources = resourcesRef.current;
+    if (!resources) {
+      throw new Error('Cannot analyze a definition word before reader resources are loaded.');
+    }
+    const profileState = loadProfileState();
+    const profile = getActiveProfile(profileState);
+    const analysis = analyzeChapter({
+      chapter: {
+        title: '',
+        paragraphs: [click.definitionText],
+      },
+      settings: settingsRef.current,
+      model: resources.model,
+      profile,
+      lemmaDict: resources.lemmaDict,
+      nlp: resources.nlp,
+      maxCardsPerParagraph: 1,
+      includeCards: false,
+    })[0];
+    const token = analysis?.tokens.find((candidate) => (
+      candidate.start === click.start && candidate.end === click.end
+    ));
+    if (token && token.lemma.length > 0) {
+      return token.lemma;
+    }
+    return normalizeToken(click.definitionText.slice(click.start, click.end));
   }, []);
 
-  const wordPopupRef = useRef<HTMLDivElement | null>(null);
+  const openDefinitionWordPopup = useCallback((
+    parentPopupIndex: number | null,
+    click: DefinitionWordClick,
+    sourceParagraphIndex: number,
+  ) => {
+    const lemma = resolveDefinitionWordLemma(click);
+    const popup = createWordPopup(click.element, lemma, sourceParagraphIndex);
+    setWordPopups((previous) => {
+      const ancestors = parentPopupIndex === null
+        ? []
+        : previous.slice(0, parentPopupIndex + 1);
+      return [...ancestors, popup];
+    });
+  }, [createWordPopup, resolveDefinitionWordLemma]);
+
+  const closeAllWordPopups = useCallback(() => {
+    setWordPopups([]);
+  }, []);
+
+  const closeWordPopupAtIndex = useCallback((popupIndex: number) => {
+    setWordPopups((previous) => previous.slice(0, popupIndex));
+  }, []);
 
   useEffect(() => {
-    if (!wordPopup) {
+    if (wordPopups.length === 0) {
       return;
     }
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Node ? event.target : null;
       if (!target) {
-        closeWordPopup();
+        closeAllWordPopups();
         return;
       }
-      const popupElement = wordPopupRef.current;
-      if (popupElement && popupElement.contains(target)) {
+      const popupElement = target instanceof Element
+        ? target.closest<HTMLElement>('[data-word-popup-index]')
+        : null;
+      if (popupElement) {
+        const popupIndex = Number.parseInt(popupElement.dataset.wordPopupIndex ?? '', 10);
+        if (Number.isInteger(popupIndex)) {
+          setWordPopups((previous) => previous.slice(0, popupIndex + 1));
+        }
         return;
       }
       const clickedTrigger = target instanceof Element ? target.closest('[data-word-popup-trigger="true"]') : null;
       if (clickedTrigger) {
         return;
       }
-      closeWordPopup();
+      closeAllWordPopups();
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        closeWordPopup();
+        closeAllWordPopups();
       }
     };
 
     const handleViewportChange = () => {
-      closeWordPopup();
+      closeAllWordPopups();
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -1010,7 +1080,7 @@ export default function ReaderPage() {
       window.removeEventListener('resize', handleViewportChange);
       window.removeEventListener('scroll', handleViewportChange, true);
     };
-  }, [closeWordPopup, wordPopup]);
+  }, [closeAllWordPopups, wordPopups.length]);
 
   const renderParagraphWithHighlights = (analysis: ParagraphAnalysis, sourceParagraphIndex: number): ReactNode => {
     const highlightedLemmas = assistanceEnabled
@@ -1048,7 +1118,7 @@ export default function ReaderPage() {
             shouldHighlight && 'rounded-sm px-0.5 -mx-0.5',
             shouldHighlight && (isPriority ? 'unknown-word priority' : 'unknown-word'),
           )}
-          onClick={(event) => openWordPopup(event.currentTarget, lemma, sourceParagraphIndex)}
+          onClick={(event) => openRootWordPopup(event.currentTarget, lemma, sourceParagraphIndex)}
         >
           {tokenText}
         </span>,
@@ -1086,8 +1156,6 @@ export default function ReaderPage() {
   const profileStateForRender = loadProfileState();
   const activeProfileForRender = getActiveProfile(profileStateForRender);
   const observationLabels = activeProfileForRender.observations;
-  const popupDefinition = wordPopup ? resolveDefinitionByLemma(wordPopup.lemma) : null;
-  const popupObservation = wordPopup ? observationLabels[wordPopup.lemma] : undefined;
   const paragraphStartIndex = shouldHideFirstParagraphAsDuplicateTitle(chapterDisplayTitle, chapterParagraphs[0]) ? 1 : 0;
   const visibleParagraphEntries = chapterParagraphs.slice(paragraphStartIndex).map((paragraphText, visibleIndex) => ({
     paragraphText,
@@ -1251,6 +1319,9 @@ export default function ReaderPage() {
                           <WordDefinitionCard
                             key={lemma}
                             definition={definition}
+                            onDefinitionWordClick={(click) => {
+                              openDefinitionWordPopup(null, click, entry.sourceIndex);
+                            }}
                             onMarkKnown={() => markLemma(lemma, true, entry.sourceIndex)}
                             onMarkUnknown={() => markLemma(lemma, false, entry.sourceIndex)}
                             isMarkedKnown={observation === 1}
@@ -1304,6 +1375,9 @@ export default function ReaderPage() {
                       <WordDefinitionCard
                         key={lemma}
                         definition={definition}
+                        onDefinitionWordClick={(click) => {
+                          openDefinitionWordPopup(null, click, entry.sourceIndex);
+                        }}
                         onMarkKnown={() => markLemma(lemma, true, entry.sourceIndex)}
                         onMarkUnknown={() => markLemma(lemma, false, entry.sourceIndex)}
                         isMarkedKnown={observation === 1}
@@ -1319,30 +1393,38 @@ export default function ReaderPage() {
           </div>
         </div>
       </main>
-      {wordPopup && popupDefinition && (
-        <div
-          ref={wordPopupRef}
-          className="fixed z-40"
-          style={{ top: wordPopup.top, left: wordPopup.left }}
-          data-testid="word-definition-popup"
-        >
-          <WordDefinitionCard
-            definition={popupDefinition}
-            onMarkKnown={() => {
-              markLemma(wordPopup.lemma, true, wordPopup.sourceParagraphIndex);
-              closeWordPopup();
-            }}
-            onMarkUnknown={() => {
-              markLemma(wordPopup.lemma, false, wordPopup.sourceParagraphIndex);
-              closeWordPopup();
-            }}
-            isMarkedKnown={popupObservation === 1}
-            isMarkedUnknown={popupObservation === 0}
-            pronunciationVariant={settings.englishVariant}
-            compact
-          />
-        </div>
-      )}
+      {wordPopups.map((popup, popupIndex) => {
+        const definition = resolveDefinitionByLemma(popup.lemma);
+        const observation = observationLabels[popup.lemma];
+        return (
+          <div
+            key={`${popupIndex}-${popup.lemma}-${popup.top}-${popup.left}`}
+            className="fixed"
+            style={{ top: popup.top, left: popup.left, zIndex: 40 + popupIndex }}
+            data-word-popup-index={popupIndex}
+            data-testid={popupIndex === 0 ? 'word-definition-popup' : `word-definition-popup-${popupIndex}`}
+          >
+            <WordDefinitionCard
+              definition={definition}
+              onDefinitionWordClick={(click) => {
+                openDefinitionWordPopup(popupIndex, click, popup.sourceParagraphIndex);
+              }}
+              onMarkKnown={() => {
+                markLemma(popup.lemma, true, popup.sourceParagraphIndex);
+                closeWordPopupAtIndex(popupIndex);
+              }}
+              onMarkUnknown={() => {
+                markLemma(popup.lemma, false, popup.sourceParagraphIndex);
+                closeWordPopupAtIndex(popupIndex);
+              }}
+              isMarkedKnown={observation === 1}
+              isMarkedUnknown={observation === 0}
+              pronunciationVariant={settings.englishVariant}
+              compact
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
