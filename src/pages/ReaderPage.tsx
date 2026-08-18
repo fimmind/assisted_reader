@@ -15,7 +15,7 @@ import type { DefinitionWordClick } from '@/components/WordDefinitionCard';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { WORD_RE } from '@/core/constants';
-import { createFallbackLexiconEntry, loadLexiconMap, resolveLexiconEntry } from '@/core/lexicon';
+import { createFallbackLexiconEntry, loadLexicon, resolveLexiconEntry } from '@/core/lexicon';
 import { areDefinitionTargetsEqual, createDefinitionTarget, definitionTargetKey } from '@/core/definition-target';
 import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
@@ -23,6 +23,7 @@ import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
 import { analyzeChapter, createCachedChapterAnalyzer, createLexicalAnalysisCache } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
+import type { LazyLexicon } from '@/core/lexicon';
 import type { ChapterAnalyzer, LexicalAnalysisCache } from '@/core/reader-analysis';
 import type { DefinitionTarget, ImportedBook, LexiconEntry, ParagraphAnalysis, PartOfSpeech, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
 
@@ -65,19 +66,25 @@ type NlpLike = ((text: string) => {
 interface ReaderResources {
   model: VocabularyModel;
   lemmaDict: Record<string, string>;
-  lexiconMap: Map<string, LexiconEntry>;
+  lexicon: LazyLexicon;
   nlp: NlpLike;
   lexicalAnalysisCache: LexicalAnalysisCache;
 }
 
 interface WordPopupState {
+  id: number;
   target: DefinitionTarget;
+  lookupWord: string;
+  definition: LexiconEntry | null;
+  definitionStatus: DefinitionLoadStatus;
   top: number;
   left: number;
   anchorRect: PopupAnchorRect;
   horizontalAnchorRect: PopupAnchorRect;
   sourceParagraphIndex: number;
 }
+
+type DefinitionLoadStatus = 'loading' | 'ready' | 'error';
 
 interface PopupAnchorRect {
   top: number;
@@ -96,6 +103,7 @@ interface ReaderParagraphTextProps {
     anchorRect: PopupAnchorRect,
     target: DefinitionTarget,
     sourceParagraphIndex: number,
+    lookupWord: string,
   ) => void;
 }
 
@@ -275,6 +283,25 @@ function calculateWordPopupPosition(
   return { top, left };
 }
 
+async function lookupDefinitionTarget(
+  lexicon: LazyLexicon,
+  target: DefinitionTarget,
+  lookupWord: string,
+): Promise<LexiconEntry | null> {
+  const normalizedLookupWord = normalizeToken(lookupWord).trim();
+  const normalizedLemma = normalizeToken(target.lemma).trim();
+  if (normalizedLookupWord.length > 0 && normalizedLookupWord !== normalizedLemma) {
+    const exactEntry = await lexicon.lookup(normalizedLookupWord);
+    if (exactEntry) {
+      return exactEntry;
+    }
+  }
+  if (normalizedLemma.length === 0) {
+    return null;
+  }
+  return lexicon.lookup(normalizedLemma);
+}
+
 const ReaderParagraphText = memo(function ReaderParagraphText({
   analysis,
   assistanceEnabled,
@@ -316,7 +343,12 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
           isPriority ? 'unknown-word priority' : 'unknown-word',
         )}
         onClick={(event) => {
-          onOpenWordPopup(capturePopupAnchorRect(event.currentTarget.getBoundingClientRect()), target, sourceParagraphIndex);
+          onOpenWordPopup(
+            capturePopupAnchorRect(event.currentTarget.getBoundingClientRect()),
+            target,
+            sourceParagraphIndex,
+            analysis.paragraphText.slice(analyzedToken.start, analyzedToken.end),
+          );
         }}
       >
         {analysis.paragraphText.slice(analyzedToken.start, analyzedToken.end)}
@@ -356,7 +388,7 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
           analyzedToken?.lemma ?? normalizeToken(rawWord),
           analyzedToken?.partOfSpeech ?? null,
         );
-        onOpenWordPopup(click.anchorRect, target, sourceParagraphIndex);
+        onOpenWordPopup(click.anchorRect, target, sourceParagraphIndex, rawWord);
       }}
     >
       {nodes.length > 0 ? nodes : analysis.paragraphText}
@@ -640,12 +672,16 @@ export default function ReaderPage() {
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [chapterAnalysis, setChapterAnalysis] = useState<ParagraphAnalysis[]>([]);
   const [definitionsByLemma, setDefinitionsByLemma] = useState<Map<string, LexiconEntry>>(new Map());
+  const [loadingDefinitionLemmas, setLoadingDefinitionLemmas] = useState<Set<string>>(new Set());
+  const [failedDefinitionLemmas, setFailedDefinitionLemmas] = useState<Set<string>>(new Set());
   const [wordPopups, setWordPopups] = useState<WordPopupState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
   const chapterAnalysisRef = useRef<ParagraphAnalysis[]>([]);
   const definitionsByLemmaRef = useRef<Map<string, LexiconEntry>>(new Map());
+  const automaticDefinitionRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const nextWordPopupIdRef = useRef(1);
   const settingsRef = useRef<ReaderSettings>(settings);
   const assistanceEnabledRef = useRef<boolean>(assistanceEnabled);
   const analysisRunIdRef = useRef(0);
@@ -726,6 +762,65 @@ export default function ReaderPage() {
 
   const pendingAnalysisAnchorIndexRef = useRef<number | null>(null);
 
+  const waitForReaderScrollToSettle = useCallback(async (): Promise<void> => {
+    let remainingMs = ANALYSIS_SCROLL_SETTLE_MS - (performance.now() - lastScrollActivityAtRef.current);
+    while (remainingMs > 0) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, Math.min(ANALYSIS_SCROLL_POLL_MS, remainingMs));
+      });
+      remainingMs = ANALYSIS_SCROLL_SETTLE_MS - (performance.now() - lastScrollActivityAtRef.current);
+    }
+  }, []);
+
+  const requestAutomaticDefinition = useCallback((resources: ReaderResources, target: DefinitionTarget) => {
+    const lemma = normalizeToken(target.lemma);
+    if (
+      lemma.length === 0
+      || definitionsByLemmaRef.current.has(lemma)
+      || automaticDefinitionRequestsRef.current.has(lemma)
+    ) {
+      return;
+    }
+    setLoadingDefinitionLemmas((previous) => {
+      const updated = new Set(previous);
+      updated.add(lemma);
+      return updated;
+    });
+    setFailedDefinitionLemmas((previous) => {
+      if (!previous.has(lemma)) {
+        return previous;
+      }
+      const updated = new Set(previous);
+      updated.delete(lemma);
+      return updated;
+    });
+
+    const request = lookupDefinitionTarget(resources.lexicon, target, lemma)
+      .then(async (entry) => {
+        await waitForReaderScrollToSettle();
+        const resolvedEntry = entry ?? createFallbackLexiconEntry(lemma);
+        definitionsByLemmaRef.current = new Map(definitionsByLemmaRef.current).set(lemma, resolvedEntry);
+        setDefinitionsByLemma((previous) => new Map(previous).set(lemma, resolvedEntry));
+      })
+      .catch(async (error: unknown) => {
+        await waitForReaderScrollToSettle();
+        console.error('automatic-definition-load-failed', { lemma, error });
+        setFailedDefinitionLemmas((previous) => new Set(previous).add(lemma));
+      })
+      .finally(() => {
+        automaticDefinitionRequestsRef.current.delete(lemma);
+        setLoadingDefinitionLemmas((previous) => {
+          if (!previous.has(lemma)) {
+            return previous;
+          }
+          const updated = new Set(previous);
+          updated.delete(lemma);
+          return updated;
+        });
+      });
+    automaticDefinitionRequestsRef.current.set(lemma, request);
+  }, [waitForReaderScrollToSettle]);
+
   const recomputeVisibleAnalysis = useCallback((
     selectedBook: ImportedBook,
     resources: ReaderResources,
@@ -745,17 +840,14 @@ export default function ReaderPage() {
       && chapterAnalysisRef.current.every((analysis, index) => analysis.paragraphText === (plainAnalyses[index]?.paragraphText ?? ''))
     );
     const initialAnalyses = canPreserveExisting ? chapterAnalysisRef.current.slice() : plainAnalyses;
-    const initialDefinitions = canPreserveExisting ? new Map(definitionsByLemmaRef.current) : new Map<string, LexiconEntry>();
     if (mode === 'reset' || !canPreserveExisting) {
       setChapterAnalysis(initialAnalyses);
-      setDefinitionsByLemma(initialDefinitions);
     }
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
 
     if (!assistanceEnabledRef.current) {
       setChapterAnalysis(plainAnalyses);
-      setDefinitionsByLemma(new Map());
       return;
     }
 
@@ -771,8 +863,6 @@ export default function ReaderPage() {
             return;
           }
           const nextAnalyses = initialAnalyses.slice();
-          const definitionMap = new Map<string, LexiconEntry>(initialDefinitions);
-          let definitionsChanged = false;
           const processedParagraphIndices = new Set<number>();
           const deduplicationRadius = resolveDeduplicationRadius(settingsRef.current.deduplicationRadius);
           const threshold = resolveKnowledgeThreshold(settingsRef.current.knowledgeThreshold);
@@ -853,11 +943,7 @@ export default function ReaderPage() {
               nextAnalyses[paragraphIndex] = nextAnalysis;
 
               for (const target of nextAnalysis.cardTargets) {
-                const found = resources.lexiconMap.get(target.lemma) ?? createFallbackLexiconEntry(target.lemma);
-                if (definitionMap.get(target.lemma) !== found) {
-                  definitionMap.set(target.lemma, found);
-                  definitionsChanged = true;
-                }
+                requestAutomaticDefinition(resources, target);
               }
               processedParagraphIndices.add(paragraphIndex);
             } catch (error) {
@@ -915,10 +1001,6 @@ export default function ReaderPage() {
                 }
                 return updated;
               });
-              if (definitionsChanged) {
-                setDefinitionsByLemma(new Map(definitionMap));
-                definitionsChanged = false;
-              }
               lastPublishedAt = now;
             }
 
@@ -932,7 +1014,7 @@ export default function ReaderPage() {
         }
       })();
     }, 700);
-  }, [resolveAnalysisAnchorIndex]);
+  }, [requestAutomaticDefinition, resolveAnalysisAnchorIndex]);
 
   const loadReaderState = useCallback(async () => {
     setIsLoading(true);
@@ -948,17 +1030,16 @@ export default function ReaderPage() {
         return;
       }
 
-      const [model, lemmaDict, lexiconMap, nlp] = await Promise.all([
+      const [model, lemmaDict, nlp] = await Promise.all([
         loadVocabularyModel(),
         loadLemmaDict(),
-        loadLexiconMap(),
         loadCompromise(),
       ]);
 
       const resources: ReaderResources = {
         model,
         lemmaDict,
-        lexiconMap,
+        lexicon: loadLexicon(),
         nlp,
         lexicalAnalysisCache: createLexicalAnalysisCache(),
       };
@@ -1281,24 +1362,12 @@ export default function ReaderPage() {
     }
   };
 
-  const resolveDefinition = useCallback((target: DefinitionTarget): LexiconEntry => {
-    const normalizedLemma = normalizeToken(target.lemma);
-    const fromLoaded = definitionsByLemmaRef.current.get(normalizedLemma);
-    if (fromLoaded) {
-      return resolveLexiconEntry(fromLoaded, target);
-    }
-    const fromLexicon = resourcesRef.current?.lexiconMap.get(normalizedLemma);
-    if (fromLexicon) {
-      return resolveLexiconEntry(fromLexicon, target);
-    }
-    return createFallbackLexiconEntry(normalizedLemma);
-  }, []);
-
   const createWordPopupFromRects = useCallback((
     anchor: PopupAnchorRect,
     horizontalAnchor: PopupAnchorRect,
     target: DefinitionTarget,
     sourceParagraphIndex: number,
+    lookupWord: string,
   ): WordPopupState => {
     const position = calculateWordPopupPosition(
       anchor,
@@ -1309,7 +1378,11 @@ export default function ReaderPage() {
       window.innerHeight,
     );
     return {
+      id: nextWordPopupIdRef.current++,
       target: createDefinitionTarget(target.lemma, target.partOfSpeech),
+      lookupWord: normalizeToken(lookupWord),
+      definition: null,
+      definitionStatus: 'loading',
       top: position.top,
       left: position.left,
       anchorRect: anchor,
@@ -1322,14 +1395,44 @@ export default function ReaderPage() {
     element: HTMLElement,
     target: DefinitionTarget,
     sourceParagraphIndex: number,
+    lookupWord: string,
   ): WordPopupState => {
     const rect = capturePopupAnchorRect(element.getBoundingClientRect());
     const definitionCard = element.closest<HTMLElement>('[data-definition-card="true"]');
     const horizontalRect = definitionCard
       ? capturePopupAnchorRect(definitionCard.getBoundingClientRect())
       : rect;
-    return createWordPopupFromRects(rect, horizontalRect, target, sourceParagraphIndex);
+    return createWordPopupFromRects(rect, horizontalRect, target, sourceParagraphIndex, lookupWord);
   }, [createWordPopupFromRects]);
+
+  const requestPopupDefinition = useCallback((popup: WordPopupState) => {
+    const resources = resourcesRef.current;
+    if (!resources) {
+      throw new Error('Cannot load a popup definition before reader resources are available.');
+    }
+    void lookupDefinitionTarget(resources.lexicon, popup.target, popup.lookupWord)
+      .then(async (entry) => {
+        await waitForReaderScrollToSettle();
+        setWordPopups((previous) => previous.map((candidate) => (
+          candidate.id === popup.id
+            ? { ...candidate, definition: entry, definitionStatus: 'ready' }
+            : candidate
+        )));
+      })
+      .catch(async (error: unknown) => {
+        await waitForReaderScrollToSettle();
+        console.error('popup-definition-load-failed', {
+          lookupWord: popup.lookupWord,
+          lemma: popup.target.lemma,
+          error,
+        });
+        setWordPopups((previous) => previous.map((candidate) => (
+          candidate.id === popup.id
+            ? { ...candidate, definitionStatus: 'error' }
+            : candidate
+        )));
+      });
+  }, [waitForReaderScrollToSettle]);
 
   useLayoutEffect(() => {
     if (wordPopups.length === 0) {
@@ -1363,15 +1466,18 @@ export default function ReaderPage() {
       top: measuredPositions[index]?.top ?? popup.top,
       left: measuredPositions[index]?.left ?? popup.left,
     })));
-  }, [definitionsByLemma, settings.englishVariant, wordPopups]);
+  }, [settings.englishVariant, wordPopups]);
 
   const openRootWordPopup = useCallback((
     anchorRect: PopupAnchorRect,
     target: DefinitionTarget,
     sourceParagraphIndex: number,
+    lookupWord: string,
   ) => {
-    setWordPopups([createWordPopupFromRects(anchorRect, anchorRect, target, sourceParagraphIndex)]);
-  }, [createWordPopupFromRects]);
+    const popup = createWordPopupFromRects(anchorRect, anchorRect, target, sourceParagraphIndex, lookupWord);
+    setWordPopups([popup]);
+    requestPopupDefinition(popup);
+  }, [createWordPopupFromRects, requestPopupDefinition]);
 
   const resolveDefinitionWordTarget = useCallback((click: DefinitionWordClick): DefinitionTarget => {
     const resources = resourcesRef.current;
@@ -1411,14 +1517,16 @@ export default function ReaderPage() {
     sourceParagraphIndex: number,
   ) => {
     const target = resolveDefinitionWordTarget(click);
-    const popup = createWordPopupFromElement(click.element, target, sourceParagraphIndex);
+    const lookupWord = click.definitionText.slice(click.start, click.end);
+    const popup = createWordPopupFromElement(click.element, target, sourceParagraphIndex, lookupWord);
     setWordPopups((previous) => {
       const ancestors = parentPopupIndex === null
         ? []
         : previous.slice(0, parentPopupIndex + 1);
       return [...ancestors, popup];
     });
-  }, [createWordPopupFromElement, resolveDefinitionWordTarget]);
+    requestPopupDefinition(popup);
+  }, [createWordPopupFromElement, requestPopupDefinition, resolveDefinitionWordTarget]);
 
   const closeAllWordPopups = useCallback(() => {
     setWordPopups([]);
@@ -1662,11 +1770,15 @@ export default function ReaderPage() {
                         const rawDefinition = definitionsByLemma.get(target.lemma)
                           ?? createFallbackLexiconEntry(target.lemma);
                         const definition = resolveLexiconEntry(rawDefinition, target);
+                        const definitionStatus: DefinitionLoadStatus = loadingDefinitionLemmas.has(target.lemma)
+                          ? 'loading'
+                          : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
                         const observation = observationLabels[target.lemma];
                         return (
                           <WordDefinitionCard
                             key={definitionTargetKey(target)}
                             definition={definition}
+                            definitionStatus={definitionStatus}
                             onDefinitionWordClick={(click) => {
                               openDefinitionWordPopup(null, click, entry.sourceIndex);
                             }}
@@ -1720,11 +1832,15 @@ export default function ReaderPage() {
                     const rawDefinition = definitionsByLemma.get(target.lemma)
                       ?? createFallbackLexiconEntry(target.lemma);
                     const definition = resolveLexiconEntry(rawDefinition, target);
+                    const definitionStatus: DefinitionLoadStatus = loadingDefinitionLemmas.has(target.lemma)
+                      ? 'loading'
+                      : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
                     const observation = observationLabels[target.lemma];
                     return (
                       <WordDefinitionCard
                         key={definitionTargetKey(target)}
                         definition={definition}
+                        definitionStatus={definitionStatus}
                         onDefinitionWordClick={(click) => {
                           openDefinitionWordPopup(null, click, entry.sourceIndex);
                         }}
@@ -1744,11 +1860,13 @@ export default function ReaderPage() {
         </div>
       </main>
       {wordPopups.map((popup, popupIndex) => {
-        const definition = resolveDefinition(popup.target);
+        const rawDefinition = popup.definition
+          ?? createFallbackLexiconEntry(popup.lookupWord || popup.target.lemma);
+        const definition = resolveLexiconEntry(rawDefinition, popup.target);
         const observation = observationLabels[popup.target.lemma];
         return (
           <div
-            key={`${popupIndex}-${definitionTargetKey(popup.target)}-${popup.top}-${popup.left}`}
+            key={`${popup.id}-${popup.top}-${popup.left}`}
             className="fixed"
             style={{ top: popup.top, left: popup.left, zIndex: 40 + popupIndex }}
             ref={(element) => {
@@ -1759,6 +1877,7 @@ export default function ReaderPage() {
           >
             <WordDefinitionCard
               definition={definition}
+              definitionStatus={popup.definitionStatus}
               onDefinitionWordClick={(click) => {
                 openDefinitionWordPopup(popupIndex, click, popup.sourceParagraphIndex);
               }}

@@ -298,7 +298,7 @@ Additional algorithmic asset contracts:
   - JSON object map `{ inflected_lower_word: lemma_lower_word }`
   - if missing/unreadable, runtime uses `{}`.
 - `data/lexicon/index.json` + `data/lexicon/*.json`:
-  - index shape: `{ schemaVersion: 2, chunks: { bucket_key: file_name } }`
+  - index shape: `{ schemaVersion: 3, bucketAlgorithm: "fnv1a-32", bucketCount: 1024, entryCount }`
   - each chunk contains words with POS-specific sense groups:
     `{ word: string, senses: Array<{ partOfSpeech, ipa, ipaUs?, ipaUk?, definitions }> }`.
 
@@ -511,18 +511,19 @@ Word definition cards use static lexicon artifacts built offline.
 
 Script: `scripts/build-lexicon-from-wiktextract.mjs`
 
-1. Read vocabulary from `data/words.csv`
+1. Read vocabulary from `data/words.csv` for required fallback coverage
 2. Optional overrides from `data/lexicon_overrides.json`
 3. Ensure local archive `downloads/raw-wiktextract-data.jsonl.gz`:
    - if missing, download from `https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz`
    - if present, reuse local archive
-4. Reuse any already bundled entries from existing chunk files referenced by `data/lexicon/index.json`
-   only when their schema version is current
+4. Stream every English record whose normalized headword matches the reader's
+   single-token grammar into temporary hash partitions
 5. Fallbacks:
    - a word without extracted senses is emitted with an empty `senses` array
    - runtime displays `"Definition unavailable in this build."`
 6. Emit:
-   - chunked files `data/lexicon/{a..z,_.json}` + `index.json`
+   - 1,024 FNV-1a hash bucket files `data/lexicon/{0000..1023}.json`
+   - a schema-versioned `index.json` describing the deterministic bucket layout
 
 Wiktextract records are accumulated by `(word, partOfSpeech)` rather than using
 the first record for a spelling. Each POS group retains up to two deduplicated
@@ -544,7 +545,13 @@ Runtime POS selection:
 
 Runtime load strategy:
 
-- Load chunk index, then load all referenced chunk files.
+- Reader startup constructs the lexicon service without issuing a dictionary request.
+- The first definition request loads the small index and the target word's hash bucket.
+- Index and bucket promises are cached for the browser session.
+- Clicked words first query the exact surface form, then the inferred lemma when
+  the exact spelling has no entry.
+- Automatic cards continue to be selected only from model-supported vocabulary,
+  but resolve their definitions through the same lazy service.
 
 Dependency note:
 

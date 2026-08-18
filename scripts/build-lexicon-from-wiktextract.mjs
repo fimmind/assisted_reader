@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import { once } from 'node:events';
 import https from 'node:https';
 import path from 'node:path';
 import readline from 'node:readline';
 import zlib from 'node:zlib';
 import {
   CANONICAL_PARTS_OF_SPEECH,
+  LEXICON_BUCKET_ALGORITHM,
+  LEXICON_BUCKET_COUNT,
   LEXICON_SCHEMA_VERSION,
+  hashLexiconWord,
+  resolveLexiconBucketFileName,
   WIKTEXTRACT_POS_MAP,
 } from './lexicon-schema.mjs';
 
@@ -19,23 +24,22 @@ const WIKTEXTRACT_ARCHIVE_PATH = path.join(DOWNLOADS_DIR, 'raw-wiktextract-data.
 const MAX_DOWNLOAD_RETRIES = 3;
 const MAX_REDIRECTS = 5;
 const EXTRACT_PROGRESS_LINE_INTERVAL = 100000;
-const WORD_PROGRESS_LOG_INTERVAL = 1000;
 const WORDS_CSV_PATH = path.join(DATA_DIR, 'words.csv');
 const CHUNK_DIR = path.join(DATA_DIR, 'lexicon');
-const INDEX_OUTPUT_PATH = path.join(CHUNK_DIR, 'index.json');
 const OVERRIDES_PATH = path.join(DATA_DIR, 'lexicon_overrides.json');
+const EXTRACTION_PARTITION_COUNT = 256;
+const WORD_TOKEN_PATTERN = /^[a-z]+(?:'[a-z]+)?$/;
 
 function normalizeWord(value) {
-  return String(value).trim().toLowerCase();
+  return String(value).trim().toLowerCase().replace(/’/g, "'");
+}
+
+function resolveBucketId(word, bucketCount) {
+  return hashLexiconWord(word) % bucketCount;
 }
 
 function normalizeSpaces(value) {
   return value.replace(/\s+/g, ' ').trim();
-}
-
-function resolveChunkKey(word) {
-  const firstChar = word[0] ?? '_';
-  return /^[a-z]$/.test(firstChar) ? firstChar : '_';
 }
 
 function normalizePartOfSpeech(value, unmappedPartsOfSpeech) {
@@ -108,82 +112,6 @@ function loadTargetWords() {
     }
   }
   return words;
-}
-
-function loadExistingLexiconFromChunks() {
-  if (!fs.existsSync(INDEX_OUTPUT_PATH)) {
-    return new Map();
-  }
-
-  const indexPayload = JSON.parse(fs.readFileSync(INDEX_OUTPUT_PATH, 'utf8'));
-  if (
-    !indexPayload
-    || typeof indexPayload !== 'object'
-    || indexPayload.schemaVersion !== LEXICON_SCHEMA_VERSION
-    || !indexPayload.chunks
-    || typeof indexPayload.chunks !== 'object'
-  ) {
-    return new Map();
-  }
-
-  const map = new Map();
-  const chunkNames = Object.values(indexPayload.chunks);
-  for (const chunkName of chunkNames) {
-    if (typeof chunkName !== 'string' || chunkName.length === 0) {
-      continue;
-    }
-    const chunkPath = path.join(CHUNK_DIR, chunkName);
-    if (!fs.existsSync(chunkPath)) {
-      continue;
-    }
-
-    const chunkPayload = JSON.parse(fs.readFileSync(chunkPath, 'utf8'));
-    if (!Array.isArray(chunkPayload)) {
-      continue;
-    }
-
-    for (const entry of chunkPayload) {
-      if (!entry || typeof entry !== 'object') {
-        continue;
-      }
-      const word = normalizeWord(entry.word);
-      if (word.length === 0 || map.has(word)) {
-        continue;
-      }
-      if (!Array.isArray(entry.senses)) {
-        continue;
-      }
-      const senses = entry.senses
-        .filter((sense) => sense && typeof sense === 'object')
-        .map((sense) => {
-          const definitions = Array.isArray(sense.definitions)
-            ? sense.definitions
-              .filter((item) => typeof item === 'string')
-              .map((item) => normalizeSpaces(item))
-              .filter((item) => item.length > 0)
-              .slice(0, 2)
-            : [];
-          return {
-            partOfSpeech: typeof sense.partOfSpeech === 'string' ? sense.partOfSpeech.trim() : 'other',
-            ipa: typeof sense.ipa === 'string' ? normalizeSpaces(sense.ipa) : '',
-            ipaUs: typeof sense.ipaUs === 'string' && sense.ipaUs.trim().length > 0
-              ? normalizeSpaces(sense.ipaUs)
-              : undefined,
-            ipaUk: typeof sense.ipaUk === 'string' && sense.ipaUk.trim().length > 0
-              ? normalizeSpaces(sense.ipaUk)
-              : undefined,
-            definitions,
-          };
-        })
-        .filter((sense) => sense.definitions.length > 0);
-      map.set(word, {
-        word,
-        senses,
-      });
-    }
-  }
-
-  return map;
 }
 
 function loadOverrides() {
@@ -393,107 +321,206 @@ function toFallbackEntry(word) {
   };
 }
 
-async function streamExtractLexicon(inputPath, targetWords, overridesMap) {
-  const extractedMap = new Map();
-  const unmappedPartsOfSpeech = new Set();
-
-  const inputStream = fs.createReadStream(inputPath);
-  const textStream = inputPath.endsWith('.gz') ? inputStream.pipe(zlib.createGunzip()) : inputStream;
-  const lineReader = readline.createInterface({
-    input: textStream,
-    crlfDelay: Infinity,
-  });
-
-  let scanned = 0;
-  console.log('lexicon-extract-progress', {
-    scannedLines: 0,
-    extractedDefinitions: 0,
-    targetWords: targetWords.size,
-  });
-  for await (const line of lineReader) {
-    scanned += 1;
-    if (scanned % EXTRACT_PROGRESS_LINE_INTERVAL === 0) {
-      console.log('lexicon-extract-progress', {
-        scannedLines: scanned,
-        extractedDefinitions: extractedMap.size,
-        targetWords: targetWords.size,
-      });
-    }
-    if (line.trim().length === 0) {
-      continue;
-    }
-
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch (error) {
-      console.warn('wiktextract-line-parse-failed', { scanned, error: String(error) });
-      continue;
-    }
-
-    if (!record || typeof record !== 'object') {
-      continue;
-    }
-    if (record.lang_code !== 'en') {
-      continue;
-    }
-
-    const word = normalizeWord(record.word);
-    if (!targetWords.has(word) || overridesMap.has(word)) {
-      continue;
-    }
-
-    const definitions = collectPrimaryDefinitions(record.senses);
-    if (definitions.length === 0) {
-      continue;
-    }
-
-    const partOfSpeech = normalizePartOfSpeech(record.pos, unmappedPartsOfSpeech);
-    const pronunciations = pickPronunciations(record.sounds);
-    const entry = extractedMap.get(word) ?? { word, senses: [] };
-    const existingSense = entry.senses.find((sense) => sense.partOfSpeech === partOfSpeech);
-    if (existingSense) {
-      const seenDefinitions = new Set(existingSense.definitions.map((definition) => normalizeGlossIdentity(definition)));
-      for (const definition of definitions) {
-        const identity = normalizeGlossIdentity(definition);
-        if (!seenDefinitions.has(identity) && existingSense.definitions.length < 2) {
-          existingSense.definitions.push(definition);
-          seenDefinitions.add(identity);
-        }
-      }
-      if (existingSense.ipa.length === 0 && pronunciations.ipa.length > 0) {
-        existingSense.ipa = pronunciations.ipa;
-      }
-      if (!existingSense.ipaUs && pronunciations.ipaUs.length > 0) {
-        existingSense.ipaUs = pronunciations.ipaUs;
-      }
-      if (!existingSense.ipaUk && pronunciations.ipaUk.length > 0) {
-        existingSense.ipaUk = pronunciations.ipaUk;
-      }
-    } else {
-      entry.senses.push({
-        partOfSpeech,
-        ipa: pronunciations.ipa,
-        ipaUs: pronunciations.ipaUs.length > 0 ? pronunciations.ipaUs : undefined,
-        ipaUk: pronunciations.ipaUk.length > 0 ? pronunciations.ipaUk : undefined,
-        definitions: definitions.slice(0, 2),
-      });
-    }
-    extractedMap.set(word, entry);
+function mergeExtractedRecord(entryMap, record) {
+  const entry = entryMap.get(record.word) ?? { word: record.word, senses: [] };
+  const existingSense = entry.senses.find((sense) => sense.partOfSpeech === record.partOfSpeech);
+  if (!existingSense) {
+    entry.senses.push({
+      partOfSpeech: record.partOfSpeech,
+      ipa: record.ipa,
+      ipaUs: record.ipaUs || undefined,
+      ipaUk: record.ipaUk || undefined,
+      definitions: record.definitions.slice(0, 2),
+    });
+    entryMap.set(record.word, entry);
+    return;
   }
 
-  console.log('lexicon-extract-progress', {
-    scannedLines: scanned,
-    extractedDefinitions: extractedMap.size,
-    targetWords: targetWords.size,
-  });
+  const seenDefinitions = new Set(existingSense.definitions.map((definition) => normalizeGlossIdentity(definition)));
+  for (const definition of record.definitions) {
+    const identity = normalizeGlossIdentity(definition);
+    if (!seenDefinitions.has(identity) && existingSense.definitions.length < 2) {
+      existingSense.definitions.push(definition);
+      seenDefinitions.add(identity);
+    }
+  }
+  if (existingSense.ipa.length === 0 && record.ipa.length > 0) {
+    existingSense.ipa = record.ipa;
+  }
+  if (!existingSense.ipaUs && record.ipaUs.length > 0) {
+    existingSense.ipaUs = record.ipaUs;
+  }
+  if (!existingSense.ipaUk && record.ipaUk.length > 0) {
+    existingSense.ipaUk = record.ipaUk;
+  }
+}
+
+async function writePartitionRecord(stream, record) {
+  if (stream.write(`${JSON.stringify(record)}\n`)) {
+    return;
+  }
+  await once(stream, 'drain');
+}
+
+async function closeWriteStream(stream) {
+  stream.end();
+  await once(stream, 'finish');
+}
+
+async function partitionEnglishLexicon(inputPath, partitionDir) {
+  await fs.promises.mkdir(partitionDir, { recursive: true });
+  const streams = Array.from({ length: EXTRACTION_PARTITION_COUNT }, (_, partitionId) => (
+    fs.createWriteStream(path.join(partitionDir, `${partitionId}.jsonl`))
+  ));
+  const unmappedPartsOfSpeech = new Set();
+  const inputStream = fs.createReadStream(inputPath);
+  const textStream = inputPath.endsWith('.gz') ? inputStream.pipe(zlib.createGunzip()) : inputStream;
+  const lineReader = readline.createInterface({ input: textStream, crlfDelay: Infinity });
+  let scannedLines = 0;
+  let compatibleRecords = 0;
+
+  try {
+    for await (const line of lineReader) {
+      scannedLines += 1;
+      if (scannedLines % EXTRACT_PROGRESS_LINE_INTERVAL === 0) {
+        console.log('lexicon-extract-progress', { scannedLines, compatibleRecords });
+      }
+      if (line.trim().length === 0) {
+        continue;
+      }
+
+      let payload;
+      try {
+        payload = JSON.parse(line);
+      } catch (error) {
+        throw new SyntaxError(`Invalid Wiktextract JSONL: line=${scannedLines} error=${String(error)}`);
+      }
+      if (!payload || typeof payload !== 'object' || payload.lang_code !== 'en') {
+        continue;
+      }
+      const word = normalizeWord(payload.word);
+      if (!WORD_TOKEN_PATTERN.test(word)) {
+        continue;
+      }
+      const definitions = collectPrimaryDefinitions(payload.senses);
+      if (definitions.length === 0) {
+        continue;
+      }
+      const pronunciations = pickPronunciations(payload.sounds);
+      const record = {
+        word,
+        partOfSpeech: normalizePartOfSpeech(payload.pos, unmappedPartsOfSpeech),
+        ipa: pronunciations.ipa,
+        ipaUs: pronunciations.ipaUs,
+        ipaUk: pronunciations.ipaUk,
+        definitions,
+      };
+      const partitionId = resolveBucketId(word, EXTRACTION_PARTITION_COUNT);
+      await writePartitionRecord(streams[partitionId], record);
+      compatibleRecords += 1;
+    }
+  } finally {
+    await Promise.all(streams.map((stream) => closeWriteStream(stream)));
+  }
+
   if (unmappedPartsOfSpeech.size > 0) {
     console.warn('lexicon-unmapped-parts-of-speech', {
       values: Array.from(unmappedPartsOfSpeech).sort(),
     });
   }
+  console.log('lexicon-extract-complete', { scannedLines, compatibleRecords });
+}
 
-  return extractedMap;
+async function loadPartitionEntries(partitionPath) {
+  const entryMap = new Map();
+  const lineReader = readline.createInterface({
+    input: fs.createReadStream(partitionPath),
+    crlfDelay: Infinity,
+  });
+  let lineNumber = 0;
+  for await (const line of lineReader) {
+    lineNumber += 1;
+    if (line.length === 0) {
+      continue;
+    }
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      throw new SyntaxError(`Invalid temporary lexicon partition: path=${partitionPath} line=${lineNumber} error=${String(error)}`);
+    }
+    mergeExtractedRecord(entryMap, record);
+  }
+  return entryMap;
+}
+
+async function buildLazyLexiconBuckets(partitionDir, outputDir, targetWords, overridesMap) {
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  const targetsByPartition = new Map();
+  for (const word of targetWords) {
+    if (!WORD_TOKEN_PATTERN.test(word)) {
+      continue;
+    }
+    const partitionId = resolveBucketId(word, EXTRACTION_PARTITION_COUNT);
+    const words = targetsByPartition.get(partitionId) ?? [];
+    words.push(word);
+    targetsByPartition.set(partitionId, words);
+  }
+  const overridesByPartition = new Map();
+  for (const [word, entry] of overridesMap.entries()) {
+    if (!WORD_TOKEN_PATTERN.test(word)) {
+      continue;
+    }
+    const partitionId = resolveBucketId(word, EXTRACTION_PARTITION_COUNT);
+    const entries = overridesByPartition.get(partitionId) ?? [];
+    entries.push(entry);
+    overridesByPartition.set(partitionId, entries);
+  }
+
+  let totalWords = 0;
+  let totalSenseGroups = 0;
+  let multiPartOfSpeechWords = 0;
+  let fallbackWords = 0;
+  for (let partitionId = 0; partitionId < EXTRACTION_PARTITION_COUNT; partitionId += 1) {
+    const partitionPath = path.join(partitionDir, `${partitionId}.jsonl`);
+    const entryMap = await loadPartitionEntries(partitionPath);
+    for (const word of targetsByPartition.get(partitionId) ?? []) {
+      if (!entryMap.has(word)) {
+        entryMap.set(word, toFallbackEntry(word));
+        fallbackWords += 1;
+      }
+    }
+    for (const entry of overridesByPartition.get(partitionId) ?? []) {
+      entryMap.set(entry.word, entry);
+    }
+
+    const entriesByBucket = new Map();
+    for (const entry of entryMap.values()) {
+      const bucketId = resolveBucketId(entry.word, LEXICON_BUCKET_COUNT);
+      const entries = entriesByBucket.get(bucketId) ?? [];
+      entries.push(entry);
+      entriesByBucket.set(bucketId, entries);
+      totalWords += 1;
+      totalSenseGroups += entry.senses.length;
+      if (entry.senses.length > 1) {
+        multiPartOfSpeechWords += 1;
+      }
+    }
+
+    for (let bucketId = partitionId; bucketId < LEXICON_BUCKET_COUNT; bucketId += EXTRACTION_PARTITION_COUNT) {
+      const entries = entriesByBucket.get(bucketId) ?? [];
+      entries.sort((left, right) => left.word.localeCompare(right.word));
+      await writeJsonFile(path.join(outputDir, resolveLexiconBucketFileName(bucketId)), entries);
+    }
+    if ((partitionId + 1) % 16 === 0 || partitionId === EXTRACTION_PARTITION_COUNT - 1) {
+      console.log('lexicon-bucket-progress', {
+        processedPartitions: partitionId + 1,
+        totalPartitions: EXTRACTION_PARTITION_COUNT,
+        totalWords,
+      });
+    }
+  }
+  return { totalWords, totalSenseGroups, multiPartOfSpeechWords, fallbackWords };
 }
 
 async function writeJsonFile(filePath, value) {
@@ -615,91 +642,41 @@ async function ensureWiktextractArchivePath() {
 
 async function main() {
   const archivePath = await ensureWiktextractArchivePath();
-
   const targetWords = loadTargetWords();
   const overridesMap = loadOverrides();
-  const existingLexiconMap = loadExistingLexiconFromChunks();
-  const extractedMap = await streamExtractLexicon(archivePath, targetWords, overridesMap);
+  const buildId = `${process.pid}-${Date.now()}`;
+  const partitionDir = path.join(DOWNLOADS_DIR, `lexicon-partitions-${buildId}`);
+  const outputDir = path.join(DATA_DIR, `lexicon-output-${buildId}`);
 
-  const entries = [];
-  const sortedWords = Array.from(targetWords).sort();
-  const totalWords = sortedWords.length;
-  let reusedEntries = 0;
-  let fallbackCount = 0;
-  console.log('lexicon-build-word-progress', {
-    processed: 0,
-    totalWords,
-    percent: 0,
-  });
+  try {
+    await partitionEnglishLexicon(archivePath, partitionDir);
+    const summary = await buildLazyLexiconBuckets(
+      partitionDir,
+      outputDir,
+      targetWords,
+      overridesMap,
+    );
+    const indexPayload = {
+      schemaVersion: LEXICON_SCHEMA_VERSION,
+      bucketAlgorithm: LEXICON_BUCKET_ALGORITHM,
+      bucketCount: LEXICON_BUCKET_COUNT,
+      entryCount: summary.totalWords,
+    };
+    await writeJsonFile(path.join(outputDir, 'index.json'), indexPayload);
 
-  for (let wordIndex = 0; wordIndex < sortedWords.length; wordIndex += 1) {
-    const word = sortedWords[wordIndex];
-    const overrideEntry = overridesMap.get(word);
-    if (overrideEntry) {
-      entries.push(overrideEntry);
-    } else {
-      const extracted = extractedMap.get(word);
-      if (extracted) {
-        entries.push(extracted);
-      } else {
-        const existing = existingLexiconMap.get(word);
-        if (existing) {
-          entries.push(existing);
-          reusedEntries += 1;
-        } else {
-          entries.push(toFallbackEntry(word));
-          fallbackCount += 1;
-        }
-      }
-    }
-
-    const processed = wordIndex + 1;
-    if (processed % WORD_PROGRESS_LOG_INTERVAL === 0 || processed === totalWords) {
-      const percent = Number(((processed / totalWords) * 100).toFixed(2));
-      console.log('lexicon-build-word-progress', {
-        processed,
-        totalWords,
-        percent,
-      });
-    }
+    await fs.promises.rm(CHUNK_DIR, { recursive: true, force: true });
+    await fs.promises.rename(outputDir, CHUNK_DIR);
+    console.log('lexicon-build-complete', {
+      schemaVersion: LEXICON_SCHEMA_VERSION,
+      bucketAlgorithm: LEXICON_BUCKET_ALGORITHM,
+      bucketCount: LEXICON_BUCKET_COUNT,
+      overrides: overridesMap.size,
+      ...summary,
+    });
+  } finally {
+    await fs.promises.rm(partitionDir, { recursive: true, force: true });
+    await fs.promises.rm(outputDir, { recursive: true, force: true });
   }
-
-  const chunkMap = new Map();
-  for (const entry of entries) {
-    const chunkKey = resolveChunkKey(entry.word);
-    const chunk = chunkMap.get(chunkKey) ?? [];
-    chunk.push(entry);
-    chunkMap.set(chunkKey, chunk);
-  }
-
-  const chunkIndex = {};
-  const orderedChunkKeys = ['_', ...'abcdefghijklmnopqrstuvwxyz'.split('')];
-  for (const chunkKey of orderedChunkKeys) {
-    const chunkEntries = chunkMap.get(chunkKey) ?? [];
-    const chunkName = `${chunkKey}.json`;
-    chunkIndex[chunkKey] = chunkName;
-    await writeJsonFile(path.join(CHUNK_DIR, chunkName), chunkEntries);
-  }
-
-  const indexPayload = {
-    schemaVersion: LEXICON_SCHEMA_VERSION,
-    chunks: chunkIndex,
-  };
-  await writeJsonFile(INDEX_OUTPUT_PATH, indexPayload);
-
-  const totalSenseGroups = entries.reduce((total, entry) => total + entry.senses.length, 0);
-  const multiPartOfSpeechWords = entries.filter((entry) => entry.senses.length > 1).length;
-
-  console.log('lexicon-build-complete', {
-    schemaVersion: LEXICON_SCHEMA_VERSION,
-    totalWords: targetWords.size,
-    totalSenseGroups,
-    multiPartOfSpeechWords,
-    extractedDefinitions: extractedMap.size,
-    reusedExistingEntries: reusedEntries,
-    overrides: overridesMap.size,
-    fallbackDefinitions: fallbackCount,
-  });
 }
 
 main().catch((error) => {

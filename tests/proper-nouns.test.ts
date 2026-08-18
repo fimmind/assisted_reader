@@ -14,7 +14,7 @@ import {
   createCachedChapterAnalyzer,
   createLexicalAnalysisCache,
 } from '../src/core/reader-analysis.js';
-import { resolveLexiconEntry } from '../src/core/lexicon.js';
+import { resolveLexiconBucketFileName, resolveLexiconEntry } from '../src/core/lexicon.js';
 import { normalizeToken } from '../src/core/math.js';
 import type { LexiconEntry, PartOfSpeech, ReaderSettings, TaggedSentence, TaggedTerm, UserProfile, VocabularyModel } from '../src/core/types.js';
 
@@ -1235,4 +1235,11 @@ test('lexicon resolution selects matching POS and otherwise exposes every group'
 
   const ambiguousEntry = resolveLexiconEntry(entry, { lemma: 'record', partOfSpeech: null });
   assert.deepEqual(ambiguousEntry.senses.map((sense) => sense.partOfSpeech), ['noun', 'verb']);
+});
+
+test('lazy lexicon bucket routing is stable for common, rare, and apostrophe words', () => {
+  assert.equal(resolveLexiconBucketFileName('record'), '0204.json');
+  assert.equal(resolveLexiconBucketFileName('zyzzyva'), '0026.json');
+  assert.equal(resolveLexiconBucketFileName("don't"), '0365.json');
+  assert.equal(resolveLexiconBucketFileName('Quomodocunquizing'), '0520.json');
 });

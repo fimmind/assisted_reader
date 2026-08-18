@@ -3,15 +3,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { LEXICON_SCHEMA_VERSION } from './lexicon-schema.mjs';
+import {
+  LEXICON_BUCKET_ALGORITHM,
+  LEXICON_BUCKET_COUNT,
+  LEXICON_SCHEMA_VERSION,
+  resolveLexiconBucketFileName,
+} from './lexicon-schema.mjs';
 
 const ROOT_DIR = process.cwd();
 const LEXICON_DIR = path.join(ROOT_DIR, 'data', 'lexicon');
 const LEXICON_INDEX_PATH = path.join(LEXICON_DIR, 'index.json');
-
-function isNonEmptyString(value) {
-  return typeof value === 'string' && value.trim().length > 0;
-}
 
 function hasValidLexiconArtifacts() {
   if (!fs.existsSync(LEXICON_INDEX_PATH)) {
@@ -29,21 +30,14 @@ function hasValidLexiconArtifacts() {
     !indexPayload
     || typeof indexPayload !== 'object'
     || indexPayload.schemaVersion !== LEXICON_SCHEMA_VERSION
-    || !indexPayload.chunks
-    || typeof indexPayload.chunks !== 'object'
+    || indexPayload.bucketAlgorithm !== LEXICON_BUCKET_ALGORITHM
+    || indexPayload.bucketCount !== LEXICON_BUCKET_COUNT
   ) {
     return false;
   }
 
-  const chunkNames = Object.values(indexPayload.chunks);
-  if (chunkNames.length === 0) {
-    return false;
-  }
-
-  for (const chunkName of chunkNames) {
-    if (!isNonEmptyString(chunkName)) {
-      return false;
-    }
+  for (let bucketId = 0; bucketId < LEXICON_BUCKET_COUNT; bucketId += 1) {
+    const chunkName = resolveLexiconBucketFileName(bucketId);
     const chunkPath = path.join(LEXICON_DIR, chunkName);
     if (!fs.existsSync(chunkPath)) {
       return false;

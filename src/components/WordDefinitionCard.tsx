@@ -21,6 +21,7 @@ interface WordDefinitionCardProps {
   isMarkedKnown?: boolean;
   isMarkedUnknown?: boolean;
   pronunciationVariant?: 'US' | 'UK';
+  definitionStatus?: 'loading' | 'ready' | 'error';
 }
 
 function resolveIpa(sense: LexiconSense, pronunciationVariant: 'US' | 'UK'): string {
@@ -141,6 +142,7 @@ export function WordDefinitionCard({
   isMarkedKnown = false,
   isMarkedUnknown = false,
   pronunciationVariant = 'US',
+  definitionStatus = 'ready',
 }: WordDefinitionCardProps) {
   if (compact) {
     return (
@@ -175,7 +177,11 @@ export function WordDefinitionCard({
             </button>
           </div>
         </div>
-        {definition.senses.length === 0 ? (
+        {definitionStatus === 'loading' ? (
+          <p className="text-sm text-muted-foreground leading-snug">Loading definition…</p>
+        ) : definitionStatus === 'error' ? (
+          <p className="text-sm text-destructive leading-snug">Definition could not be loaded.</p>
+        ) : definition.senses.length === 0 ? (
           <p className="text-sm text-foreground/80 leading-snug">Definition unavailable in this build.</p>
         ) : (
           <div className="space-y-2.5">
@@ -232,7 +238,11 @@ export function WordDefinitionCard({
           </Button>
         </div>
       </div>
-      {definition.senses.length === 0 ? (
+      {definitionStatus === 'loading' ? (
+        <p className="text-muted-foreground text-sm leading-relaxed">Loading definition…</p>
+      ) : definitionStatus === 'error' ? (
+        <p className="text-destructive text-sm leading-relaxed">Definition could not be loaded.</p>
+      ) : definition.senses.length === 0 ? (
         <p className="text-foreground/90 text-sm leading-relaxed">Definition unavailable in this build.</p>
       ) : (
         <div className="space-y-3">

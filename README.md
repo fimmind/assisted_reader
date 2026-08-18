@@ -108,7 +108,7 @@ Top-level:
     - `reader-analysis.ts` — chapter/paragraph analysis and unknown-word stats
     - `nlp.ts` — tokenization, proper noun handling, contextual deinflection
     - `model.ts` — vocabulary model loading + probability estimation
-    - `lexicon.ts` — lexicon index/chunk loading with resilience
+    - `lexicon.ts` — cached, on-demand lexicon bucket lookup
     - `books-store.ts` — IndexedDB/local fallback storage for imported books
     - `profile-store.ts` — profile/settings persistence + events
     - `external.ts` — external runtime integrations (e.g. compromise, JSZip)
@@ -142,13 +142,14 @@ Definition entries are sourced from **Wiktionary** via **Wiktextract** exports.
 
 The script auto-downloads the Wiktextract archive from [kaikki.org](https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz) into `downloads/` when missing, and reuses it when already present.
 
-The builder matches entries to words from `data/words.csv`, prefers English (`lang_code = "en"`), and falls back to `"Definition unavailable in this build."` when no usable definition is found.
+The builder includes every English (`lang_code = "en"`) headword matching the reader's single-word tokenizer. Words from `data/words.csv` are also retained as empty fallback entries when Wiktextract has no usable definition.
 
 Generated lexicon entry behavior:
 
 - definitions are grouped by part of speech in each word's `senses` array
 - up to 2 bundled definitions per part of speech, with near-identical inflection glosses filtered out
 - each part-of-speech group carries its own US/UK pronunciation fields when available
+- entries are distributed across 1,024 deterministic hash buckets for on-demand lookup
 - the lexicon index is schema-versioned so incompatible generated assets are rebuilt automatically
 
 Runtime display behavior:
@@ -157,6 +158,8 @@ Runtime display behavior:
 - definition cards select pronunciation by that variant (`ipaUs`/`ipaUk`) with fallback when one variant is missing
 - contextual POS inference selects the matching definition group for automatic cards, clicked words, and nested lookups
 - when POS is unknown or unavailable in the lexicon, cards display all available groups with visible POS labels
+- dictionary files are not fetched during reader startup; automatic and clicked cards fetch and cache only the required buckets
+- clicked words try their exact displayed form before falling back to the inferred lemma
 
 These assets must exist in `public/data/` for runtime fetches. `sync:data` handles this.
 
@@ -165,9 +168,9 @@ These assets must exist in `public/data/` for runtime fetches. `sync:data` handl
 `pnpm run verify:deploy-assets` validates that deploy output (`dist/`) includes:
 
 - `data/lexicon/index.json`
-- every chunk file referenced by `index.json`
+- every deterministic bucket declared by `index.json`
 
-and validates every chunk entry, POS group, and definition against the current schema.
+and validates every bucket assignment, entry, POS group, and definition against the current schema.
 
 ## Useful commands
 

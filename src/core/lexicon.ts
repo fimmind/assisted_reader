@@ -2,7 +2,7 @@ import { normalizeToken } from './math';
 import type { DefinitionTarget, LexiconEntry, LexiconSense, PartOfSpeech } from './types';
 
 const LEXICON_INDEX_URL = 'data/lexicon/index.json';
-export const LEXICON_SCHEMA_VERSION = 2;
+export const LEXICON_SCHEMA_VERSION = 3;
 
 const PARTS_OF_SPEECH: ReadonlySet<PartOfSpeech> = new Set<PartOfSpeech>([
   'noun',
@@ -32,10 +32,19 @@ const PARTS_OF_SPEECH: ReadonlySet<PartOfSpeech> = new Set<PartOfSpeech>([
 
 interface LexiconIndexPayload {
   schemaVersion: number;
-  chunks: Record<string, string>;
+  bucketAlgorithm: 'fnv1a-32';
+  bucketCount: number;
+  entryCount: number;
 }
 
-let lexiconPromise: Promise<Map<string, LexiconEntry>> | null = null;
+export interface LazyLexicon {
+  lookup: (word: string) => Promise<LexiconEntry | null>;
+}
+
+const LEXICON_BUCKET_ALGORITHM = 'fnv1a-32';
+const LEXICON_BUCKET_COUNT = 1024;
+const LEXICON_FETCH_ATTEMPTS = 3;
+let lexicon: LazyLexicon | null = null;
 
 function sanitizeOptionalText(value: unknown): string | undefined {
   if (typeof value !== 'string') {
@@ -101,19 +110,23 @@ function parseLexiconIndex(candidate: unknown): LexiconIndexPayload {
       `Unsupported lexicon schema: expected=${LEXICON_SCHEMA_VERSION} actual=${String(payload.schemaVersion)}`,
     );
   }
-  if (!payload.chunks || typeof payload.chunks !== 'object' || Array.isArray(payload.chunks)) {
-    throw new Error('Invalid lexicon index: chunks must be an object.');
+  if (payload.bucketAlgorithm !== LEXICON_BUCKET_ALGORITHM) {
+    throw new Error(`Unsupported lexicon bucket algorithm: ${String(payload.bucketAlgorithm)}`);
   }
-  const chunks = Object.fromEntries(
-    Object.entries(payload.chunks as Record<string, unknown>)
-      .filter((entry): entry is [string, string] => (
-        typeof entry[1] === 'string' && entry[1].trim().length > 0
-      )),
-  );
-  if (Object.keys(chunks).length === 0) {
-    throw new Error('Invalid lexicon index: no chunks were declared.');
+  if (payload.bucketCount !== LEXICON_BUCKET_COUNT) {
+    throw new Error(
+      `Unsupported lexicon bucket count: expected=${LEXICON_BUCKET_COUNT} actual=${String(payload.bucketCount)}`,
+    );
   }
-  return { schemaVersion: LEXICON_SCHEMA_VERSION, chunks };
+  if (typeof payload.entryCount !== 'number' || !Number.isInteger(payload.entryCount) || payload.entryCount <= 0) {
+    throw new Error(`Invalid lexicon entry count: ${String(payload.entryCount)}`);
+  }
+  return {
+    schemaVersion: LEXICON_SCHEMA_VERSION,
+    bucketAlgorithm: LEXICON_BUCKET_ALGORITHM,
+    bucketCount: LEXICON_BUCKET_COUNT,
+    entryCount: payload.entryCount,
+  };
 }
 
 function buildEntryMap(entries: LexiconEntry[]): Map<string, LexiconEntry> {
@@ -126,52 +139,100 @@ function buildEntryMap(entries: LexiconEntry[]): Map<string, LexiconEntry> {
   return map;
 }
 
-async function loadChunk(fileName: string): Promise<LexiconEntry[]> {
-  const response = await fetch(`${import.meta.env.BASE_URL}data/lexicon/${fileName}`);
-  if (!response.ok) {
-    throw new Error(`Failed to load lexicon chunk: file=${fileName} status=${response.status}`);
+async function fetchJsonWithRetries(relativeUrl: string): Promise<unknown> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= LEXICON_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(`${import.meta.env.BASE_URL}${relativeUrl}`);
+      if (!response.ok) {
+        throw new Error(`Dictionary request failed: url=${relativeUrl} status=${response.status}`);
+      }
+      return await response.json() as unknown;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.warn('lexicon-fetch-attempt-failed', {
+        relativeUrl,
+        attempt,
+        maxAttempts: LEXICON_FETCH_ATTEMPTS,
+        error: lastError.message,
+      });
+    }
   }
-  const payload: unknown = await response.json();
+  throw lastError ?? new Error(`Dictionary request failed without an error: url=${relativeUrl}`);
+}
+
+async function loadChunk(fileName: string): Promise<Map<string, LexiconEntry>> {
+  const payload = await fetchJsonWithRetries(`data/lexicon/${fileName}`);
   if (!Array.isArray(payload)) {
     throw new Error(`Invalid lexicon chunk: file=${fileName} expected=array`);
   }
-  return payload
+  return buildEntryMap(payload
     .map((candidate) => toLexiconEntry(candidate))
-    .filter((entry): entry is LexiconEntry => entry !== null);
+    .filter((entry): entry is LexiconEntry => entry !== null));
 }
 
-export async function loadLexiconMap(): Promise<Map<string, LexiconEntry>> {
-  if (lexiconPromise) {
-    return lexiconPromise;
+function hashLexiconWord(word: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < word.length; index += 1) {
+    hash ^= word.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
   }
+  return hash;
+}
 
-  lexiconPromise = (async () => {
-    try {
-      const indexResponse = await fetch(`${import.meta.env.BASE_URL}${LEXICON_INDEX_URL}`);
-      if (!indexResponse.ok) {
-        throw new Error(`Failed to load lexicon index: status=${indexResponse.status}`);
-      }
-      const indexPayload = parseLexiconIndex(await indexResponse.json());
-      const fileNames = Object.values(indexPayload.chunks);
-      const chunkResults = await Promise.allSettled(fileNames.map((fileName) => loadChunk(fileName)));
-      const merged: LexiconEntry[] = [];
-      for (let index = 0; index < chunkResults.length; index += 1) {
-        const result = chunkResults[index];
-        if (result.status === 'fulfilled') {
-          merged.push(...result.value);
-          continue;
-        }
-        const fileName = fileNames[index] ?? 'unknown';
-        console.warn('lexicon-chunk-load-failed', { fileName, error: result.reason });
-      }
-      return buildEntryMap(merged);
-    } catch (error) {
-      console.warn('lexicon-map-load-failed', { error });
-      return new Map<string, LexiconEntry>();
+export function resolveLexiconBucketFileName(word: string): string {
+  const bucketId = hashLexiconWord(normalizeToken(word)) % LEXICON_BUCKET_COUNT;
+  return `${String(bucketId).padStart(4, '0')}.json`;
+}
+
+function createLazyLexicon(): LazyLexicon {
+  let indexPromise: Promise<LexiconIndexPayload> | null = null;
+  const bucketPromises = new Map<string, Promise<Map<string, LexiconEntry>>>();
+
+  const loadIndex = (): Promise<LexiconIndexPayload> => {
+    if (!indexPromise) {
+      indexPromise = fetchJsonWithRetries(LEXICON_INDEX_URL)
+        .then((payload) => parseLexiconIndex(payload))
+        .catch((error: unknown) => {
+          indexPromise = null;
+          throw error;
+        });
     }
-  })();
+    return indexPromise;
+  };
 
-  return lexiconPromise;
+  const loadBucket = (fileName: string): Promise<Map<string, LexiconEntry>> => {
+    const existing = bucketPromises.get(fileName);
+    if (existing) {
+      return existing;
+    }
+    const pending = loadChunk(fileName).catch((error: unknown) => {
+      bucketPromises.delete(fileName);
+      throw error;
+    });
+    bucketPromises.set(fileName, pending);
+    return pending;
+  };
+
+  return {
+    lookup: async (rawWord: string): Promise<LexiconEntry | null> => {
+      const word = normalizeToken(rawWord).trim();
+      if (word.length === 0) {
+        return null;
+      }
+      const indexPayload = await loadIndex();
+      const fileName = resolveLexiconBucketFileName(word);
+      const bucket = await loadBucket(fileName);
+      return bucket.get(word) ?? null;
+    },
+  };
+}
+
+export function loadLexicon(): LazyLexicon {
+  if (!lexicon) {
+    lexicon = createLazyLexicon();
+  }
+  return lexicon;
 }
 
 export function resolveLexiconEntry(

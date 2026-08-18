@@ -1,6 +1,13 @@
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CANONICAL_PARTS_OF_SPEECH, LEXICON_SCHEMA_VERSION } from './lexicon-schema.mjs';
+import {
+  CANONICAL_PARTS_OF_SPEECH,
+  LEXICON_BUCKET_ALGORITHM,
+  LEXICON_BUCKET_COUNT,
+  LEXICON_SCHEMA_VERSION,
+  hashLexiconWord,
+  resolveLexiconBucketFileName,
+} from './lexicon-schema.mjs';
 
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
 const requiredFiles = [
@@ -32,19 +39,16 @@ async function verifyLexiconChunks() {
       `Invalid lexicon schema version: expected=${LEXICON_SCHEMA_VERSION} actual=${String(payload.schemaVersion)}`,
     );
   }
-  if (!payload.chunks || typeof payload.chunks !== 'object') {
-    throw new Error('Invalid lexicon index chunks in dist/data/lexicon/index.json');
+  if (payload.bucketAlgorithm !== LEXICON_BUCKET_ALGORITHM) {
+    throw new Error(`Invalid lexicon bucket algorithm: ${String(payload.bucketAlgorithm)}`);
   }
-  const chunkNames = Object.values(payload.chunks);
-  if (chunkNames.length === 0) {
-    throw new Error('Lexicon index has no chunk entries.');
+  if (payload.bucketCount !== LEXICON_BUCKET_COUNT) {
+    throw new Error(`Invalid lexicon bucket count: ${String(payload.bucketCount)}`);
   }
 
   let entryCount = 0;
-  for (const chunkName of chunkNames) {
-    if (typeof chunkName !== 'string' || chunkName.length === 0) {
-      throw new Error('Lexicon index contains an invalid chunk name.');
-    }
+  for (let bucketId = 0; bucketId < LEXICON_BUCKET_COUNT; bucketId += 1) {
+    const chunkName = resolveLexiconBucketFileName(bucketId);
     const relativePath = `data/lexicon/${chunkName}`;
     await assertFileExists(relativePath);
 
@@ -61,6 +65,12 @@ async function verifyLexiconChunks() {
       }
       if (typeof entry.word !== 'string' || entry.word.trim().length === 0) {
         throw new Error(`Invalid lexicon word in ${relativePath}`);
+      }
+      const expectedBucketId = hashLexiconWord(entry.word) % LEXICON_BUCKET_COUNT;
+      if (expectedBucketId !== bucketId) {
+        throw new Error(
+          `Lexicon word is in the wrong bucket: word=${entry.word} expected=${expectedBucketId} actual=${bucketId}`,
+        );
       }
       if (!Array.isArray(entry.senses)) {
         throw new Error(`Missing lexicon senses in ${relativePath}`);
@@ -91,6 +101,9 @@ async function verifyLexiconChunks() {
 
   if (entryCount === 0) {
     throw new Error('Lexicon chunks contain no entries.');
+  }
+  if (entryCount !== payload.entryCount) {
+    throw new Error(`Lexicon entry count mismatch: expected=${String(payload.entryCount)} actual=${entryCount}`);
   }
 }
 
