@@ -675,6 +675,7 @@ export default function ReaderPage() {
   const [loadingDefinitionLemmas, setLoadingDefinitionLemmas] = useState<Set<string>>(new Set());
   const [failedDefinitionLemmas, setFailedDefinitionLemmas] = useState<Set<string>>(new Set());
   const [wordPopups, setWordPopups] = useState<WordPopupState[]>([]);
+  const [activeAnalysisRunId, setActiveAnalysisRunId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
@@ -856,6 +857,7 @@ export default function ReaderPage() {
         return;
       }
 
+      setActiveAnalysisRunId(currentRunId);
       void (async () => {
         try {
           await yieldForAnalysisContinuation();
@@ -1011,6 +1013,8 @@ export default function ReaderPage() {
           }
         } catch (error) {
           console.warn('reader-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
+        } finally {
+          setActiveAnalysisRunId((activeRunId) => activeRunId === currentRunId ? null : activeRunId);
         }
       })();
     }, 700);
@@ -1859,6 +1863,20 @@ export default function ReaderPage() {
           </div>
         </div>
       </main>
+      {activeAnalysisRunId !== null && (
+        <div
+          role="status"
+          aria-label="Analyzing text"
+          aria-live="polite"
+          data-testid="reader-analysis-indicator"
+          className="pointer-events-none fixed bottom-4 right-4 z-30 text-muted-foreground"
+        >
+          <span
+            aria-hidden="true"
+            className="block size-5 rounded-full border-2 border-current border-t-transparent animate-spin motion-reduce:animate-none will-change-transform [animation-duration:1200ms]"
+          />
+        </div>
+      )}
       {wordPopups.map((popup, popupIndex) => {
         const rawDefinition = popup.definition
           ?? createFallbackLexiconEntry(popup.lookupWord || popup.target.lemma);
