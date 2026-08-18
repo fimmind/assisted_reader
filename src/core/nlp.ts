@@ -174,9 +174,8 @@ export function splitSentences(text: string): string[] {
 }
 
 export function tagSentenceTerms(sentence: string, nlp: NlpLike | null): TaggedTerm[] {
-  const fallback = buildFallbackTerms(sentence);
   if (!nlp) {
-    return fallback;
+    return buildFallbackTerms(sentence);
   }
 
   try {
@@ -184,10 +183,10 @@ export function tagSentenceTerms(sentence: string, nlp: NlpLike | null): TaggedT
     if (tagged.length > 0) {
       return tagged;
     }
-    return fallback;
+    return buildFallbackTerms(sentence);
   } catch (error) {
     console.warn('compromise-tagging-failed', { sentence, error });
-    return fallback;
+    return buildFallbackTerms(sentence);
   }
 }
 
@@ -310,7 +309,7 @@ export function buildHighConfidenceProperNounLexicon(taggedSentences: TaggedSent
       if (!isWordToken(term.raw)) {
         continue;
       }
-      const normalized = normalizeToken(term.raw);
+      const normalized = term.normalized;
       const existing = stats.get(normalized) ?? {
         total: 0,
         proper: 0,
@@ -544,7 +543,7 @@ export function makeLemmaCandidates(
   nlp: NlpLike | null,
   cache?: Map<string, string[]>,
 ): string[] {
-  const normalized = normalizeToken(term.raw);
+  const normalized = term.normalized;
   const classes = mapTagsToWordClass(term.tags);
   const hasOwnLemma = Object.prototype.hasOwnProperty.call(lemmaDict, normalized);
   const lemmaFromDict = hasOwnLemma ? lemmaDict[normalized] : undefined;
@@ -605,6 +604,21 @@ export function makeLemmaCandidates(
   return unique;
 }
 
+function resolveKnownDictionaryLemma(
+  normalizedToken: string,
+  lemmaDict: Record<string, string>,
+  lowerToIdx: Map<string, number>,
+): string | null {
+  if (!Object.prototype.hasOwnProperty.call(lemmaDict, normalizedToken)) {
+    return null;
+  }
+  const lemma = normalizeToken(lemmaDict[normalizedToken]);
+  if (lemma.length === 0 || !WORD_TOKEN_RE.test(lemma) || !lowerToIdx.has(lemma)) {
+    return null;
+  }
+  return lemma;
+}
+
 export function contextualDeinflectTaggedTerms(
   terms: TaggedTerm[],
   lemmaDict: Record<string, string>,
@@ -622,7 +636,7 @@ export function contextualDeinflectTaggedTerms(
   for (let index = 0; index < terms.length; index += 1) {
     const term = terms[index];
     const next = index < (terms.length - 1) ? terms[index + 1] : null;
-    const normalized = normalizeToken(term.raw);
+    const normalized = term.normalized;
     const explicitProperTag = hasProperTag(term);
     const tagProper = isProperNounTag(term);
     const strongShapeProper = isStrongProperShapeTerm(term, next);
@@ -632,6 +646,12 @@ export function contextualDeinflectTaggedTerms(
 
     if (excludeProperNouns && properByLexicon) {
       tokens.push('');
+      continue;
+    }
+
+    const dictionaryLemma = resolveKnownDictionaryLemma(normalized, lemmaDict, lowerToIdx);
+    if (dictionaryLemma !== null) {
+      tokens.push(dictionaryLemma);
       continue;
     }
 

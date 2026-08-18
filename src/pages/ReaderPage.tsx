@@ -1,7 +1,7 @@
 import {
-  useState, useEffect, useRef, useLayoutEffect, useCallback,
+  memo, useState, useEffect, useRef, useLayoutEffect, useCallback,
 } from 'react';
-import type { ReactNode } from 'react';
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
 import { ChevronLeft, Type, Eye, EyeOff, MoreHorizontal, Trash2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -21,8 +21,9 @@ import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
-import { analyzeChapter } from '@/core/reader-analysis';
+import { analyzeChapter, createCachedChapterAnalyzer, createLexicalAnalysisCache } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
+import type { ChapterAnalyzer, LexicalAnalysisCache } from '@/core/reader-analysis';
 import type { DefinitionTarget, ImportedBook, LexiconEntry, ParagraphAnalysis, PartOfSpeech, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
 
 function clampChapterNumber(book: ImportedBook, chapterNumber: number | undefined): number {
@@ -66,6 +67,7 @@ interface ReaderResources {
   lemmaDict: Record<string, string>;
   lexiconMap: Map<string, LexiconEntry>;
   nlp: NlpLike;
+  lexicalAnalysisCache: LexicalAnalysisCache;
 }
 
 interface WordPopupState {
@@ -84,6 +86,25 @@ interface PopupAnchorRect {
   left: number;
 }
 
+interface ReaderParagraphTextProps {
+  analysis: ParagraphAnalysis;
+  assistanceEnabled: boolean;
+  sourceParagraphIndex: number;
+  visibleParagraphIndex: number;
+  onElementChange: (visibleParagraphIndex: number, element: HTMLParagraphElement | null) => void;
+  onOpenWordPopup: (
+    anchorRect: PopupAnchorRect,
+    target: DefinitionTarget,
+    sourceParagraphIndex: number,
+  ) => void;
+}
+
+interface ParagraphWordClick {
+  anchorRect: PopupAnchorRect;
+  end: number;
+  start: number;
+}
+
 type AnalysisRefreshMode = 'reset' | 'preserve';
 
 type DeferredHandle = {
@@ -95,6 +116,11 @@ type IdleWindow = Window & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
   cancelIdleCallback?: (id: number) => void;
 };
+
+const ANALYSIS_TIME_SLICE_MS = 8;
+const ANALYSIS_PUBLISH_INTERVAL_MS = 1000;
+const ANALYSIS_SCROLL_SETTLE_MS = 150;
+const ANALYSIS_SCROLL_POLL_MS = 16;
 
 function clearDeferredHandle(handle: DeferredHandle | null): void {
   if (!handle) {
@@ -118,6 +144,17 @@ function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHand
   return { kind: 'timeout', id };
 }
 
+function yieldForAnalysisContinuation(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const idleWindow = window as IdleWindow;
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      idleWindow.requestIdleCallback(resolve);
+      return;
+    }
+    window.setTimeout(resolve, 0);
+  });
+}
+
 function capturePopupAnchorRect(rect: DOMRect): PopupAnchorRect {
   return {
     top: rect.top,
@@ -125,6 +162,89 @@ function capturePopupAnchorRect(rect: DOMRect): PopupAnchorRect {
     bottom: rect.bottom,
     left: rect.left,
   };
+}
+
+function resolveCaretTextPosition(clientX: number, clientY: number): { node: Text; offset: number } | null {
+  const caretDocument = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const caretPosition = caretDocument.caretPositionFromPoint?.(clientX, clientY);
+  if (caretPosition?.offsetNode instanceof Text) {
+    return { node: caretPosition.offsetNode, offset: caretPosition.offset };
+  }
+  const caretRange = caretDocument.caretRangeFromPoint?.(clientX, clientY);
+  if (caretRange?.startContainer instanceof Text) {
+    return { node: caretRange.startContainer, offset: caretRange.startOffset };
+  }
+  return null;
+}
+
+function resolveTextNodeStartOffset(container: HTMLElement, targetNode: Text): number | null {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  let node = walker.nextNode();
+  while (node) {
+    if (node === targetNode) {
+      return offset;
+    }
+    offset += node.textContent?.length ?? 0;
+    node = walker.nextNode();
+  }
+  return null;
+}
+
+function resolveParagraphWordClick(
+  paragraphElement: HTMLParagraphElement,
+  paragraphText: string,
+  clientX: number,
+  clientY: number,
+): ParagraphWordClick | null {
+  const caret = resolveCaretTextPosition(clientX, clientY);
+  if (!caret || !paragraphElement.contains(caret.node)) {
+    return null;
+  }
+  const nodeStart = resolveTextNodeStartOffset(paragraphElement, caret.node);
+  if (nodeStart === null) {
+    return null;
+  }
+  const clickedOffset = nodeStart + caret.offset;
+  const matcher = new RegExp(WORD_RE.source, WORD_RE.flags);
+  let selectedMatch: RegExpExecArray | null = null;
+  let match = matcher.exec(paragraphText);
+  while (match) {
+    const matchEnd = match.index + match[0].length;
+    if (
+      (clickedOffset >= match.index && clickedOffset < matchEnd)
+      || (clickedOffset === matchEnd && clickedOffset > match.index)
+    ) {
+      selectedMatch = match;
+      break;
+    }
+    if (match.index > clickedOffset) {
+      break;
+    }
+    match = matcher.exec(paragraphText);
+  }
+  if (!selectedMatch) {
+    return null;
+  }
+
+  const start = selectedMatch.index;
+  const end = start + selectedMatch[0].length;
+  const localStart = start - nodeStart;
+  const localEnd = end - nodeStart;
+  if (localStart < 0 || localEnd > caret.node.length) {
+    return null;
+  }
+  const range = document.createRange();
+  range.setStart(caret.node, localStart);
+  range.setEnd(caret.node, localEnd);
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {
+    return null;
+  }
+  return { anchorRect: capturePopupAnchorRect(rect), start, end };
 }
 
 function calculateWordPopupPosition(
@@ -154,6 +274,95 @@ function calculateWordPopupPosition(
 
   return { top, left };
 }
+
+const ReaderParagraphText = memo(function ReaderParagraphText({
+  analysis,
+  assistanceEnabled,
+  sourceParagraphIndex,
+  visibleParagraphIndex,
+  onElementChange,
+  onOpenWordPopup,
+}: ReaderParagraphTextProps) {
+  const highlightedTargetKeys = assistanceEnabled
+    ? new Set<string>(analysis.cardTargets.map((target) => definitionTargetKey(target)))
+    : new Set<string>();
+  const tokenByRange = new Map<string, ParagraphAnalysis['tokens'][number]>();
+  for (const token of analysis.tokens) {
+    tokenByRange.set(`${token.start}:${token.end}`, token);
+  }
+
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  for (const analyzedToken of analysis.tokens) {
+    const target = createDefinitionTarget(analyzedToken.lemma, analyzedToken.partOfSpeech);
+    const shouldHighlight = assistanceEnabled
+      && analyzedToken.unknown
+      && highlightedTargetKeys.has(definitionTargetKey(target));
+    if (!shouldHighlight) {
+      continue;
+    }
+    if (analyzedToken.start > cursor) {
+      nodes.push(analysis.paragraphText.slice(cursor, analyzedToken.start));
+    }
+    const isPriority = (1 - analyzedToken.pKnown) > 0.6;
+
+    nodes.push(
+      <span
+        key={`${analyzedToken.lemma}-${analyzedToken.start}`}
+        data-word-popup-trigger="true"
+        className={cn(
+          'cursor-pointer',
+          'rounded-sm px-0.5 -mx-0.5',
+          isPriority ? 'unknown-word priority' : 'unknown-word',
+        )}
+        onClick={(event) => {
+          onOpenWordPopup(capturePopupAnchorRect(event.currentTarget.getBoundingClientRect()), target, sourceParagraphIndex);
+        }}
+      >
+        {analysis.paragraphText.slice(analyzedToken.start, analyzedToken.end)}
+      </span>,
+    );
+    cursor = analyzedToken.end;
+  }
+
+  if (cursor < analysis.paragraphText.length) {
+    nodes.push(analysis.paragraphText.slice(cursor));
+  }
+
+  return (
+    <p
+      ref={(element) => onElementChange(visibleParagraphIndex, element)}
+      className="text-foreground/90 reader-text cursor-pointer"
+      data-testid={`paragraph-${visibleParagraphIndex}`}
+      onClick={(event: ReactMouseEvent<HTMLParagraphElement>) => {
+        const clickedTrigger = event.target instanceof Element
+          ? event.target.closest('[data-word-popup-trigger="true"]')
+          : null;
+        if (clickedTrigger) {
+          return;
+        }
+        const click = resolveParagraphWordClick(
+          event.currentTarget,
+          analysis.paragraphText,
+          event.clientX,
+          event.clientY,
+        );
+        if (!click) {
+          return;
+        }
+        const analyzedToken = tokenByRange.get(`${click.start}:${click.end}`);
+        const rawWord = analysis.paragraphText.slice(click.start, click.end);
+        const target = createDefinitionTarget(
+          analyzedToken?.lemma ?? normalizeToken(rawWord),
+          analyzedToken?.partOfSpeech ?? null,
+        );
+        onOpenWordPopup(click.anchorRect, target, sourceParagraphIndex);
+      }}
+    >
+      {nodes.length > 0 ? nodes : analysis.paragraphText}
+    </p>
+  );
+});
 
 function calculateScrollProgressFromDocument(): number {
   const documentElement = document.documentElement;
@@ -209,11 +418,8 @@ function buildParagraphProcessingOrder(paragraphCount: number, anchorIndex: numb
 
 function buildParagraphAnalysisAtIndex(
   selectedBook: ImportedBook,
-  settings: ReaderSettings,
-  profile: UserProfile,
-  resources: ReaderResources,
   paragraphIndex: number,
-  assistanceEnabled: boolean,
+  analyze: ChapterAnalyzer,
 ): ParagraphAnalysis {
   const chapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
   const chapterIndex = chapterNumber - 1;
@@ -222,21 +428,9 @@ function buildParagraphAnalysisAtIndex(
     return { paragraphText: '', tokens: [], cardTargets: [] };
   }
   const paragraphText = chapter.paragraphs[paragraphIndex] ?? '';
-  if (!assistanceEnabled) {
-    return { paragraphText, tokens: [], cardTargets: [] };
-  }
-
-  const analyses = analyzeChapter({
-    chapter: {
-      title: chapter.title,
-      paragraphs: [paragraphText],
-    },
-    settings,
-    model: resources.model,
-    profile,
-    lemmaDict: resources.lemmaDict,
-    nlp: resources.nlp,
-    maxCardsPerParagraph: Math.max(1, Math.min(3, settings.maxWordsPerParagraph)),
+  const analyses = analyze({
+    title: chapter.title,
+    paragraphs: [paragraphText],
   });
 
   return analyses[0] ?? { paragraphText, tokens: [], cardTargets: [] };
@@ -462,6 +656,7 @@ export default function ReaderPage() {
   const lastPersistedChapterProgressRef = useRef(0);
 
   const lastScrollY = useRef(0);
+  const lastScrollActivityAtRef = useRef(Number.NEGATIVE_INFINITY);
 
   const rowRef = useRef<HTMLDivElement>(null);
   const textColRef = useRef<HTMLDivElement>(null);
@@ -475,6 +670,9 @@ export default function ReaderPage() {
   const setExtraPadding = useCallback((value: number) => {
     extraPaddingRef.current = value;
     _setExtraPadding((previous) => previous === value ? previous : value);
+  }, []);
+  const setParagraphElement = useCallback((visibleParagraphIndex: number, element: HTMLParagraphElement | null) => {
+    paraRefs.current[visibleParagraphIndex] = element;
   }, []);
 
   const resolveAnalysisAnchorIndex = useCallback((paragraphCount: number, chapterProgress: number) => {
@@ -568,12 +766,26 @@ export default function ReaderPage() {
 
       void (async () => {
         try {
+          await yieldForAnalysisContinuation();
+          if (analysisRunIdRef.current !== currentRunId) {
+            return;
+          }
           const nextAnalyses = initialAnalyses.slice();
           const definitionMap = new Map<string, LexiconEntry>(initialDefinitions);
+          let definitionsChanged = false;
           const processedParagraphIndices = new Set<number>();
           const deduplicationRadius = resolveDeduplicationRadius(settingsRef.current.deduplicationRadius);
           const threshold = resolveKnowledgeThreshold(settingsRef.current.knowledgeThreshold);
           const maxCardsPerParagraph = Math.max(1, Math.min(5, settingsRef.current.maxWordsPerParagraph));
+          const analyzeParagraph = createCachedChapterAnalyzer({
+            settings: settingsRef.current,
+            model: resources.model,
+            profile: activeProfile,
+            lemmaDict: resources.lemmaDict,
+            nlp: resources.nlp,
+            maxCardsPerParagraph: 1,
+            includeCards: false,
+          }, resources.lexicalAnalysisCache);
           const resolvedAnchorIndex = typeof anchorParagraphIndex === 'number' && Number.isFinite(anchorParagraphIndex)
             ? clampParagraphIndex(anchorParagraphIndex, expectedParagraphCount)
             : resolveAnalysisAnchorIndex(
@@ -581,8 +793,31 @@ export default function ReaderPage() {
               selectedBook.currentChapterProgress,
             );
           const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, resolvedAnchorIndex);
+          let pendingParagraphIndices: number[] = [];
+          let timeSliceStartedAt = performance.now();
+          let lastPublishedAt = timeSliceStartedAt;
+          const waitForScrollToSettle = async (): Promise<boolean> => {
+            let remainingMs = ANALYSIS_SCROLL_SETTLE_MS - (performance.now() - lastScrollActivityAtRef.current);
+            while (remainingMs > 0) {
+              await new Promise<void>((resolve) => {
+                window.setTimeout(resolve, Math.min(ANALYSIS_SCROLL_POLL_MS, remainingMs));
+              });
+              if (analysisRunIdRef.current !== currentRunId) {
+                return false;
+              }
+              remainingMs = ANALYSIS_SCROLL_SETTLE_MS - (performance.now() - lastScrollActivityAtRef.current);
+            }
+            return true;
+          };
 
-          for (const paragraphIndex of paragraphOrder) {
+          for (let orderIndex = 0; orderIndex < paragraphOrder.length; orderIndex += 1) {
+            if (performance.now() - lastScrollActivityAtRef.current < ANALYSIS_SCROLL_SETTLE_MS) {
+              if (!await waitForScrollToSettle()) {
+                return;
+              }
+              timeSliceStartedAt = performance.now();
+            }
+            const paragraphIndex = paragraphOrder[orderIndex];
             if (analysisRunIdRef.current !== currentRunId) {
               return;
             }
@@ -590,11 +825,8 @@ export default function ReaderPage() {
             try {
               const analysis = buildParagraphAnalysisAtIndex(
                 selectedBook,
-                settingsRef.current,
-                activeProfile,
-                resources,
                 paragraphIndex,
-                true,
+                analyzeParagraph,
               );
               const suppressedTargetKeys = new Set<string>();
               if (deduplicationRadius > 0) {
@@ -622,7 +854,10 @@ export default function ReaderPage() {
 
               for (const target of nextAnalysis.cardTargets) {
                 const found = resources.lexiconMap.get(target.lemma) ?? createFallbackLexiconEntry(target.lemma);
-                definitionMap.set(target.lemma, found);
+                if (definitionMap.get(target.lemma) !== found) {
+                  definitionMap.set(target.lemma, found);
+                  definitionsChanged = true;
+                }
               }
               processedParagraphIndices.add(paragraphIndex);
             } catch (error) {
@@ -637,22 +872,60 @@ export default function ReaderPage() {
             if (analysisRunIdRef.current !== currentRunId) {
               return;
             }
-
-            setChapterAnalysis((previous) => {
-              const previousAnalysis = previous[paragraphIndex];
-              const nextAnalysis = nextAnalyses[paragraphIndex];
-              if (previousAnalysis && areParagraphAnalysesVisuallyEquivalent(previousAnalysis, nextAnalysis)) {
-                return previous;
+            if (performance.now() - lastScrollActivityAtRef.current < ANALYSIS_SCROLL_SETTLE_MS) {
+              if (!await waitForScrollToSettle()) {
+                return;
               }
-              const updated = previous.length === nextAnalyses.length ? previous.slice() : nextAnalyses.slice();
-              updated[paragraphIndex] = nextAnalysis;
-              return updated;
-            });
-            setDefinitionsByLemma(new Map(definitionMap));
+              timeSliceStartedAt = performance.now();
+            }
 
-            await new Promise<void>((resolve) => {
-              window.setTimeout(resolve, 0);
-            });
+            pendingParagraphIndices.push(paragraphIndex);
+            const isLastParagraph = orderIndex === paragraphOrder.length - 1;
+            const timeSliceElapsed = performance.now() - timeSliceStartedAt;
+            const isFirstParagraph = orderIndex === 0;
+            const shouldYield = isLastParagraph || timeSliceElapsed >= ANALYSIS_TIME_SLICE_MS;
+            if (!shouldYield && !isFirstParagraph) {
+              continue;
+            }
+
+            const now = performance.now();
+            const shouldPublish = (
+              isFirstParagraph
+              || isLastParagraph
+              || now - lastPublishedAt >= ANALYSIS_PUBLISH_INTERVAL_MS
+            );
+            if (shouldPublish) {
+              const publishedParagraphIndices = pendingParagraphIndices;
+              pendingParagraphIndices = [];
+              setChapterAnalysis((previous) => {
+                if (previous.length !== nextAnalyses.length) {
+                  return nextAnalyses.slice();
+                }
+                let updated = previous;
+                for (const publishedIndex of publishedParagraphIndices) {
+                  const previousAnalysis = previous[publishedIndex];
+                  const nextAnalysis = nextAnalyses[publishedIndex];
+                  if (previousAnalysis && areParagraphAnalysesVisuallyEquivalent(previousAnalysis, nextAnalysis)) {
+                    continue;
+                  }
+                  if (updated === previous) {
+                    updated = previous.slice();
+                  }
+                  updated[publishedIndex] = nextAnalysis;
+                }
+                return updated;
+              });
+              if (definitionsChanged) {
+                setDefinitionsByLemma(new Map(definitionMap));
+                definitionsChanged = false;
+              }
+              lastPublishedAt = now;
+            }
+
+            if (shouldYield || isFirstParagraph) {
+              await yieldForAnalysisContinuation();
+              timeSliceStartedAt = performance.now();
+            }
           }
         } catch (error) {
           console.warn('reader-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
@@ -682,7 +955,13 @@ export default function ReaderPage() {
         loadCompromise(),
       ]);
 
-      const resources: ReaderResources = { model, lemmaDict, lexiconMap, nlp };
+      const resources: ReaderResources = {
+        model,
+        lemmaDict,
+        lexiconMap,
+        nlp,
+        lexicalAnalysisCache: createLexicalAnalysisCache(),
+      };
       resourcesRef.current = resources;
 
       setBook(selectedBook);
@@ -819,64 +1098,85 @@ export default function ReaderPage() {
   const rafIdRef = useRef<number | null>(null);
 
   const measure = useCallback(() => {
-    if (rafIdRef.current !== null) return;
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null;
-      if (window.innerWidth < 768) {
-        setExtraPadding(0);
+    if (window.innerWidth < 768) {
+      setExtraPadding(0);
+      return;
+    }
+    if (!rowRef.current || !textColRef.current) return;
+
+    const rowRect = rowRef.current.getBoundingClientRect();
+    const rowStyles = window.getComputedStyle(rowRef.current);
+    const rowPaddingTop = Number.parseFloat(rowStyles.paddingTop) || 0;
+    const rowTop = rowRect.top + rowPaddingTop;
+    const measuredCards: Array<{
+      index: number;
+      desiredTop: number;
+      height: number;
+    }> = [];
+    cardGrpRefs.current.forEach((element, index) => {
+      const paragraphElement = paraRefs.current[index];
+      if (!element || !paragraphElement) {
         return;
       }
-      if (!rowRef.current || !textColRef.current) return;
-
-      const rowRect = rowRef.current.getBoundingClientRect();
-      const rowStyles = window.getComputedStyle(rowRef.current);
-      const rowPaddingTop = Number.parseFloat(rowStyles.paddingTop) || 0;
-      const rowTop = rowRect.top + rowPaddingTop;
-      const rawOffsets = paraRefs.current.map((element) =>
-        element ? (element.getBoundingClientRect().top - rowTop) : 0
-      );
-      const newOffsets = [...rawOffsets];
-      const minCardGap = 12;
-      let nextMinTop = 0;
-      cardGrpRefs.current.forEach((element, index) => {
-        if (!element) {
-          return;
-        }
-        const desiredTop = rawOffsets[index] ?? 0;
-        const adjustedTop = Math.max(desiredTop, nextMinTop);
-        newOffsets[index] = adjustedTop;
-        nextMinTop = adjustedTop + element.offsetHeight + minCardGap;
+      measuredCards.push({
+        index,
+        desiredTop: paragraphElement.getBoundingClientRect().top - rowTop,
+        height: element.offsetHeight,
       });
-      setParaOffsets((previous) =>
-        previous.length === newOffsets.length && previous.every((value, index) => value === newOffsets[index])
-          ? previous : [...newOffsets]);
-
-      const textElement = textColRef.current;
-      const naturalTextHeight = textElement.scrollHeight - extraPaddingRef.current;
-      const textTop = textElement.getBoundingClientRect().top - rowTop;
-      const textBottom = textTop + naturalTextHeight;
-
-      let maxOverflow = 0;
-      cardGrpRefs.current.forEach((element, index) => {
-        if (!element) return;
-        const cardBottom = (newOffsets[index] ?? 0) + element.offsetHeight;
-        if (cardBottom > textBottom) {
-          maxOverflow = Math.max(maxOverflow, cardBottom - textBottom);
-        }
-      });
-
-      setExtraPadding(maxOverflow > 0 ? maxOverflow + 24 : 0);
     });
+
+    const newOffsets = new Array<number>(paraRefs.current.length).fill(0);
+    const minCardGap = 12;
+    let nextMinTop = 0;
+    for (const card of measuredCards) {
+      const adjustedTop = Math.max(card.desiredTop, nextMinTop);
+      newOffsets[card.index] = adjustedTop;
+      nextMinTop = adjustedTop + card.height + minCardGap;
+    }
+    setParaOffsets((previous) =>
+      previous.length === newOffsets.length && previous.every((value, index) => value === newOffsets[index])
+        ? previous : [...newOffsets]);
+
+    const textElement = textColRef.current;
+    const naturalTextHeight = textElement.scrollHeight - extraPaddingRef.current;
+    const textTop = textElement.getBoundingClientRect().top - rowTop;
+    const textBottom = textTop + naturalTextHeight;
+
+    let maxOverflow = 0;
+    for (const card of measuredCards) {
+      const cardBottom = (newOffsets[card.index] ?? 0) + card.height;
+      if (cardBottom > textBottom) {
+        maxOverflow = Math.max(maxOverflow, cardBottom - textBottom);
+      }
+    }
+
+    setExtraPadding(maxOverflow > 0 ? maxOverflow + 24 : 0);
   }, [setExtraPadding]);
+
+  const scheduleMeasure = useCallback(() => {
+    if (rafIdRef.current !== null) {
+      return;
+    }
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      measure();
+    });
+  }, [measure]);
 
   useLayoutEffect(() => {
     measure();
   }, [measure, chapterAnalysis, settings.fontSize, settings.lineSpacing, settings.fontChoice, settings.pageWidth, settings.maxWordsPerParagraph, assistanceEnabled]);
 
   useEffect(() => {
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [measure]);
+    window.addEventListener('resize', scheduleMeasure);
+    return () => {
+      window.removeEventListener('resize', scheduleMeasure);
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
+  }, [scheduleMeasure]);
 
   useEffect(() => {
     if (!book || isLoading) {
@@ -900,7 +1200,11 @@ export default function ReaderPage() {
   }, [book, isLoading, restoreCurrentChapterProgress]);
 
   useEffect(() => {
+    const recordScrollActivity = () => {
+      lastScrollActivityAtRef.current = performance.now();
+    };
     const handleScroll = () => {
+      recordScrollActivity();
       const y = window.scrollY;
       if (y > lastScrollY.current && y > 100) setHeaderVisible(false);
       else if (y < lastScrollY.current) setHeaderVisible(true);
@@ -910,8 +1214,12 @@ export default function ReaderPage() {
       }
       scheduleChapterProgressPersist();
     };
+    window.addEventListener('wheel', recordScrollActivity, { passive: true });
+    window.addEventListener('touchmove', recordScrollActivity, { passive: true });
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
+      window.removeEventListener('wheel', recordScrollActivity);
+      window.removeEventListener('touchmove', recordScrollActivity);
       window.removeEventListener('scroll', handleScroll);
     };
   }, [scheduleChapterProgressPersist]);
@@ -986,16 +1294,12 @@ export default function ReaderPage() {
     return createFallbackLexiconEntry(normalizedLemma);
   }, []);
 
-  const createWordPopup = useCallback((
-    element: HTMLElement,
+  const createWordPopupFromRects = useCallback((
+    anchor: PopupAnchorRect,
+    horizontalAnchor: PopupAnchorRect,
     target: DefinitionTarget,
     sourceParagraphIndex: number,
   ): WordPopupState => {
-    const rect = element.getBoundingClientRect();
-    const definitionCard = element.closest<HTMLElement>('[data-definition-card="true"]');
-    const horizontalAnchorRect = definitionCard?.getBoundingClientRect() ?? rect;
-    const anchor = capturePopupAnchorRect(rect);
-    const horizontalAnchor = capturePopupAnchorRect(horizontalAnchorRect);
     const position = calculateWordPopupPosition(
       anchor,
       horizontalAnchor,
@@ -1013,6 +1317,19 @@ export default function ReaderPage() {
       sourceParagraphIndex,
     };
   }, []);
+
+  const createWordPopupFromElement = useCallback((
+    element: HTMLElement,
+    target: DefinitionTarget,
+    sourceParagraphIndex: number,
+  ): WordPopupState => {
+    const rect = capturePopupAnchorRect(element.getBoundingClientRect());
+    const definitionCard = element.closest<HTMLElement>('[data-definition-card="true"]');
+    const horizontalRect = definitionCard
+      ? capturePopupAnchorRect(definitionCard.getBoundingClientRect())
+      : rect;
+    return createWordPopupFromRects(rect, horizontalRect, target, sourceParagraphIndex);
+  }, [createWordPopupFromRects]);
 
   useLayoutEffect(() => {
     if (wordPopups.length === 0) {
@@ -1049,12 +1366,12 @@ export default function ReaderPage() {
   }, [definitionsByLemma, settings.englishVariant, wordPopups]);
 
   const openRootWordPopup = useCallback((
-    element: HTMLElement,
+    anchorRect: PopupAnchorRect,
     target: DefinitionTarget,
     sourceParagraphIndex: number,
   ) => {
-    setWordPopups([createWordPopup(element, target, sourceParagraphIndex)]);
-  }, [createWordPopup]);
+    setWordPopups([createWordPopupFromRects(anchorRect, anchorRect, target, sourceParagraphIndex)]);
+  }, [createWordPopupFromRects]);
 
   const resolveDefinitionWordTarget = useCallback((click: DefinitionWordClick): DefinitionTarget => {
     const resources = resourcesRef.current;
@@ -1094,14 +1411,14 @@ export default function ReaderPage() {
     sourceParagraphIndex: number,
   ) => {
     const target = resolveDefinitionWordTarget(click);
-    const popup = createWordPopup(click.element, target, sourceParagraphIndex);
+    const popup = createWordPopupFromElement(click.element, target, sourceParagraphIndex);
     setWordPopups((previous) => {
       const ancestors = parentPopupIndex === null
         ? []
         : previous.slice(0, parentPopupIndex + 1);
       return [...ancestors, popup];
     });
-  }, [createWordPopup, resolveDefinitionWordTarget]);
+  }, [createWordPopupFromElement, resolveDefinitionWordTarget]);
 
   const closeAllWordPopups = useCallback(() => {
     setWordPopups([]);
@@ -1161,61 +1478,6 @@ export default function ReaderPage() {
       window.removeEventListener('scroll', handleViewportChange, true);
     };
   }, [closeAllWordPopups, wordPopups.length]);
-
-  const renderParagraphWithHighlights = (analysis: ParagraphAnalysis, sourceParagraphIndex: number): ReactNode => {
-    const highlightedTargetKeys = assistanceEnabled
-      ? new Set<string>(analysis.cardTargets.map((target) => definitionTargetKey(target)))
-      : new Set<string>();
-    const tokenByRange = new Map<string, ParagraphAnalysis['tokens'][number]>();
-    for (const token of analysis.tokens) {
-      tokenByRange.set(`${token.start}:${token.end}`, token);
-    }
-
-    const nodes: ReactNode[] = [];
-    let cursor = 0;
-    const matcher = new RegExp(WORD_RE.source, WORD_RE.flags);
-    let match = matcher.exec(analysis.paragraphText);
-
-    while (match) {
-      const tokenText = match[0];
-      const start = match.index;
-      const end = start + tokenText.length;
-      if (start > cursor) {
-        nodes.push(analysis.paragraphText.slice(cursor, start));
-      }
-
-      const analyzedToken = tokenByRange.get(`${start}:${end}`);
-      const lemma = analyzedToken?.lemma ?? normalizeToken(tokenText);
-      const target = createDefinitionTarget(lemma, analyzedToken?.partOfSpeech ?? null);
-      const shouldHighlight = assistanceEnabled
-        && Boolean(analyzedToken?.unknown)
-        && highlightedTargetKeys.has(definitionTargetKey(target));
-      const isPriority = shouldHighlight && analyzedToken ? ((1 - analyzedToken.pKnown) > 0.6) : false;
-
-      nodes.push(
-        <span
-          key={`${lemma}-${start}`}
-          data-word-popup-trigger="true"
-          className={cn(
-            'cursor-pointer',
-            shouldHighlight && 'rounded-sm px-0.5 -mx-0.5',
-            shouldHighlight && (isPriority ? 'unknown-word priority' : 'unknown-word'),
-          )}
-          onClick={(event) => openRootWordPopup(event.currentTarget, target, sourceParagraphIndex)}
-        >
-          {tokenText}
-        </span>,
-      );
-      cursor = end;
-      match = matcher.exec(analysis.paragraphText);
-    }
-
-    if (cursor < analysis.paragraphText.length) {
-      nodes.push(analysis.paragraphText.slice(cursor));
-    }
-
-    return <>{nodes}</>;
-  };
 
   if (isLoading) {
     return (
@@ -1386,13 +1648,14 @@ export default function ReaderPage() {
                 const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardTargets: [] };
                 return (
                 <div key={entry.sourceIndex} className="mb-2" data-testid={`paragraph-block-${entry.visibleIndex}`}>
-                  <p
-                    ref={(element) => { paraRefs.current[entry.visibleIndex] = element; }}
-                    className="text-foreground/90 reader-text"
-                    data-testid={`paragraph-${entry.visibleIndex}`}
-                  >
-                    {renderParagraphWithHighlights(analysis, entry.sourceIndex)}
-                  </p>
+                  <ReaderParagraphText
+                    analysis={analysis}
+                    assistanceEnabled={assistanceEnabled}
+                    sourceParagraphIndex={entry.sourceIndex}
+                    visibleParagraphIndex={entry.visibleIndex}
+                    onElementChange={setParagraphElement}
+                    onOpenWordPopup={openRootWordPopup}
+                  />
                   {assistanceEnabled && analysis.cardTargets.length > 0 && (
                     <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
                       {analysis.cardTargets.map((target) => {

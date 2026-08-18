@@ -51,6 +51,19 @@ export interface ChapterAnalysisInput {
   thetaOverride?: number;
 }
 
+export type ChapterAnalyzer = (chapter: BookChapter) => ParagraphAnalysis[];
+
+export interface LexicalAnalysisCache {
+  taggedSentencesByText: Map<string, TaggedSentence[]>;
+  lemmaCandidateCache: Map<string, string[]>;
+}
+
+type AnalysisContext = {
+  theta: number;
+  knownProbabilityCache: Map<string, number>;
+  lexicalCache: LexicalAnalysisCache;
+};
+
 export interface BookLemmaHistogram {
   totalTokenCount: number;
   nonProperLemmaCounts: Record<string, number>;
@@ -335,18 +348,57 @@ function scoreCardTargets(tokens: ParagraphToken[], threshold: number): Definiti
   return scored.map((entry) => entry.target);
 }
 
-export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[] {
-  const includeCards = input.includeCards !== false;
+export function createLexicalAnalysisCache(): LexicalAnalysisCache {
+  return {
+    taggedSentencesByText: new Map<string, TaggedSentence[]>(),
+    lemmaCandidateCache: new Map<string, string[]>(),
+  };
+}
+
+function createAnalysisContext(
+  input: Omit<ChapterAnalysisInput, 'chapter'>,
+  lexicalCache: LexicalAnalysisCache,
+): AnalysisContext {
   const theta = (
     typeof input.thetaOverride === 'number' && Number.isFinite(input.thetaOverride)
       ? input.thetaOverride
       : estimateTheta(input.model, input.profile)
   );
+  return {
+    theta,
+    knownProbabilityCache: new Map<string, number>(),
+    lexicalCache,
+  };
+}
+
+function buildCachedTaggedSentenceGroups(
+  paragraphs: string[],
+  nlp: ChapterAnalysisInput['nlp'],
+  cache: LexicalAnalysisCache,
+): TaggedSentence[][] {
+  return paragraphs.map((paragraph) => {
+    const cached = cache.taggedSentencesByText.get(paragraph);
+    if (cached) {
+      return cached;
+    }
+    const tagged = buildTaggedSentences(paragraph, nlp);
+    cache.taggedSentencesByText.set(paragraph, tagged);
+    return tagged;
+  });
+}
+
+function analyzeChapterWithContext(
+  input: ChapterAnalysisInput,
+  context: AnalysisContext,
+): ParagraphAnalysis[] {
+  const includeCards = input.includeCards !== false;
   const threshold = resolveKnowledgeThreshold(input.settings.knowledgeThreshold);
   const deduplicationRadius = resolveDeduplicationRadius(input.settings.deduplicationRadius);
-  const knownProbabilityCache = new Map<string, number>();
-  const lemmaCandidateCache = new Map<string, string[]>();
-  const taggedByParagraph = buildTaggedSentenceGroups(input.chapter.paragraphs, input.nlp);
+  const taggedByParagraph = buildCachedTaggedSentenceGroups(
+    input.chapter.paragraphs,
+    input.nlp,
+    context.lexicalCache,
+  );
   const allTaggedSentences = taggedByParagraph.flat();
   const properLexicon = buildHighConfidenceProperNounLexicon(allTaggedSentences);
 
@@ -358,12 +410,12 @@ export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[]
       properLexicon,
       input.model,
       input.profile,
-      theta,
+      context.theta,
       input.lemmaDict,
       threshold,
       input.nlp,
-      knownProbabilityCache,
-      lemmaCandidateCache,
+      context.knownProbabilityCache,
+      context.lexicalCache.lemmaCandidateCache,
     );
     return tokens;
   });
@@ -413,6 +465,22 @@ export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[]
       cardTargets,
     };
   });
+}
+
+export function analyzeChapter(input: ChapterAnalysisInput): ParagraphAnalysis[] {
+  const context = createAnalysisContext(input, createLexicalAnalysisCache());
+  return analyzeChapterWithContext(input, context);
+}
+
+export function createCachedChapterAnalyzer(
+  input: Omit<ChapterAnalysisInput, 'chapter'>,
+  lexicalCache: LexicalAnalysisCache,
+): ChapterAnalyzer {
+  const context = createAnalysisContext(input, lexicalCache);
+  return (chapter: BookChapter): ParagraphAnalysis[] => analyzeChapterWithContext(
+    { ...input, chapter },
+    context,
+  );
 }
 
 export function calculateBookStats(
@@ -488,6 +556,25 @@ export interface BookStatsAsyncHooks {
   yieldEveryParagraphs?: number;
 }
 
+async function buildTaggedSentenceGroupsAsync(
+  paragraphs: string[],
+  nlp: ChapterAnalysisInput['nlp'],
+  hooks: BookStatsAsyncHooks | undefined,
+  yieldEveryParagraphs: number,
+): Promise<TaggedSentence[][] | null> {
+  const taggedByParagraph: TaggedSentence[][] = [];
+  for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex += 1) {
+    if (hooks?.shouldContinue && !hooks.shouldContinue()) {
+      return null;
+    }
+    taggedByParagraph.push(buildTaggedSentences(paragraphs[paragraphIndex], nlp));
+    if (hooks?.onYield && (paragraphIndex + 1) % yieldEveryParagraphs === 0) {
+      await hooks.onYield();
+    }
+  }
+  return taggedByParagraph;
+}
+
 export function calculateBookStatsFromLemmaHistogram(
   histogram: BookLemmaHistogram,
   settings: ReaderSettings,
@@ -543,7 +630,15 @@ export async function buildBookLemmaHistogramAsync(
   const lemmaCandidateCache = new Map<string, string[]>();
 
   for (const chapter of book.chapters) {
-    const taggedByParagraph = buildTaggedSentenceGroups(chapter.paragraphs, nlp);
+    const taggedByParagraph = await buildTaggedSentenceGroupsAsync(
+      chapter.paragraphs,
+      nlp,
+      hooks,
+      yieldEveryParagraphs,
+    );
+    if (taggedByParagraph === null) {
+      return null;
+    }
     const allTagged = taggedByParagraph.flat();
     const properLexicon = buildHighConfidenceProperNounLexicon(allTagged);
 
@@ -610,7 +705,15 @@ export async function calculateBookStatsAsync(
   const lemmaCandidateCache = new Map<string, string[]>();
 
   for (const chapter of book.chapters) {
-    const taggedByParagraph = buildTaggedSentenceGroups(chapter.paragraphs, nlp);
+    const taggedByParagraph = await buildTaggedSentenceGroupsAsync(
+      chapter.paragraphs,
+      nlp,
+      hooks,
+      yieldEveryParagraphs,
+    );
+    if (taggedByParagraph === null) {
+      return null;
+    }
     const allTagged = taggedByParagraph.flat();
     const properLexicon = buildHighConfidenceProperNounLexicon(allTagged);
 

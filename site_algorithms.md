@@ -486,6 +486,21 @@ Priority visual marker:
 
 - mark token as priority if `p_unknown > 0.60`.
 
+Runtime analysis is incremental and cache-backed:
+
+- paragraph order starts at the reading-position anchor and expands outward.
+- Compromise tags and lemma candidates are cached for the lifetime of the
+  loaded reader resources and reused when settings or vocabulary observations
+  trigger a refresh.
+- lexical analysis yields to the event loop after at most 40 ms of work.
+- the first analyzed paragraph is published immediately; subsequent completed
+  paragraphs are published in progressive batches to avoid whole-chapter React
+  rerenders for every paragraph.
+- paragraph word markup is memoized, and sidebar layout reads only paragraphs
+  that actually contain definition cards.
+- asynchronous whole-book histogram generation also yields while tagging a
+  chapter, before proper-noun aggregation and lemma counting.
+
 ## 6.2 Lexicon/Definition Asset Construction
 
 ### 6.2.1 Summary

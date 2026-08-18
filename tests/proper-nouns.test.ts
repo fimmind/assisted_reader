@@ -8,7 +8,12 @@ import {
   inferPartsOfSpeech,
   tagSentenceTerms,
 } from '../src/core/nlp.js';
-import { analyzeChapter } from '../src/core/reader-analysis.js';
+import {
+  analyzeChapter,
+  buildBookLemmaHistogramAsync,
+  createCachedChapterAnalyzer,
+  createLexicalAnalysisCache,
+} from '../src/core/reader-analysis.js';
 import { resolveLexiconEntry } from '../src/core/lexicon.js';
 import { normalizeToken } from '../src/core/math.js';
 import type { LexiconEntry, PartOfSpeech, ReaderSettings, TaggedSentence, TaggedTerm, UserProfile, VocabularyModel } from '../src/core/types.js';
@@ -1098,6 +1103,119 @@ test('reader analysis keeps separate automatic targets for noun and verb usages'
     { lemma: 'record', partOfSpeech: 'verb' },
     { lemma: 'record', partOfSpeech: 'noun' },
   ]);
+});
+
+test('cached chapter analysis preserves output and reuses lexical work across refreshes', () => {
+  const model: VocabularyModel = {
+    modelKey: 'cached-analysis-test',
+    modelName: 'cached-analysis-test',
+    words: ['record', 'room', 'night'],
+    accuracy: [0.4, 0.4, 0.4],
+    difficulties: [0, 0, 0],
+    wordToIdx: new Map<string, number>([
+      ['record', 0],
+      ['room', 1],
+      ['night', 2],
+    ]),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+  const profile: UserProfile = {
+    id: 'cached-analysis-profile',
+    name: 'Cached Analysis',
+    observations: {},
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  const settings: ReaderSettings = {
+    fontSize: 18,
+    lineSpacing: 'Normal',
+    fontChoice: 'Serif',
+    pageWidth: 'Normal',
+    maxWordsPerParagraph: 2,
+    deduplicationRadius: 0,
+    knowledgeThreshold: 0.6,
+    englishVariant: 'US',
+  };
+  const paragraphs = ['I record the record.', 'They night the room.'];
+  const expected = paragraphs.map((paragraph) => analyzeChapter({
+    chapter: { title: 'Expected', paragraphs: [paragraph] },
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp,
+    maxCardsPerParagraph: 2,
+    includeCards: false,
+  })[0]);
+
+  let nlpCallCount = 0;
+  const countingNlp = ((text: string) => {
+    nlpCallCount += 1;
+    return nlp(text);
+  }) as NonNullable<Parameters<typeof analyzeChapter>[0]['nlp']>;
+  const lexicalCache = createLexicalAnalysisCache();
+  const createAnalyzer = () => createCachedChapterAnalyzer({
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp: countingNlp,
+    maxCardsPerParagraph: 2,
+    includeCards: false,
+  }, lexicalCache);
+
+  const firstAnalyzer = createAnalyzer();
+  const first = paragraphs.map((paragraph) => firstAnalyzer({ title: 'Cached', paragraphs: [paragraph] })[0]);
+  const callsAfterFirstPass = nlpCallCount;
+  const secondAnalyzer = createAnalyzer();
+  const second = paragraphs.map((paragraph) => secondAnalyzer({ title: 'Cached', paragraphs: [paragraph] })[0]);
+
+  assert.deepEqual(first, expected);
+  assert.deepEqual(second, expected);
+  assert.ok(callsAfterFirstPass > 0);
+  assert.equal(nlpCallCount, callsAfterFirstPass);
+});
+
+test('async book analysis yields while tagging a single large chapter', async () => {
+  let nlpCallCount = 0;
+  let shouldContinue = true;
+  const taggedNlp = createStubNlpWithTaggedTerms([
+    { text: 'word', tags: { Noun: true } },
+  ]);
+  const countingNlp = ((text: string) => {
+    nlpCallCount += 1;
+    return taggedNlp(text);
+  }) as NonNullable<Parameters<typeof analyzeChapter>[0]['nlp']>;
+  const model: VocabularyModel = {
+    modelKey: 'async-yield-test',
+    modelName: 'async-yield-test',
+    words: ['word'],
+    accuracy: [0.5],
+    difficulties: [0],
+    wordToIdx: new Map<string, number>([['word', 0]]),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+
+  const histogram = await buildBookLemmaHistogramAsync(
+    {
+      chapters: [{ title: 'Long chapter', paragraphs: ['One.', 'Two.', 'Three.'] }],
+      currentChapter: 1,
+    },
+    model,
+    {},
+    countingNlp,
+    {
+      shouldContinue: () => shouldContinue,
+      onYield: async () => {
+        shouldContinue = false;
+      },
+      yieldEveryParagraphs: 1,
+    },
+  );
+
+  assert.equal(histogram, null);
+  assert.equal(nlpCallCount, 1);
 });
 
 test('lexicon resolution selects matching POS and otherwise exposes every group', () => {
