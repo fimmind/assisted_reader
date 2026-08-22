@@ -135,7 +135,7 @@ function ReaderActivityIndicator({ ariaLabel, testId }: ReaderActivityIndicatorP
     <div role="status" aria-label={ariaLabel} aria-live="polite" data-testid={testId}>
       <span
         aria-hidden="true"
-        className="block size-5 rounded-full border-2 border-current border-t-transparent animate-spin motion-reduce:animate-none will-change-transform [animation-duration:1200ms]"
+        className="block size-5 rounded-full border-2 border-current border-t-transparent animate-spin will-change-transform [animation-duration:1200ms]"
       />
     </div>
   );
@@ -1838,14 +1838,28 @@ export default function ReaderPage() {
             </div>
 
             <div className="mt-20 pt-8 border-t border-border flex justify-between items-center text-muted-foreground font-serif">
-              <Button variant="ghost" className="gap-2" data-testid="button-prev-chapter" onClick={() => void updateCurrentChapter(-1)}>
-                <ChevronLeft size={16} /> Previous Chapter
+              <Button
+                variant="ghost"
+                className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
+                data-testid="button-prev-chapter"
+                onClick={() => void updateCurrentChapter(-1)}
+              >
+                <ChevronLeft size={16} />
+                <span className="sm:hidden">Previous</span>
+                <span className="hidden sm:inline">Previous Chapter</span>
               </Button>
-              <span className="text-sm" data-testid="text-page-info">
+              <span className="text-xs sm:text-sm" data-testid="text-page-info">
                 Chapter {currentChapterNumber} of {book.chapters.length}
               </span>
-              <Button variant="ghost" className="gap-2" data-testid="button-next-chapter" onClick={() => void updateCurrentChapter(1)}>
-                Next Chapter <ChevronLeft size={16} className="rotate-180" />
+              <Button
+                variant="ghost"
+                className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
+                data-testid="button-next-chapter"
+                onClick={() => void updateCurrentChapter(1)}
+              >
+                <span className="sm:hidden">Next</span>
+                <span className="hidden sm:inline">Next Chapter</span>
+                <ChevronLeft size={16} className="rotate-180" />
               </Button>
             </div>
           </div>
