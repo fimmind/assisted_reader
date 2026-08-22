@@ -28,10 +28,10 @@ const WORDS_CSV_PATH = path.join(DATA_DIR, 'words.csv');
 const CHUNK_DIR = path.join(DATA_DIR, 'lexicon');
 const OVERRIDES_PATH = path.join(DATA_DIR, 'lexicon_overrides.json');
 const EXTRACTION_PARTITION_COUNT = 256;
-const WORD_TOKEN_PATTERN = /^[a-z]+(?:'[a-z]+)?$/;
+const WORD_TOKEN_PATTERN = /^[a-z]+(?:'[a-z]+)?(?:-[a-z]+(?:'[a-z]+)?)*$/;
 
 function normalizeWord(value) {
-  return String(value).trim().toLowerCase().replace(/’/g, "'");
+  return String(value).trim().toLowerCase().replace(/’/g, "'").replace(/[‐‑]/g, '-');
 }
 
 function resolveBucketId(word, bucketCount) {

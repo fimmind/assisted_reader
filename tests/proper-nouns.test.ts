@@ -15,6 +15,11 @@ import {
   createLexicalAnalysisCache,
 } from '../src/core/reader-analysis.js';
 import { resolveLexiconBucketFileName, resolveLexiconEntry } from '../src/core/lexicon.js';
+import {
+  buildDefinitionLookupCandidates,
+  createDefinitionTarget,
+  lookupFirstAvailableDefinition,
+} from '../src/core/definition-target.js';
 import { normalizeToken } from '../src/core/math.js';
 import type { LexiconEntry, PartOfSpeech, ReaderSettings, TaggedSentence, TaggedTerm, UserProfile, VocabularyModel } from '../src/core/types.js';
 
@@ -1242,4 +1247,113 @@ test('lazy lexicon bucket routing is stable for common, rare, and apostrophe wor
   assert.equal(resolveLexiconBucketFileName('zyzzyva'), '0026.json');
   assert.equal(resolveLexiconBucketFileName("don't"), '0365.json');
   assert.equal(resolveLexiconBucketFileName('Quomodocunquizing'), '0520.json');
+});
+
+test('hyphenated definition lookup prefers the compound before the clicked component', () => {
+  const definition = 'Alternative form of dog-eared.';
+  const componentStart = definition.indexOf('eared');
+  const componentEnd = componentStart + 'eared'.length;
+  const candidates = buildDefinitionLookupCandidates(
+    definition,
+    componentStart,
+    componentEnd,
+    createDefinitionTarget('ear', 'verb'),
+  );
+
+  assert.deepEqual(candidates, [
+    {
+      lookupWord: 'dog-eared',
+      selectionEnd: definition.indexOf('dog-eared') + 'dog-eared'.length,
+      selectionStart: definition.indexOf('dog-eared'),
+      target: { lemma: 'dog-eared', partOfSpeech: null },
+    },
+    {
+      lookupWord: 'eared',
+      selectionEnd: componentEnd,
+      selectionStart: componentStart,
+      target: { lemma: 'ear', partOfSpeech: 'verb' },
+    },
+  ]);
+});
+
+test('compound lookup normalizes typographic hyphens but does not join em-dash words', () => {
+  const hyphenatedText = 'A dog‑eared book.';
+  const dogStart = hyphenatedText.indexOf('dog');
+  const hyphenatedCandidates = buildDefinitionLookupCandidates(
+    hyphenatedText,
+    dogStart,
+    dogStart + 'dog'.length,
+    createDefinitionTarget('dog', 'noun'),
+  );
+  assert.deepEqual(hyphenatedCandidates[0], {
+    lookupWord: 'dog‑eared',
+    selectionEnd: dogStart + 'dog‑eared'.length,
+    selectionStart: dogStart,
+    target: { lemma: 'dog-eared', partOfSpeech: null },
+  });
+
+  const emDashText = 'gloves—that';
+  const thatStart = emDashText.indexOf('that');
+  const emDashCandidates = buildDefinitionLookupCandidates(
+    emDashText,
+    thatStart,
+    thatStart + 'that'.length,
+    createDefinitionTarget('that', 'determiner'),
+  );
+  assert.deepEqual(emDashCandidates, [
+    {
+      lookupWord: 'that',
+      selectionEnd: thatStart + 'that'.length,
+      selectionStart: thatStart,
+      target: { lemma: 'that', partOfSpeech: 'determiner' },
+    },
+  ]);
+});
+
+test('definition lookup uses the component only after the compound is absent', async () => {
+  const dogEaredEntry: LexiconEntry = {
+    word: 'dog-eared',
+    senses: [{ partOfSpeech: 'adjective', ipa: '', definitions: ['Worn from use.'] }],
+  };
+  const earEntry: LexiconEntry = {
+    word: 'ear',
+    senses: [{ partOfSpeech: 'verb', ipa: '', definitions: ['To form ears.'] }],
+  };
+  const lookupText = 'Alternative form of dog-eared.';
+  const lookupStart = lookupText.indexOf('eared');
+  const candidates = buildDefinitionLookupCandidates(
+    lookupText,
+    lookupStart,
+    lookupStart + 'eared'.length,
+    createDefinitionTarget('ear', 'verb'),
+  );
+
+  const compoundCalls: string[] = [];
+  const compoundResult = await lookupFirstAvailableDefinition({
+    lookup: async (word) => {
+      compoundCalls.push(word);
+      return word === 'dog-eared' ? dogEaredEntry : null;
+    },
+  }, candidates);
+  assert.deepEqual(compoundCalls, ['dog-eared']);
+  assert.equal(compoundResult.entry?.word, 'dog-eared');
+  assert.equal(compoundResult.candidate.target.partOfSpeech, null);
+  assert.equal(compoundResult.candidate.selectionStart, lookupText.indexOf('dog-eared'));
+  assert.equal(
+    compoundResult.candidate.selectionEnd,
+    lookupText.indexOf('dog-eared') + 'dog-eared'.length,
+  );
+
+  const fallbackCalls: string[] = [];
+  const fallbackResult = await lookupFirstAvailableDefinition({
+    lookup: async (word) => {
+      fallbackCalls.push(word);
+      return word === 'ear' ? earEntry : null;
+    },
+  }, candidates);
+  assert.deepEqual(fallbackCalls, ['dog-eared', 'eared', 'ear']);
+  assert.equal(fallbackResult.entry?.word, 'ear');
+  assert.equal(fallbackResult.candidate.target.partOfSpeech, 'verb');
+  assert.equal(fallbackResult.candidate.selectionStart, lookupStart);
+  assert.equal(fallbackResult.candidate.selectionEnd, lookupStart + 'eared'.length);
 });

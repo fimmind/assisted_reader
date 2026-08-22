@@ -8,6 +8,7 @@ export const BOOKS_STORE_NAME = 'books';
 export const BOOKS_DB_VERSION = 1;
 
 export const WORD_RE = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
+export const HYPHENATED_WORD_RE = /[A-Za-z]+(?:['’][A-Za-z]+)?(?:[-‐‑][A-Za-z]+(?:['’][A-Za-z]+)?)+/g;
 export const WORD_TOKEN_RE = /^[A-Za-z]+(?:['’][A-Za-z]+)?$/;
 export const SENTENCE_RE = /[^.!?]+[.!?]+|[^.!?]+$/g;
 

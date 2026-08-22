@@ -2,7 +2,7 @@ import { normalizeToken } from './math';
 import type { DefinitionTarget, LexiconEntry, LexiconSense, PartOfSpeech } from './types';
 
 const LEXICON_INDEX_URL = 'data/lexicon/index.json';
-export const LEXICON_SCHEMA_VERSION = 3;
+export const LEXICON_SCHEMA_VERSION = 4;
 
 const PARTS_OF_SPEECH: ReadonlySet<PartOfSpeech> = new Set<PartOfSpeech>([
   'noun',

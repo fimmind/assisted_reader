@@ -1,4 +1,4 @@
-export const LEXICON_SCHEMA_VERSION = 3;
+export const LEXICON_SCHEMA_VERSION = 4;
 export const LEXICON_BUCKET_ALGORITHM = 'fnv1a-32';
 export const LEXICON_BUCKET_COUNT = 1024;
 

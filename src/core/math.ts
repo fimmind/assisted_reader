@@ -26,8 +26,12 @@ export function normalizeApostrophes(value: string): string {
   return value.replace(/’/g, "'");
 }
 
+export function normalizeHyphens(value: string): string {
+  return value.replace(/[‐‑]/g, '-');
+}
+
 export function normalizeToken(value: string): string {
-  return normalizeApostrophes(value.toLowerCase());
+  return normalizeHyphens(normalizeApostrophes(value.toLowerCase()));
 }
 
 export function orderedUnique(values: string[]): string[] {

@@ -517,7 +517,9 @@ Script: `scripts/build-lexicon-from-wiktextract.mjs`
    - if missing, download from `https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz`
    - if present, reuse local archive
 4. Stream every English record whose normalized headword matches the reader's
-   single-token grammar into temporary hash partitions
+   lookup grammar into temporary hash partitions. Lookup headwords may contain
+   apostrophe segments and one or more internal ASCII hyphens. Typographic
+   hyphens are normalized to ASCII hyphens.
 5. Fallbacks:
    - a word without extracted senses is emitted with an empty `senses` array
    - runtime displays `"Definition unavailable in this build."`
@@ -548,8 +550,13 @@ Runtime load strategy:
 - Reader startup constructs the lexicon service without issuing a dictionary request.
 - The first definition request loads the small index and the target word's hash bucket.
 - Index and bucket promises are cached for the browser session.
-- Clicked words first query the exact surface form, then the inferred lemma when
-  the exact spelling has no entry.
+- When the clicked component is inside a hyphenated word, lookup first queries
+  the complete compound with unknown POS. Only when the compound is absent does
+  lookup query the clicked component's exact surface form and inferred lemma.
+- ASCII hyphens, Unicode hyphens, and nonbreaking hyphens join compounds. En and
+  em dashes remain punctuation and do not join adjacent words.
+- Non-hyphenated clicked words continue to query the exact surface form, then
+  the inferred lemma when the exact spelling has no entry.
 - Automatic cards continue to be selected only from model-supported vocabulary,
   but resolve their definitions through the same lazy service.
 

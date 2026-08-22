@@ -11,12 +11,18 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
 import { WordDefinitionCard } from '@/components/WordDefinitionCard';
-import type { DefinitionWordClick } from '@/components/WordDefinitionCard';
+import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { WORD_RE } from '@/core/constants';
 import { createFallbackLexiconEntry, loadLexicon, resolveLexiconEntry } from '@/core/lexicon';
-import { areDefinitionTargetsEqual, createDefinitionTarget, definitionTargetKey } from '@/core/definition-target';
+import {
+  areDefinitionTargetsEqual,
+  buildDefinitionLookupCandidates,
+  createDefinitionTarget,
+  definitionTargetKey,
+  lookupFirstAvailableDefinition,
+} from '@/core/definition-target';
 import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
@@ -24,6 +30,7 @@ import { loadCompromise } from '@/core/external';
 import { analyzeChapter, createCachedChapterAnalyzer, createLexicalAnalysisCache } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
 import type { LazyLexicon } from '@/core/lexicon';
+import type { DefinitionLookupCandidate } from '@/core/definition-target';
 import type { ChapterAnalyzer, LexicalAnalysisCache } from '@/core/reader-analysis';
 import type { DefinitionTarget, ImportedBook, LexiconEntry, ParagraphAnalysis, PartOfSpeech, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
 
@@ -73,8 +80,10 @@ interface ReaderResources {
 
 interface WordPopupState {
   id: number;
+  lookupCandidates: DefinitionLookupCandidate[];
   target: DefinitionTarget;
   lookupWord: string;
+  triggerSelection: DefinitionTextSelection | null;
   definition: LexiconEntry | null;
   definitionStatus: DefinitionLoadStatus;
   top: number;
@@ -106,9 +115,8 @@ interface ReaderParagraphTextProps {
   onElementChange: (visibleParagraphIndex: number, element: HTMLParagraphElement | null) => void;
   onOpenWordPopup: (
     anchorRect: PopupAnchorRect,
-    target: DefinitionTarget,
+    lookupCandidates: DefinitionLookupCandidate[],
     sourceParagraphIndex: number,
-    lookupWord: string,
   ) => void;
 }
 
@@ -317,25 +325,6 @@ function calculateWordLookupIndicatorPosition(
   return { top, left };
 }
 
-async function lookupDefinitionTarget(
-  lexicon: LazyLexicon,
-  target: DefinitionTarget,
-  lookupWord: string,
-): Promise<LexiconEntry | null> {
-  const normalizedLookupWord = normalizeToken(lookupWord).trim();
-  const normalizedLemma = normalizeToken(target.lemma).trim();
-  if (normalizedLookupWord.length > 0 && normalizedLookupWord !== normalizedLemma) {
-    const exactEntry = await lexicon.lookup(normalizedLookupWord);
-    if (exactEntry) {
-      return exactEntry;
-    }
-  }
-  if (normalizedLemma.length === 0) {
-    return null;
-  }
-  return lexicon.lookup(normalizedLemma);
-}
-
 const ReaderParagraphText = memo(function ReaderParagraphText({
   analysis,
   assistanceEnabled,
@@ -377,11 +366,16 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
           isPriority ? 'unknown-word priority' : 'unknown-word',
         )}
         onClick={(event) => {
+          const lookupCandidates = buildDefinitionLookupCandidates(
+            analysis.paragraphText,
+            analyzedToken.start,
+            analyzedToken.end,
+            target,
+          );
           onOpenWordPopup(
             capturePopupAnchorRect(event.currentTarget.getBoundingClientRect()),
-            target,
+            lookupCandidates,
             sourceParagraphIndex,
-            analysis.paragraphText.slice(analyzedToken.start, analyzedToken.end),
           );
         }}
       >
@@ -422,7 +416,13 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
           analyzedToken?.lemma ?? normalizeToken(rawWord),
           analyzedToken?.partOfSpeech ?? null,
         );
-        onOpenWordPopup(click.anchorRect, target, sourceParagraphIndex, rawWord);
+        const lookupCandidates = buildDefinitionLookupCandidates(
+          analysis.paragraphText,
+          click.start,
+          click.end,
+          target,
+        );
+        onOpenWordPopup(click.anchorRect, lookupCandidates, sourceParagraphIndex);
       }}
     >
       {nodes.length > 0 ? nodes : analysis.paragraphText}
@@ -830,8 +830,13 @@ export default function ReaderPage() {
       return updated;
     });
 
-    const request = lookupDefinitionTarget(resources.lexicon, target, lemma)
-      .then(async (entry) => {
+    const request = lookupFirstAvailableDefinition(resources.lexicon, [{
+      lookupWord: lemma,
+      selectionEnd: lemma.length,
+      selectionStart: 0,
+      target,
+    }])
+      .then(async ({ entry }) => {
         await waitForReaderScrollToSettle();
         const resolvedEntry = entry ?? createFallbackLexiconEntry(lemma);
         definitionsByLemmaRef.current = new Map(definitionsByLemmaRef.current).set(lemma, resolvedEntry);
@@ -1403,10 +1408,14 @@ export default function ReaderPage() {
   const createWordPopupFromRects = useCallback((
     anchor: PopupAnchorRect,
     horizontalAnchor: PopupAnchorRect,
-    target: DefinitionTarget,
+    lookupCandidates: DefinitionLookupCandidate[],
     sourceParagraphIndex: number,
-    lookupWord: string,
+    triggerDefinitionText: string | null,
   ): WordPopupState => {
+    const initialCandidate = lookupCandidates[0];
+    if (!initialCandidate) {
+      throw new RangeError('Cannot create a word popup without lookup candidates.');
+    }
     const position = calculateWordPopupPosition(
       anchor,
       horizontalAnchor,
@@ -1417,8 +1426,14 @@ export default function ReaderPage() {
     );
     return {
       id: nextWordPopupIdRef.current++,
-      target: createDefinitionTarget(target.lemma, target.partOfSpeech),
-      lookupWord: normalizeToken(lookupWord),
+      lookupCandidates,
+      target: initialCandidate.target,
+      lookupWord: normalizeToken(initialCandidate.lookupWord),
+      triggerSelection: triggerDefinitionText === null ? null : {
+        definitionText: triggerDefinitionText,
+        end: initialCandidate.selectionEnd,
+        start: initialCandidate.selectionStart,
+      },
       definition: null,
       definitionStatus: 'loading',
       top: position.top,
@@ -1431,16 +1446,22 @@ export default function ReaderPage() {
 
   const createWordPopupFromElement = useCallback((
     element: HTMLElement,
-    target: DefinitionTarget,
+    lookupCandidates: DefinitionLookupCandidate[],
     sourceParagraphIndex: number,
-    lookupWord: string,
+    triggerDefinitionText: string,
   ): WordPopupState => {
     const rect = capturePopupAnchorRect(element.getBoundingClientRect());
     const definitionCard = element.closest<HTMLElement>('[data-definition-card="true"]');
     const horizontalRect = definitionCard
       ? capturePopupAnchorRect(definitionCard.getBoundingClientRect())
       : rect;
-    return createWordPopupFromRects(rect, horizontalRect, target, sourceParagraphIndex, lookupWord);
+    return createWordPopupFromRects(
+      rect,
+      horizontalRect,
+      lookupCandidates,
+      sourceParagraphIndex,
+      triggerDefinitionText,
+    );
   }, [createWordPopupFromRects]);
 
   const requestPopupDefinition = useCallback((popup: WordPopupState) => {
@@ -1448,13 +1469,22 @@ export default function ReaderPage() {
     if (!resources) {
       throw new Error('Cannot load a popup definition before reader resources are available.');
     }
-    void lookupDefinitionTarget(resources.lexicon, popup.target, popup.lookupWord)
-      .then(async (entry) => {
+    void lookupFirstAvailableDefinition(resources.lexicon, popup.lookupCandidates)
+      .then(async ({ candidate: resolvedCandidate, entry }) => {
         await waitForReaderScrollToSettle();
-        setWordPopups((previous) => previous.map((candidate) => (
-          candidate.id === popup.id
-            ? { ...candidate, definition: entry, definitionStatus: 'ready' }
-            : candidate
+        setWordPopups((previous) => previous.map((popupCandidate) => (
+          popupCandidate.id === popup.id ? {
+            ...popupCandidate,
+            target: createDefinitionTarget(resolvedCandidate.target.lemma, resolvedCandidate.target.partOfSpeech),
+            lookupWord: normalizeToken(resolvedCandidate.lookupWord),
+            triggerSelection: popupCandidate.triggerSelection === null ? null : {
+              definitionText: popupCandidate.triggerSelection.definitionText,
+              end: resolvedCandidate.selectionEnd,
+              start: resolvedCandidate.selectionStart,
+            },
+            definition: entry,
+            definitionStatus: 'ready',
+          } : popupCandidate
         )));
       })
       .catch(async (error: unknown) => {
@@ -1508,11 +1538,16 @@ export default function ReaderPage() {
 
   const openRootWordPopup = useCallback((
     anchorRect: PopupAnchorRect,
-    target: DefinitionTarget,
+    lookupCandidates: DefinitionLookupCandidate[],
     sourceParagraphIndex: number,
-    lookupWord: string,
   ) => {
-    const popup = createWordPopupFromRects(anchorRect, anchorRect, target, sourceParagraphIndex, lookupWord);
+    const popup = createWordPopupFromRects(
+      anchorRect,
+      anchorRect,
+      lookupCandidates,
+      sourceParagraphIndex,
+      null,
+    );
     setWordPopups([popup]);
     requestPopupDefinition(popup);
   }, [createWordPopupFromRects, requestPopupDefinition]);
@@ -1555,8 +1590,18 @@ export default function ReaderPage() {
     sourceParagraphIndex: number,
   ) => {
     const target = resolveDefinitionWordTarget(click);
-    const lookupWord = click.definitionText.slice(click.start, click.end);
-    const popup = createWordPopupFromElement(click.element, target, sourceParagraphIndex, lookupWord);
+    const lookupCandidates = buildDefinitionLookupCandidates(
+      click.definitionText,
+      click.start,
+      click.end,
+      target,
+    );
+    const popup = createWordPopupFromElement(
+      click.element,
+      lookupCandidates,
+      sourceParagraphIndex,
+      click.definitionText,
+    );
     setWordPopups((previous) => {
       const ancestors = parentPopupIndex === null
         ? []
@@ -1816,6 +1861,7 @@ export default function ReaderPage() {
                           <WordDefinitionCard
                             key={definitionTargetKey(target)}
                             definition={definition}
+                            activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
                             fontSize={settings.fontSize}
                             definitionStatus={definitionStatus}
                             onDefinitionWordClick={(click) => {
@@ -1893,6 +1939,7 @@ export default function ReaderPage() {
                       <WordDefinitionCard
                         key={definitionTargetKey(target)}
                         definition={definition}
+                        activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
                         fontSize={settings.fontSize}
                         definitionStatus={definitionStatus}
                         onDefinitionWordClick={(click) => {
@@ -1964,6 +2011,7 @@ export default function ReaderPage() {
           >
             <WordDefinitionCard
               definition={definition}
+              activeDefinitionSelection={wordPopups[popupIndex + 1]?.triggerSelection ?? undefined}
               fontSize={settings.fontSize}
               definitionStatus={popup.definitionStatus}
               onDefinitionWordClick={(click) => {

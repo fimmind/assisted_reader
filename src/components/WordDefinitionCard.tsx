@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Check, X } from 'lucide-react';
-import { WORD_RE } from '@/core/constants';
+import { HYPHENATED_WORD_RE, WORD_RE } from '@/core/constants';
 import type { LexiconEntry, LexiconSense, PartOfSpeech } from '@/core/types';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
@@ -12,8 +12,15 @@ export interface DefinitionWordClick {
   end: number;
 }
 
+export interface DefinitionTextSelection {
+  definitionText: string;
+  end: number;
+  start: number;
+}
+
 interface WordDefinitionCardProps {
   definition: LexiconEntry;
+  activeDefinitionSelection?: DefinitionTextSelection;
   fontSize: number;
   onDefinitionWordClick: (click: DefinitionWordClick) => void;
   onMarkKnown?: () => void;
@@ -56,28 +63,40 @@ function formatPartOfSpeech(partOfSpeech: PartOfSpeech): string {
     .join(' ');
 }
 
-function renderClickableDefinition(
+function renderClickableDefinitionRange(
   definitionText: string,
+  rangeStart: number,
+  rangeEnd: number,
+  activeDefinitionSelection: DefinitionTextSelection | undefined,
+  enableWordHover: boolean,
   onDefinitionWordClick: (click: DefinitionWordClick) => void,
-): ReactNode {
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   const matcher = new RegExp(WORD_RE.source, WORD_RE.flags);
-  let cursor = 0;
-  let match = matcher.exec(definitionText);
+  const rangeText = definitionText.slice(rangeStart, rangeEnd);
+  let cursor = rangeStart;
+  let match = matcher.exec(rangeText);
 
   while (match) {
     const word = match[0];
-    const start = match.index;
+    const start = rangeStart + match.index;
     const end = start + word.length;
     if (start > cursor) {
       nodes.push(definitionText.slice(cursor, start));
     }
+    const wordIsActive = activeDefinitionSelection?.definitionText === definitionText
+      && activeDefinitionSelection.start === start
+      && activeDefinitionSelection.end === end;
     nodes.push(
       <button
         key={`${start}-${end}`}
         type="button"
         data-word-popup-trigger="true"
-        className="cursor-pointer rounded-[2px] -mx-px px-px text-inherit hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className={cn(
+          'cursor-pointer rounded-[2px] -mx-px px-px text-inherit focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          enableWordHover && 'hover:bg-primary/10',
+          wordIsActive && 'bg-primary/15',
+        )}
         aria-label={`Look up ${word}`}
         onClick={(event) => onDefinitionWordClick({
           element: event.currentTarget,
@@ -90,30 +109,104 @@ function renderClickableDefinition(
       </button>,
     );
     cursor = end;
+    match = matcher.exec(rangeText);
+  }
+
+  if (cursor < rangeEnd) {
+    nodes.push(definitionText.slice(cursor, rangeEnd));
+  }
+  return nodes;
+}
+
+function isValidDefinitionSelection(
+  definitionText: string,
+  selection: DefinitionTextSelection | undefined,
+): selection is DefinitionTextSelection {
+  return selection?.definitionText === definitionText
+    && selection.start >= 0
+    && selection.end > selection.start
+    && selection.end <= definitionText.length;
+}
+
+function renderClickableDefinition(
+  definitionText: string,
+  activeDefinitionSelection: DefinitionTextSelection | undefined,
+  onDefinitionWordClick: (click: DefinitionWordClick) => void,
+): ReactNode {
+  const selection = isValidDefinitionSelection(definitionText, activeDefinitionSelection)
+    ? activeDefinitionSelection
+    : undefined;
+  const nodes: ReactNode[] = [];
+  const matcher = new RegExp(HYPHENATED_WORD_RE.source, HYPHENATED_WORD_RE.flags);
+  let cursor = 0;
+  let match = matcher.exec(definitionText);
+
+  while (match) {
+    const compoundStart = match.index;
+    const compoundEnd = compoundStart + match[0].length;
+    nodes.push(...renderClickableDefinitionRange(
+      definitionText,
+      cursor,
+      compoundStart,
+      selection,
+      true,
+      onDefinitionWordClick,
+    ));
+    const compoundIsActive = selection?.start === compoundStart && selection.end === compoundEnd;
+    const componentInCompoundIsActive = selection !== undefined
+      && selection.start >= compoundStart
+      && selection.end <= compoundEnd
+      && !compoundIsActive;
+    nodes.push(
+      <span
+        key={`compound-${compoundStart}-${compoundEnd}`}
+        className={cn(
+          'rounded-[2px]',
+          !componentInCompoundIsActive && 'hover:bg-primary/10',
+          compoundIsActive && 'bg-primary/15',
+        )}
+      >
+        {renderClickableDefinitionRange(
+          definitionText,
+          compoundStart,
+          compoundEnd,
+          compoundIsActive ? undefined : selection,
+          false,
+          onDefinitionWordClick,
+        )}
+      </span>,
+    );
+    cursor = compoundEnd;
     match = matcher.exec(definitionText);
   }
 
-  if (cursor < definitionText.length) {
-    nodes.push(definitionText.slice(cursor));
-  }
+  nodes.push(...renderClickableDefinitionRange(
+    definitionText,
+    cursor,
+    definitionText.length,
+    selection,
+    true,
+    onDefinitionWordClick,
+  ));
   return <>{nodes}</>;
 }
 
 function renderCompactDefinitions(
   definitions: string[],
+  activeDefinitionSelection: DefinitionTextSelection | undefined,
   onDefinitionWordClick: (click: DefinitionWordClick) => void,
 ): ReactNode {
   if (definitions.length === 1) {
     return (
       <p className="text-foreground/80 leading-snug">
-        {renderClickableDefinition(definitions[0], onDefinitionWordClick)}
+        {renderClickableDefinition(definitions[0], activeDefinitionSelection, onDefinitionWordClick)}
       </p>
     );
   }
   return (
     <ol className="text-foreground/80 leading-snug list-decimal pl-[1.25em] space-y-1">
       {definitions.map((definition) => (
-        <li key={definition}>{renderClickableDefinition(definition, onDefinitionWordClick)}</li>
+        <li key={definition}>{renderClickableDefinition(definition, activeDefinitionSelection, onDefinitionWordClick)}</li>
       ))}
     </ol>
   );
@@ -121,19 +214,20 @@ function renderCompactDefinitions(
 
 function renderExpandedDefinitions(
   definitions: string[],
+  activeDefinitionSelection: DefinitionTextSelection | undefined,
   onDefinitionWordClick: (click: DefinitionWordClick) => void,
 ): ReactNode {
   if (definitions.length === 1) {
     return (
       <p className="text-foreground/90 leading-relaxed">
-        {renderClickableDefinition(definitions[0], onDefinitionWordClick)}
+        {renderClickableDefinition(definitions[0], activeDefinitionSelection, onDefinitionWordClick)}
       </p>
     );
   }
   return (
     <ol className="text-foreground/90 leading-relaxed list-decimal pl-[1.25em] space-y-1">
       {definitions.map((definition) => (
-        <li key={definition}>{renderClickableDefinition(definition, onDefinitionWordClick)}</li>
+        <li key={definition}>{renderClickableDefinition(definition, activeDefinitionSelection, onDefinitionWordClick)}</li>
       ))}
     </ol>
   );
@@ -141,6 +235,7 @@ function renderExpandedDefinitions(
 
 export function WordDefinitionCard({
   definition,
+  activeDefinitionSelection,
   fontSize,
   onDefinitionWordClick,
   onMarkKnown,
@@ -206,7 +301,7 @@ export function WordDefinitionCard({
                       <span className="text-[0.75em] text-muted-foreground italic">{ipaText}</span>
                     )}
                   </div>
-                  {renderCompactDefinitions(sense.definitions, onDefinitionWordClick)}
+                  {renderCompactDefinitions(sense.definitions, activeDefinitionSelection, onDefinitionWordClick)}
                 </section>
               );
             })}
@@ -271,7 +366,7 @@ export function WordDefinitionCard({
                     <span className="text-[0.875em] text-muted-foreground italic">{ipaText}</span>
                   )}
                 </div>
-                {renderExpandedDefinitions(sense.definitions, onDefinitionWordClick)}
+                {renderExpandedDefinitions(sense.definitions, activeDefinitionSelection, onDefinitionWordClick)}
               </section>
             );
           })}
