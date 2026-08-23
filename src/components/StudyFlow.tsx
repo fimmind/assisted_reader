@@ -913,7 +913,7 @@ export function StudyFlow({
               <h1 className="font-serif text-3xl font-medium sm:text-4xl">
                 {item.spelling}
               </h1>
-              <p className="mt-2 text-sm text-muted-foreground">
+              <p className="mt-2 text-[0.75em] font-medium uppercase tracking-wide text-primary">
                 {formatPartOfSpeech(item.partOfSpeech)}
               </p>
             </div>
