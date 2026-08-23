@@ -65,9 +65,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CardSessionScreen } from "@/components/CardSessionScreen";
@@ -215,9 +217,7 @@ function downloadStudyExport(
   items: StudyCardItem[],
 ): void {
   if (items.length === 0) {
-    throw new RangeError(
-      "There are no Words to learn in this result to export.",
-    );
+    throw new RangeError("Select at least one word to export.");
   }
   const text = createAnkiStudyText(items);
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
@@ -229,6 +229,195 @@ function downloadStudyExport(
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+interface StudyExportDialogProps {
+  wordsToLearn: StudyCardItem[];
+  alreadyKnew: StudyCardItem[];
+  onExport: (items: StudyCardItem[]) => void;
+}
+
+function StudyExportDialog({
+  wordsToLearn,
+  alreadyKnew,
+  onExport,
+}: StudyExportDialogProps) {
+  const [open, setOpen] = useState(false);
+  const [selectedLexicalItemIds, setSelectedLexicalItemIds] = useState<
+    Set<string>
+  >(new Set());
+  const [exportErrorMessage, setExportErrorMessage] = useState("");
+  const allItems = [...wordsToLearn, ...alreadyKnew];
+
+  const openDialog = (): void => {
+    setSelectedLexicalItemIds(
+      new Set(wordsToLearn.map((item) => item.lexicalItemId)),
+    );
+    setExportErrorMessage("");
+    setOpen(true);
+  };
+
+  const setItemSelected = (lexicalItemId: string, selected: boolean): void => {
+    setSelectedLexicalItemIds((current) => {
+      const next = new Set(current);
+      if (selected) {
+        next.add(lexicalItemId);
+      } else {
+        next.delete(lexicalItemId);
+      }
+      return next;
+    });
+  };
+
+  const exportSelectedItems = (): void => {
+    const selectedItems = allItems.filter((item) =>
+      selectedLexicalItemIds.has(item.lexicalItemId),
+    );
+    try {
+      onExport(selectedItems);
+      setOpen(false);
+    } catch (error) {
+      setExportErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to export the selected words.",
+      );
+    }
+  };
+
+  const groups = [
+    { id: "words-to-learn", label: "Words to learn", items: wordsToLearn },
+    { id: "already-knew", label: "Already knew", items: alreadyKnew },
+  ];
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        className="gap-2"
+        disabled={allItems.length === 0}
+        onClick={openDialog}
+      >
+        <Download size={16} /> Export for Anki
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          setOpen(nextOpen);
+          if (!nextOpen) {
+            setExportErrorMessage("");
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90dvh] sm:max-w-[520px] sm:rounded-sm">
+          <DialogHeader>
+            <DialogTitle>Export for Anki</DialogTitle>
+            <DialogDescription>
+              Choose the words to include to the exported file
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <span className="text-muted-foreground" aria-live="polite">
+              {selectedLexicalItemIds.size} selected
+            </span>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setSelectedLexicalItemIds(
+                    new Set(allItems.map((item) => item.lexicalItemId)),
+                  )
+                }
+              >
+                Select all
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedLexicalItemIds(new Set<string>())}
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
+
+          <div className="max-h-[min(58dvh,28rem)] overflow-y-auto border-y border-border">
+            {groups.map((group) =>
+              group.items.length > 0 ? (
+                <section key={group.id} aria-labelledby={`${group.id}-heading`}>
+                  <h3
+                    id={`${group.id}-heading`}
+                    className="sticky top-0 bg-background px-1 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                  >
+                    {group.label} ({group.items.length})
+                  </h3>
+                  <ul className="divide-y divide-border">
+                    {group.items.map((item, index) => {
+                      const checkboxId = `study-export-${group.id}-${index}`;
+                      return (
+                        <li key={item.lexicalItemId}>
+                          <label
+                            htmlFor={checkboxId}
+                            className="flex cursor-pointer items-center gap-3 px-1 py-3"
+                          >
+                            <Checkbox
+                              id={checkboxId}
+                              checked={selectedLexicalItemIds.has(
+                                item.lexicalItemId,
+                              )}
+                              onCheckedChange={(checked) =>
+                                setItemSelected(
+                                  item.lexicalItemId,
+                                  checked === true,
+                                )
+                              }
+                            />
+                            <span className="min-w-0 flex-1 font-medium">
+                              {item.spelling}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {formatPartOfSpeech(item.partOfSpeech)}
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ) : null,
+            )}
+          </div>
+
+          {exportErrorMessage.length > 0 && (
+            <p role="alert" className="text-sm text-destructive">
+              {exportErrorMessage}
+            </p>
+          )}
+
+          <DialogFooter className="gap-2 sm:space-x-0">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={selectedLexicalItemIds.size === 0}
+              onClick={exportSelectedItems}
+            >
+              Export selected
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 export function StudyFlow({
@@ -1106,29 +1295,13 @@ export function StudyFlow({
             >
               {preparing ? "Preparing…" : "Learn more words"}
             </Button>
-            <Button
-              variant="ghost"
-              className="gap-2"
-              disabled={wordsToLearn.length === 0}
-              onClick={() => {
-                try {
-                  downloadStudyExport(
-                    bookTitle,
-                    scope.chapterIndex,
-                    wordsToLearn,
-                  );
-                  setErrorMessage("");
-                } catch (error) {
-                  setErrorMessage(
-                    error instanceof Error
-                      ? error.message
-                      : "Unable to export these words.",
-                  );
-                }
-              }}
-            >
-              <Download size={16} /> Export for Anki
-            </Button>
+            <StudyExportDialog
+              wordsToLearn={wordsToLearn}
+              alreadyKnew={alreadyKnew}
+              onExport={(items) =>
+                downloadStudyExport(bookTitle, scope.chapterIndex, items)
+              }
+            />
           </div>
         </main>
       </DialogContent>
