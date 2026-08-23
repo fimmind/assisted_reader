@@ -1,6 +1,23 @@
-import { CALENDAR_EXCLUSIONS, SENTENCE_RE, TITLE_CASE_NOISE, WORD_RE, WORD_TOKEN_RE } from './constants';
+import {
+  CALENDAR_EXCLUSIONS,
+  SENTENCE_RE,
+  TITLE_CASE_NOISE,
+  WORD_RE,
+  WORD_TOKEN_RE,
+} from './constants';
 import { isWordToken, normalizeToken, orderedUnique } from './math';
-import type { DeinflectionResult, PartOfSpeech, TaggedSentence, TaggedTerm } from './types';
+import type {
+  DeinflectionResult,
+  PartOfSpeech,
+  TaggedSentence,
+  TaggedTerm,
+} from './types';
+
+export interface SentenceSpan {
+  text: string;
+  start: number;
+  end: number;
+}
 
 type CompromiseTags = string[] | Record<string, unknown>;
 type CompromiseTermNode = {
@@ -70,7 +87,12 @@ const CALENDAR_TIME_NOUNS = new Set<string>([
   'noon',
 ]);
 
-const ADVERBIAL_QUESTION_WORDS = new Set<string>(['how', 'when', 'where', 'why']);
+const ADVERBIAL_QUESTION_WORDS = new Set<string>([
+  'how',
+  'when',
+  'where',
+  'why',
+]);
 
 function buildFallbackTerms(sentence: string): TaggedTerm[] {
   const terms: TaggedTerm[] = [];
@@ -92,19 +114,31 @@ function buildFallbackTerms(sentence: string): TaggedTerm[] {
   return terms;
 }
 
-function extractCompromiseTermTags(rawTags: CompromiseTags | undefined): Set<string> {
+function extractCompromiseTermTags(
+  rawTags: CompromiseTags | undefined,
+): Set<string> {
   const normalizeTag = (tag: string) => tag.replace(/^#/, '').trim();
 
   if (Array.isArray(rawTags)) {
-    return new Set<string>(rawTags.map((tag) => normalizeTag(String(tag))).filter((tag) => tag.length > 0));
+    return new Set<string>(
+      rawTags
+        .map((tag) => normalizeTag(String(tag)))
+        .filter((tag) => tag.length > 0),
+    );
   }
   if (rawTags && typeof rawTags === 'object') {
-    return new Set<string>(Object.keys(rawTags).map((tag) => normalizeTag(tag)).filter((tag) => tag.length > 0));
+    return new Set<string>(
+      Object.keys(rawTags)
+        .map((tag) => normalizeTag(tag))
+        .filter((tag) => tag.length > 0),
+    );
   }
   return new Set<string>();
 }
 
-function flattenCompromiseTerms(jsonTerms: CompromiseTermNode[]): Array<{ text: string; tags: Set<string> }> {
+function flattenCompromiseTerms(
+  jsonTerms: CompromiseTermNode[],
+): Array<{ text: string; tags: Set<string> }> {
   const output: Array<{ text: string; tags: Set<string> }> = [];
   for (const item of jsonTerms) {
     const parentTags = extractCompromiseTermTags(item.tags);
@@ -160,20 +194,30 @@ function tagWithCompromise(sentence: string, nlp: NlpLike): TaggedTerm[] {
 }
 
 export function splitSentences(text: string): string[] {
+  return splitSentenceSpans(text).map((sentence) => sentence.text);
+}
+
+export function splitSentenceSpans(text: string): SentenceSpan[] {
   SENTENCE_RE.lastIndex = 0;
-  const sentences: string[] = [];
+  const sentences: SentenceSpan[] = [];
   const matches = text.matchAll(SENTENCE_RE);
   for (const match of matches) {
-    const chunk = match[0].trim();
+    const rawChunk = match[0];
+    const chunk = rawChunk.trim();
     if (chunk.length > 0) {
-      sentences.push(chunk);
+      const leadingWhitespace = rawChunk.length - rawChunk.trimStart().length;
+      const start = (match.index ?? 0) + leadingWhitespace;
+      sentences.push({ text: chunk, start, end: start + chunk.length });
     }
   }
   SENTENCE_RE.lastIndex = 0;
   return sentences;
 }
 
-export function tagSentenceTerms(sentence: string, nlp: NlpLike | null): TaggedTerm[] {
+export function tagSentenceTerms(
+  sentence: string,
+  nlp: NlpLike | null,
+): TaggedTerm[] {
   if (!nlp) {
     return buildFallbackTerms(sentence);
   }
@@ -190,7 +234,10 @@ export function tagSentenceTerms(sentence: string, nlp: NlpLike | null): TaggedT
   }
 }
 
-export function buildTaggedSentences(text: string, nlp: NlpLike | null): TaggedSentence[] {
+export function buildTaggedSentences(
+  text: string,
+  nlp: NlpLike | null,
+): TaggedSentence[] {
   const sentences = splitSentences(text);
   return sentences.map((sentence) => ({
     text: sentence,
@@ -223,7 +270,10 @@ function hasProperTag(term: TaggedTerm): boolean {
   return false;
 }
 
-export function isNameLikeToken(raw: string, sentenceInitial: boolean): boolean {
+export function isNameLikeToken(
+  raw: string,
+  sentenceInitial: boolean,
+): boolean {
   if (!WORD_TOKEN_RE.test(raw)) {
     return false;
   }
@@ -257,7 +307,10 @@ export function isProperNounTag(term: TaggedTerm): boolean {
       return false;
     }
     const normalized = normalizeToken(term.raw);
-    if (CALENDAR_EXCLUSIONS.has(normalized) || TITLE_CASE_NOISE.has(normalized)) {
+    if (
+      CALENDAR_EXCLUSIONS.has(normalized) ||
+      TITLE_CASE_NOISE.has(normalized)
+    ) {
       return false;
     }
     return true;
@@ -265,7 +318,10 @@ export function isProperNounTag(term: TaggedTerm): boolean {
   return isNameLikeToken(term.raw, term.sentenceInitial);
 }
 
-function isStrongProperShapeTerm(term: TaggedTerm, next: TaggedTerm | null): boolean {
+function isStrongProperShapeTerm(
+  term: TaggedTerm,
+  next: TaggedTerm | null,
+): boolean {
   if (!WORD_TOKEN_RE.test(term.raw)) {
     return false;
   }
@@ -284,7 +340,8 @@ function isStrongProperShapeTerm(term: TaggedTerm, next: TaggedTerm | null): boo
   }
 
   if (term.sentenceInitial && next !== null) {
-    const nextIsTitleCaseWord = WORD_TOKEN_RE.test(next.raw) && isTitleCaseToken(next.raw);
+    const nextIsTitleCaseWord =
+      WORD_TOKEN_RE.test(next.raw) && isTitleCaseToken(next.raw);
     if (nextIsTitleCaseWord && !normalized.endsWith('ly')) {
       return true;
     }
@@ -293,7 +350,9 @@ function isStrongProperShapeTerm(term: TaggedTerm, next: TaggedTerm | null): boo
   return !term.sentenceInitial;
 }
 
-export function buildHighConfidenceProperNounLexicon(taggedSentences: TaggedSentence[]): Set<string> {
+export function buildHighConfidenceProperNounLexicon(
+  taggedSentences: TaggedSentence[],
+): Set<string> {
   type Accumulator = {
     total: number;
     proper: number;
@@ -348,7 +407,7 @@ export function buildHighConfidenceProperNounLexicon(taggedSentences: TaggedSent
     if (value.proper < 2) {
       continue;
     }
-    if ((value.proper / value.total) < 0.6) {
+    if (value.proper / value.total < 0.6) {
       continue;
     }
     if (value.nameLikeProper < 2) {
@@ -366,7 +425,11 @@ export function buildHighConfidenceProperNounLexicon(taggedSentences: TaggedSent
   return lexicon;
 }
 
-function mapTagsToWordClass(tags: Set<string>): { verb: boolean; noun: boolean; adjective: boolean } {
+function mapTagsToWordClass(tags: Set<string>): {
+  verb: boolean;
+  noun: boolean;
+  adjective: boolean;
+} {
   return {
     verb: tags.has('Verb'),
     noun: tags.has('Noun'),
@@ -424,10 +487,18 @@ function isCalendarTimeNoun(
   term: TaggedTerm,
   previous: TaggedTerm | null,
 ): boolean {
-  if (!term.tags.has('Verb') || !CALENDAR_TIME_NOUNS.has(term.normalized) || previous === null) {
+  if (
+    !term.tags.has('Verb') ||
+    !CALENDAR_TIME_NOUNS.has(term.normalized) ||
+    previous === null
+  ) {
     return false;
   }
-  return previous.tags.has('Date') || previous.tags.has('WeekDay') || previous.tags.has('Month');
+  return (
+    previous.tags.has('Date') ||
+    previous.tags.has('WeekDay') ||
+    previous.tags.has('Month')
+  );
 }
 
 function inferQuestionWordPartOfSpeech(
@@ -446,25 +517,47 @@ function inferQuestionWordPartOfSpeech(
   return 'pronoun';
 }
 
-export function inferPartsOfSpeech(terms: TaggedTerm[]): Array<PartOfSpeech | null> {
+export function inferPartsOfSpeech(
+  terms: TaggedTerm[],
+): Array<PartOfSpeech | null> {
   return terms.map((term, index) => {
     const previous = index > 0 ? terms[index - 1] : null;
-    const next = index < (terms.length - 1) ? terms[index + 1] : null;
+    const next = index < terms.length - 1 ? terms[index + 1] : null;
 
     if (isCalendarTimeNoun(term, previous)) {
       return 'noun';
     }
     if (
-      term.normalized === 'to'
-      && next !== null
-      && next.tags.has('Verb')
-      && next.tags.has('Infinitive')
+      term.normalized === 'to' &&
+      next !== null &&
+      next.tags.has('Verb') &&
+      next.tags.has('Infinitive')
     ) {
       return 'particle';
     }
     const questionWordPartOfSpeech = inferQuestionWordPartOfSpeech(term, next);
     return questionWordPartOfSpeech ?? inferPartOfSpeech(term);
   });
+}
+
+function resolveDeinflectedPartOfSpeech(
+  term: TaggedTerm,
+  previous: TaggedTerm | null,
+  next: TaggedTerm | null,
+  dictionaryLemma: string | null,
+  inferredPartOfSpeech: PartOfSpeech | null,
+): PartOfSpeech | null {
+  if (
+    inferredPartOfSpeech === 'noun' &&
+    term.tags.has('Singular') &&
+    dictionaryLemma !== null &&
+    dictionaryLemma !== term.normalized &&
+    previous?.tags.has('Verb') === true &&
+    next?.tags.has('Preposition') === true
+  ) {
+    return 'verb';
+  }
+  return inferredPartOfSpeech;
 }
 
 function extractConjugatedAdjective(doc: ReturnType<NlpLike>): string {
@@ -481,7 +574,7 @@ function extractConjugatedAdjective(doc: ReturnType<NlpLike>): string {
 }
 
 function buildApostropheLemmaCandidates(normalizedToken: string): string[] {
-  if (!normalizedToken.includes('\'')) {
+  if (!normalizedToken.includes("'")) {
     return [];
   }
 
@@ -503,7 +596,10 @@ function buildApostropheLemmaCandidates(normalizedToken: string): string[] {
 
   const detachableSuffixes = ["'re", "'ve", "'ll", "'d", "'m"];
   for (const suffix of detachableSuffixes) {
-    if (normalizedToken.endsWith(suffix) && normalizedToken.length > suffix.length) {
+    if (
+      normalizedToken.endsWith(suffix) &&
+      normalizedToken.length > suffix.length
+    ) {
       addCandidate(normalizedToken.slice(0, -suffix.length));
     }
   }
@@ -512,11 +608,13 @@ function buildApostropheLemmaCandidates(normalizedToken: string): string[] {
     const contractionStem = normalizeToken(normalizedToken.slice(0, -3));
     addCandidate(contractionStem);
 
-    const expandedStem = NEGATIVE_CONTRACTION_STEM_OVERRIDES[contractionStem] ?? contractionStem;
+    const expandedStem =
+      NEGATIVE_CONTRACTION_STEM_OVERRIDES[contractionStem] ?? contractionStem;
     addCandidate(expandedStem);
 
-    const normalizedLemma = NEGATIVE_CONTRACTION_LEMMA_OVERRIDES[expandedStem]
-      ?? NEGATIVE_CONTRACTION_LEMMA_OVERRIDES[contractionStem];
+    const normalizedLemma =
+      NEGATIVE_CONTRACTION_LEMMA_OVERRIDES[expandedStem] ??
+      NEGATIVE_CONTRACTION_LEMMA_OVERRIDES[contractionStem];
     if (typeof normalizedLemma === 'string' && normalizedLemma.length > 0) {
       addCandidate(normalizedLemma);
     }
@@ -531,9 +629,10 @@ function buildLemmaCandidateCacheKey(
   lemmaFromDict: string | undefined,
   hasNlp: boolean,
 ): string {
-  const normalizedLemmaFromDict = typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
-    ? normalizeToken(lemmaFromDict)
-    : '';
+  const normalizedLemmaFromDict =
+    typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
+      ? normalizeToken(lemmaFromDict)
+      : '';
   return `${term.raw}\n${classes.verb ? '1' : '0'}${classes.noun ? '1' : '0'}${classes.adjective ? '1' : '0'}\n${hasNlp ? '1' : '0'}\n${normalizedLemmaFromDict}`;
 }
 
@@ -545,7 +644,10 @@ export function makeLemmaCandidates(
 ): string[] {
   const normalized = term.normalized;
   const classes = mapTagsToWordClass(term.tags);
-  const hasOwnLemma = Object.prototype.hasOwnProperty.call(lemmaDict, normalized);
+  const hasOwnLemma = Object.prototype.hasOwnProperty.call(
+    lemmaDict,
+    normalized,
+  );
   const lemmaFromDict = hasOwnLemma ? lemmaDict[normalized] : undefined;
   const cacheKey = cache
     ? buildLemmaCandidateCacheKey(term, classes, lemmaFromDict, nlp !== null)
@@ -571,7 +673,9 @@ export function makeLemmaCandidates(
   if (nlp) {
     try {
       const doc = nlp(term.raw);
-      const verbInfinitive = normalizeToken(doc.verbs().toInfinitive().out('text'));
+      const verbInfinitive = normalizeToken(
+        doc.verbs().toInfinitive().out('text'),
+      );
       const nounSingular = normalizeToken(doc.nouns().toSingular().out('text'));
 
       if (classes.verb) {
@@ -596,7 +700,9 @@ export function makeLemmaCandidates(
 
   candidates.push(normalized);
 
-  const cleaned = candidates.filter((candidate) => candidate.length > 0 && WORD_TOKEN_RE.test(candidate));
+  const cleaned = candidates.filter(
+    (candidate) => candidate.length > 0 && WORD_TOKEN_RE.test(candidate),
+  );
   const unique = orderedUnique(cleaned);
   if (cache) {
     cache.set(cacheKey, unique);
@@ -613,7 +719,11 @@ function resolveKnownDictionaryLemma(
     return null;
   }
   const lemma = normalizeToken(lemmaDict[normalizedToken]);
-  if (lemma.length === 0 || !WORD_TOKEN_RE.test(lemma) || !lowerToIdx.has(lemma)) {
+  if (
+    lemma.length === 0 ||
+    !WORD_TOKEN_RE.test(lemma) ||
+    !lowerToIdx.has(lemma)
+  ) {
     return null;
   }
   return lemma;
@@ -635,28 +745,52 @@ export function contextualDeinflectTaggedTerms(
 
   for (let index = 0; index < terms.length; index += 1) {
     const term = terms[index];
-    const next = index < (terms.length - 1) ? terms[index + 1] : null;
+    const previous = index > 0 ? terms[index - 1] : null;
+    const next = index < terms.length - 1 ? terms[index + 1] : null;
     const normalized = term.normalized;
     const explicitProperTag = hasProperTag(term);
     const tagProper = isProperNounTag(term);
     const strongShapeProper = isStrongProperShapeTerm(term, next);
-    const properByLexicon = explicitProperTag || strongShapeProper || (tagProper && properNounLexicon.has(normalized));
+    const properByLexicon =
+      explicitProperTag ||
+      strongShapeProper ||
+      (tagProper && properNounLexicon.has(normalized));
+    const dictionaryLemma = resolveKnownDictionaryLemma(
+      normalized,
+      lemmaDict,
+      lowerToIdx,
+    );
+    const contextualPartOfSpeech = resolveDeinflectedPartOfSpeech(
+      term,
+      previous,
+      next,
+      dictionaryLemma,
+      inferredPartsOfSpeech[index],
+    );
     properFlags.push(properByLexicon);
-    partsOfSpeech.push(properByLexicon ? 'proper-noun' : inferredPartsOfSpeech[index]);
+    partsOfSpeech.push(
+      properByLexicon ? 'proper-noun' : contextualPartOfSpeech,
+    );
 
     if (excludeProperNouns && properByLexicon) {
       tokens.push('');
       continue;
     }
 
-    const dictionaryLemma = resolveKnownDictionaryLemma(normalized, lemmaDict, lowerToIdx);
     if (dictionaryLemma !== null) {
       tokens.push(dictionaryLemma);
       continue;
     }
 
-    const candidates = makeLemmaCandidates(term, lemmaDict, nlp, lemmaCandidateCache);
-    const selectedFromVocab = candidates.find((candidate) => lowerToIdx.has(candidate));
+    const candidates = makeLemmaCandidates(
+      term,
+      lemmaDict,
+      nlp,
+      lemmaCandidateCache,
+    );
+    const selectedFromVocab = candidates.find((candidate) =>
+      lowerToIdx.has(candidate),
+    );
     const selected = selectedFromVocab ?? candidates[0] ?? normalized;
 
     tokens.push(selected);

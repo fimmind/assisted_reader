@@ -2,6 +2,7 @@ import type { ReaderSettings } from './types';
 
 export const PROFILE_STORAGE_KEY = 'easeword-profiles-v1';
 export const SETTINGS_STORAGE_KEY = 'easeword-settings-v1';
+export const STUDY_STORAGE_KEY = 'easeword-study-v1';
 export const BOOKS_FALLBACK_STORAGE_KEY = 'easeword-books-fallback-v1';
 export const BOOKS_DB_NAME = 'vocab_reader_books_v1';
 export const BOOKS_STORE_NAME = 'books';
@@ -80,3 +81,8 @@ export const COMPROMISE_CDN_URL = 'https://unpkg.com/compromise@14.15.0/builds/c
 
 export const ADAPTIVE_TOP_K = 3;
 export const ADAPTIVE_TEMPERATURE = 0.03;
+
+export const STUDY_KNOWN_PROBABILITY_CEILING = 0.7;
+export const DEFAULT_STUDY_WORD_COUNT = 20;
+export const MIN_STUDY_WORD_COUNT = 1;
+export const MAX_STUDY_WORD_COUNT = 100;

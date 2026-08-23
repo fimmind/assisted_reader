@@ -1,5 +1,6 @@
 import { DEFAULT_PROFILE_NAME, DEFAULT_READER_SETTINGS, PROFILE_STORAGE_KEY, SETTINGS_STORAGE_KEY } from './constants';
 import { createId } from './math';
+import { clearStudyDataForProfile } from './study-store';
 import type { ProfileState, ReaderSettings, UserProfile } from './types';
 
 const STATE_EVENT = 'easeword-state-updated';
@@ -201,6 +202,7 @@ export function deleteProfile(profileId: string): void {
   if (state.activeProfileId === profileId) {
     state.activeProfileId = nextProfiles[0].id;
   }
+  clearStudyDataForProfile(profileId);
   saveProfileState(state);
 }
 
@@ -211,6 +213,7 @@ export function resetProfileObservations(profileId: string): void {
     throw new Error(`Cannot reset profile. Missing id=${profileId}`);
   }
   profile.observations = {};
+  clearStudyDataForProfile(profileId);
   saveProfileState(state);
 }
 

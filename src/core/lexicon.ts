@@ -1,5 +1,10 @@
-import { normalizeToken } from './math';
-import type { DefinitionTarget, LexiconEntry, LexiconSense, PartOfSpeech } from './types';
+import { normalizeToken, orderedUnique } from './math';
+import type {
+  DefinitionTarget,
+  LexiconEntry,
+  LexiconSense,
+  PartOfSpeech,
+} from './types';
 
 const LEXICON_INDEX_URL = 'data/lexicon/index.json';
 export const LEXICON_SCHEMA_VERSION = 4;
@@ -41,6 +46,29 @@ export interface LazyLexicon {
   lookup: (word: string) => Promise<LexiconEntry | null>;
 }
 
+export interface ResolvedPronunciations {
+  preferred: string;
+  alternatives: string[];
+}
+
+export function resolveLexiconPronunciations(
+  sense: LexiconSense,
+  variant: 'US' | 'UK',
+): ResolvedPronunciations {
+  const variantPreferred = variant === 'UK' ? sense.ipaUk : sense.ipaUs;
+  const otherVariant = variant === 'UK' ? sense.ipaUs : sense.ipaUk;
+  const preferred =
+    variantPreferred?.trim() || sense.ipa.trim() || otherVariant?.trim() || '';
+  const alternatives = orderedUnique(
+    [
+      sense.ipaUs?.trim() ?? '',
+      sense.ipaUk?.trim() ?? '',
+      sense.ipa.trim(),
+    ].filter((value) => value.length > 0 && value !== preferred),
+  );
+  return { preferred, alternatives };
+}
+
 const LEXICON_BUCKET_ALGORITHM = 'fnv1a-32';
 const LEXICON_BUCKET_COUNT = 1024;
 const LEXICON_FETCH_ATTEMPTS = 3;
@@ -55,7 +83,9 @@ function sanitizeOptionalText(value: unknown): string | undefined {
 }
 
 function isPartOfSpeech(value: unknown): value is PartOfSpeech {
-  return typeof value === 'string' && PARTS_OF_SPEECH.has(value as PartOfSpeech);
+  return (
+    typeof value === 'string' && PARTS_OF_SPEECH.has(value as PartOfSpeech)
+  );
 }
 
 function toLexiconSense(candidate: unknown): LexiconSense | null {
@@ -68,10 +98,9 @@ function toLexiconSense(candidate: unknown): LexiconSense | null {
   }
   const definitions = Array.isArray(payload.definitions)
     ? payload.definitions
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0)
-      .slice(0, 2)
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
     : [];
   if (definitions.length === 0) {
     return null;
@@ -90,7 +119,8 @@ function toLexiconEntry(candidate: unknown): LexiconEntry | null {
     return null;
   }
   const payload = candidate as Record<string, unknown>;
-  const word = typeof payload.word === 'string' ? normalizeToken(payload.word) : '';
+  const word =
+    typeof payload.word === 'string' ? normalizeToken(payload.word) : '';
   if (word.length === 0 || !Array.isArray(payload.senses)) {
     return null;
   }
@@ -111,15 +141,23 @@ function parseLexiconIndex(candidate: unknown): LexiconIndexPayload {
     );
   }
   if (payload.bucketAlgorithm !== LEXICON_BUCKET_ALGORITHM) {
-    throw new Error(`Unsupported lexicon bucket algorithm: ${String(payload.bucketAlgorithm)}`);
+    throw new Error(
+      `Unsupported lexicon bucket algorithm: ${String(payload.bucketAlgorithm)}`,
+    );
   }
   if (payload.bucketCount !== LEXICON_BUCKET_COUNT) {
     throw new Error(
       `Unsupported lexicon bucket count: expected=${LEXICON_BUCKET_COUNT} actual=${String(payload.bucketCount)}`,
     );
   }
-  if (typeof payload.entryCount !== 'number' || !Number.isInteger(payload.entryCount) || payload.entryCount <= 0) {
-    throw new Error(`Invalid lexicon entry count: ${String(payload.entryCount)}`);
+  if (
+    typeof payload.entryCount !== 'number' ||
+    !Number.isInteger(payload.entryCount) ||
+    payload.entryCount <= 0
+  ) {
+    throw new Error(
+      `Invalid lexicon entry count: ${String(payload.entryCount)}`,
+    );
   }
   return {
     schemaVersion: LEXICON_SCHEMA_VERSION,
@@ -145,9 +183,11 @@ async function fetchJsonWithRetries(relativeUrl: string): Promise<unknown> {
     try {
       const response = await fetch(`${import.meta.env.BASE_URL}${relativeUrl}`);
       if (!response.ok) {
-        throw new Error(`Dictionary request failed: url=${relativeUrl} status=${response.status}`);
+        throw new Error(
+          `Dictionary request failed: url=${relativeUrl} status=${response.status}`,
+        );
       }
-      return await response.json() as unknown;
+      return (await response.json()) as unknown;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       console.warn('lexicon-fetch-attempt-failed', {
@@ -158,7 +198,10 @@ async function fetchJsonWithRetries(relativeUrl: string): Promise<unknown> {
       });
     }
   }
-  throw lastError ?? new Error(`Dictionary request failed without an error: url=${relativeUrl}`);
+  throw (
+    lastError ??
+    new Error(`Dictionary request failed without an error: url=${relativeUrl}`)
+  );
 }
 
 async function loadChunk(fileName: string): Promise<Map<string, LexiconEntry>> {
@@ -166,9 +209,11 @@ async function loadChunk(fileName: string): Promise<Map<string, LexiconEntry>> {
   if (!Array.isArray(payload)) {
     throw new Error(`Invalid lexicon chunk: file=${fileName} expected=array`);
   }
-  return buildEntryMap(payload
-    .map((candidate) => toLexiconEntry(candidate))
-    .filter((entry): entry is LexiconEntry => entry !== null));
+  return buildEntryMap(
+    payload
+      .map((candidate) => toLexiconEntry(candidate))
+      .filter((entry): entry is LexiconEntry => entry !== null),
+  );
 }
 
 function hashLexiconWord(word: string): number {
@@ -242,8 +287,12 @@ export function resolveLexiconEntry(
   if (target.partOfSpeech === null) {
     return entry;
   }
-  const matchingSenses = entry.senses.filter((sense) => sense.partOfSpeech === target.partOfSpeech);
-  return matchingSenses.length > 0 ? { ...entry, senses: matchingSenses } : entry;
+  const matchingSenses = entry.senses.filter(
+    (sense) => sense.partOfSpeech === target.partOfSpeech,
+  );
+  return matchingSenses.length > 0
+    ? { ...entry, senses: matchingSenses }
+    : entry;
 }
 
 export function createFallbackLexiconEntry(lemma: string): LexiconEntry {

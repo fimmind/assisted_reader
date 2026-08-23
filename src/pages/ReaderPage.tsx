@@ -3,7 +3,7 @@ import {
 } from 'react';
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
-import { ChevronLeft, Type, Eye, EyeOff, MoreHorizontal, Trash2 } from 'lucide-react';
+import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Slider } from '@/components/ui/slider';
@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
 import { WordDefinitionCard } from '@/components/WordDefinitionCard';
+import { StudyFlow } from '@/components/StudyFlow';
 import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
@@ -32,6 +33,7 @@ import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservati
 import type { LazyLexicon } from '@/core/lexicon';
 import type { DefinitionLookupCandidate } from '@/core/definition-target';
 import type { ChapterAnalyzer, LexicalAnalysisCache } from '@/core/reader-analysis';
+import type { StudyTextScope } from '@/core/study';
 import type { DefinitionTarget, ImportedBook, LexiconEntry, ParagraphAnalysis, PartOfSpeech, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
 
 function clampChapterNumber(book: ImportedBook, chapterNumber: number | undefined): number {
@@ -711,6 +713,8 @@ export default function ReaderPage() {
   const [wordPopups, setWordPopups] = useState<WordPopupState[]>([]);
   const [activeAnalysisRunId, setActiveAnalysisRunId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [studyOpen, setStudyOpen] = useState(false);
+  const [studyScope, setStudyScope] = useState<StudyTextScope | null>(null);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
   const chapterAnalysisRef = useRef<ParagraphAnalysis[]>([]);
@@ -1698,6 +1702,30 @@ export default function ReaderPage() {
     visibleIndex,
     sourceIndex: visibleIndex + paragraphStartIndex,
   }));
+  const openChapterStudy = (): void => {
+    if (!currentChapter || chapterParagraphs.length === 0 || !resourcesRef.current) {
+      return;
+    }
+    persistCurrentChapterProgress(true);
+    const visibleParagraphCount = Math.max(1, chapterParagraphs.length - paragraphStartIndex);
+    const visibleAnchorIndex = resolveAnalysisAnchorIndex(
+      visibleParagraphCount,
+      calculateScrollProgressFromDocument(),
+    );
+    const sourceAnchorIndex = clampParagraphIndex(
+      visibleAnchorIndex + paragraphStartIndex,
+      chapterParagraphs.length,
+    );
+    setStudyScope({
+      id: `${book.id}:chapter:${currentChapterNumber - 1}`,
+      sourceDocumentId: book.id,
+      chapterIndex: currentChapterNumber - 1,
+      paragraphs: [...chapterParagraphs],
+      paragraphOffset: 0,
+      unreadParagraphIndex: sourceAnchorIndex,
+    });
+    setStudyOpen(true);
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -1730,6 +1758,17 @@ export default function ReaderPage() {
             {book.title} — Chapter {currentChapterNumber}
           </div>
           <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-2 text-muted-foreground hover:text-foreground"
+              onClick={openChapterStudy}
+              disabled={!currentChapter || chapterParagraphs.length === 0 || !resourcesRef.current}
+              data-testid="button-study-chapter"
+            >
+              <GraduationCap size={18} />
+              <span>Study</span>
+            </Button>
             <Button variant="ghost" size="icon"
               onClick={() => setAssistanceEnabled(!assistanceEnabled)}
               className={cn('text-muted-foreground transition-colors', assistanceEnabled && 'text-primary bg-primary/10')}
@@ -2033,6 +2072,20 @@ export default function ReaderPage() {
           </div>
         );
       })}
+      {studyOpen && studyScope && resourcesRef.current && (
+        <StudyFlow
+          open={studyOpen}
+          onOpenChange={setStudyOpen}
+          bookTitle={book.title}
+          profileId={activeProfileForRender.id}
+          scope={studyScope}
+          settings={settings}
+          model={resourcesRef.current.model}
+          lemmaDict={resourcesRef.current.lemmaDict}
+          lexicon={resourcesRef.current.lexicon}
+          nlp={resourcesRef.current.nlp}
+        />
+      )}
     </div>
   );
 }

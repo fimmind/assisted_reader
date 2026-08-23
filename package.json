@@ -18,7 +18,7 @@
     "deploy": "gh-pages -d dist --nojekyll",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:proper-nouns": "tsc -p tsconfig.tests.json && sed -i \"s|'./constants'|'./constants.js'|g; s|'./definition-target'|'./definition-target.js'|g; s|'./lexicon'|'./lexicon.js'|g; s|'./math'|'./math.js'|g; s|'./types'|'./types.js'|g; s|'./nlp'|'./nlp.js'|g; s|'./model'|'./model.js'|g; s|'./reader-analysis'|'./reader-analysis.js'|g\" .tmp-tests/src/core/definition-target.js .tmp-tests/src/core/lexicon.js .tmp-tests/src/core/nlp.js .tmp-tests/src/core/math.js .tmp-tests/src/core/model.js .tmp-tests/src/core/reader-analysis.js && node --test .tmp-tests/tests/*.test.js"
+    "test:proper-nouns": "tsc -p tsconfig.tests.json && sed -i \"s|'./card-session'|'./card-session.js'|g; s|'./constants'|'./constants.js'|g; s|'./definition-target'|'./definition-target.js'|g; s|'./lexicon'|'./lexicon.js'|g; s|'./math'|'./math.js'|g; s|'./study'|'./study.js'|g; s|'./study-session'|'./study-session.js'|g; s|'./types'|'./types.js'|g; s|'./nlp'|'./nlp.js'|g; s|'./model'|'./model.js'|g; s|'./reader-analysis'|'./reader-analysis.js'|g\" .tmp-tests/src/core/card-session.js .tmp-tests/src/core/definition-target.js .tmp-tests/src/core/lexicon.js .tmp-tests/src/core/nlp.js .tmp-tests/src/core/math.js .tmp-tests/src/core/model.js .tmp-tests/src/core/reader-analysis.js .tmp-tests/src/core/study.js .tmp-tests/src/core/study-session.js && node --test .tmp-tests/tests/*.test.js"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",

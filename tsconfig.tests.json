@@ -21,6 +21,9 @@
     "src/core/model.ts",
     "src/core/nlp.ts",
     "src/core/reader-analysis.ts",
+    "src/core/card-session.ts",
+    "src/core/study.ts",
+    "src/core/study-session.ts",
     "src/core/types.ts",
     "tests/**/*.ts"
   ],

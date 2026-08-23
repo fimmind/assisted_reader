@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { Check, X } from 'lucide-react';
 import { HYPHENATED_WORD_RE, WORD_RE } from '@/core/constants';
-import type { LexiconEntry, LexiconSense, PartOfSpeech } from '@/core/types';
+import { resolveLexiconPronunciations } from '@/core/lexicon';
+import type { LexiconEntry, PartOfSpeech } from '@/core/types';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
 
@@ -35,25 +36,6 @@ interface WordDefinitionCardProps {
 function resolveDefinitionCardFontSize(readerFontSize: number): number {
   const scaledFontSize = readerFontSize * 0.8;
   return Math.min(20, Math.max(12, scaledFontSize));
-}
-
-function resolveIpa(sense: LexiconSense, pronunciationVariant: 'US' | 'UK'): string {
-  if (pronunciationVariant === 'UK') {
-    if (typeof sense.ipaUk === 'string' && sense.ipaUk.trim().length > 0) {
-      return sense.ipaUk.trim();
-    }
-    if (typeof sense.ipaUs === 'string' && sense.ipaUs.trim().length > 0) {
-      return sense.ipaUs.trim();
-    }
-  } else {
-    if (typeof sense.ipaUs === 'string' && sense.ipaUs.trim().length > 0) {
-      return sense.ipaUs.trim();
-    }
-    if (typeof sense.ipaUk === 'string' && sense.ipaUk.trim().length > 0) {
-      return sense.ipaUk.trim();
-    }
-  }
-  return sense.ipa.trim();
 }
 
 function formatPartOfSpeech(partOfSpeech: PartOfSpeech): string {
@@ -290,7 +272,7 @@ export function WordDefinitionCard({
         ) : (
           <div className="space-y-2.5">
             {definition.senses.map((sense) => {
-              const ipaText = resolveIpa(sense, pronunciationVariant);
+              const ipaText = resolveLexiconPronunciations(sense, pronunciationVariant).preferred;
               return (
                 <section key={sense.partOfSpeech}>
                   <div className="flex items-baseline gap-2 mb-0.5">
@@ -355,7 +337,7 @@ export function WordDefinitionCard({
       ) : (
         <div className="space-y-3">
           {definition.senses.map((sense) => {
-            const ipaText = resolveIpa(sense, pronunciationVariant);
+            const ipaText = resolveLexiconPronunciations(sense, pronunciationVariant).preferred;
             return (
               <section key={sense.partOfSpeech}>
                 <div className="flex items-baseline gap-2 mb-1">

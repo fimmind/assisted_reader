@@ -58,7 +58,7 @@ export default function SettingsPage() {
   };
 
   const deleteExistingProfile = (profile: UserProfile) => {
-    const confirmed = window.confirm(`Delete profile "${profile.name}"? This will permanently remove all saved vocabulary observations.`);
+    const confirmed = window.confirm(`Delete profile "${profile.name}"? This will permanently remove all saved vocabulary observations and Study progress.`);
     if (!confirmed) {
       return;
     }
@@ -153,7 +153,7 @@ export default function SettingsPage() {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Reset active profile?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      This will clear all known/unknown quiz answers and vocabulary observations for the active profile.
+                      This will clear all known/unknown quiz answers, vocabulary observations, and Study progress for the active profile.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>

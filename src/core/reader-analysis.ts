@@ -82,7 +82,7 @@ function buildTaggedSentenceGroups(paragraphs: string[], nlp: ChapterAnalysisInp
   return paragraphs.map((paragraph) => buildTaggedSentences(paragraph, nlp));
 }
 
-function isAnalyzableLemma(lemma: string): boolean {
+export function isAnalyzableLemma(lemma: string): boolean {
   const letterCount = lemma.replace(/['’]/g, '').length;
   return letterCount > 2;
 }
