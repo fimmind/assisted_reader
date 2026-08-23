@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 const LEXICON_INDEX_URL = 'data/lexicon/index.json';
-export const LEXICON_SCHEMA_VERSION = 4;
+export const LEXICON_SCHEMA_VERSION = 5;
 
 const PARTS_OF_SPEECH: ReadonlySet<PartOfSpeech> = new Set<PartOfSpeech>([
   'noun',

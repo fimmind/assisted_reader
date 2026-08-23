@@ -539,7 +539,7 @@ export default function LibraryPage() {
               <span className="hidden sm:inline">{isImporting ? 'Importing...' : 'Import Book'}</span>
             </Button>
 
-            <Button variant="outline" size="sm" onClick={() => setQuizOpen(true)} className="gap-2 border-primary/20 text-primary hover:bg-primary hover:text-primary-foreground transition-colors">
+            <Button variant="ghost" size="sm" onClick={() => setQuizOpen(true)} className="gap-2 text-primary hover:bg-primary hover:text-primary-foreground transition-colors">
               <GraduationCap size={18} />
               <span className="hidden sm:inline">Quiz</span>
             </Button>

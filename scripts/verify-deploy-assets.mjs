@@ -89,7 +89,6 @@ async function verifyLexiconChunks() {
         seenPartsOfSpeech.add(sense.partOfSpeech);
         const hasDefinitions = Array.isArray(sense.definitions)
           && sense.definitions.length > 0
-          && sense.definitions.length <= 2
           && sense.definitions.every((value) => typeof value === 'string' && value.trim().length > 0);
         if (!hasDefinitions) {
           throw new Error(`Missing POS-specific definition content in ${relativePath}`);

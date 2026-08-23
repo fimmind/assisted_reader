@@ -146,7 +146,6 @@ function loadOverrides() {
           .filter((item) => typeof item === 'string')
           .map((item) => normalizeSpaces(item))
           .filter((item) => item.length > 0)
-          .slice(0, 2)
         : [];
       if (definitions.length === 0) {
         throw new Error(`Invalid lexicon override definitions: word=${word} partOfSpeech=${partOfSpeech}`);
@@ -305,9 +304,6 @@ function collectPrimaryDefinitions(senses) {
       }
       seenIdentity.add(identity);
       output.push(gloss);
-      if (output.length >= 2) {
-        return output;
-      }
     }
   }
 
@@ -330,7 +326,7 @@ function mergeExtractedRecord(entryMap, record) {
       ipa: record.ipa,
       ipaUs: record.ipaUs || undefined,
       ipaUk: record.ipaUk || undefined,
-      definitions: record.definitions.slice(0, 2),
+      definitions: [...record.definitions],
     });
     entryMap.set(record.word, entry);
     return;
@@ -339,7 +335,7 @@ function mergeExtractedRecord(entryMap, record) {
   const seenDefinitions = new Set(existingSense.definitions.map((definition) => normalizeGlossIdentity(definition)));
   for (const definition of record.definitions) {
     const identity = normalizeGlossIdentity(definition);
-    if (!seenDefinitions.has(identity) && existingSense.definitions.length < 2) {
+    if (!seenDefinitions.has(identity)) {
       existingSense.definitions.push(definition);
       seenDefinitions.add(identity);
     }

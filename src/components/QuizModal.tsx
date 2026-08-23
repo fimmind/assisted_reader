@@ -27,6 +27,10 @@ function getTotalBatches(totalWords: number, batchSize: number): number {
   return Math.ceil(totalWords / safeBatchSize);
 }
 
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
 export function QuizModal({ open, onOpenChange }: QuizModalProps) {
   const DEFAULT_TOTAL_WORDS = '60';
   const DEFAULT_BATCH_SIZE = '20';
@@ -64,6 +68,9 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
   };
 
   const startQuiz = async () => {
+    if (loading) {
+      return;
+    }
     const normalizedTotalWords = parsePositiveInteger(totalWordsInput);
     const normalizedBatchSize = parsePositiveInteger(batchSizeInput);
     if (normalizedTotalWords === null || normalizedBatchSize === null) {
@@ -72,6 +79,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
     }
     setLoading(true);
     setErrorMessage('');
+    await yieldToBrowser();
 
     try {
       const model = await loadVocabularyModel();
@@ -117,28 +125,29 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
   };
 
   const submitBatch = async () => {
-    if (!activeQuiz) {
-      return;
-    }
-
-    const observationUpdates: Record<string, 0 | 1> = {};
-    for (const word of activeQuiz.currentWords) {
-      const known = checkedWords.has(word);
-      observationUpdates[word.toLowerCase()] = known ? 1 : 0;
-    }
-    upsertObservationsBatch(observationUpdates);
-
-    const queriedCount = activeQuiz.queried.length;
-    if (queriedCount >= activeQuiz.totalWords) {
-      resetQuizState();
-      onOpenChange(false);
+    if (!activeQuiz || loading) {
       return;
     }
 
     setLoading(true);
     setErrorMessage('');
+    await yieldToBrowser();
 
     try {
+      const observationUpdates: Record<string, 0 | 1> = {};
+      for (const word of activeQuiz.currentWords) {
+        const known = checkedWords.has(word);
+        observationUpdates[word.toLowerCase()] = known ? 1 : 0;
+      }
+      upsertObservationsBatch(observationUpdates);
+
+      const queriedCount = activeQuiz.queried.length;
+      if (queriedCount >= activeQuiz.totalWords) {
+        resetQuizState();
+        onOpenChange(false);
+        return;
+      }
+
       const model = await loadVocabularyModel();
       const profileState = loadProfileState();
       const profile = getActiveProfile(profileState);
