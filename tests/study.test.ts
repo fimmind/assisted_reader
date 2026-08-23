@@ -39,6 +39,7 @@ import {
   getStudySessionFirstPassResults,
   undoLastStudyCard,
   updateActiveStudyCardSession,
+  updateStudyAnkiTranscriptionLayout,
 } from "../src/core/study-session.js";
 import type {
   StudyContextIdentity,
@@ -228,6 +229,13 @@ function answerSessionCard(
     "2026-01-01T00:01:00.000Z",
   );
 }
+
+test("Anki transcription layout preference is retained in Study state", () => {
+  const initial = createEmptyStudyState(20);
+  const updated = updateStudyAnkiTranscriptionLayout(initial, "merged");
+  assert.equal(initial.ankiTranscriptionLayout, "separate");
+  assert.equal(updated.ankiTranscriptionLayout, "merged");
+});
 
 test("card reveal keeps responses empty until the learner answers", () => {
   const initial = createCardSession(["word"]);

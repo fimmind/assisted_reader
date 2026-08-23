@@ -8,7 +8,12 @@ import {
 import type { CardResponse, CardSessionState } from './card-session';
 import { createId } from './math';
 import { chooseStudyExample } from './study';
-import type { StudyCardItem, StudyCoverageItem, StudyTextScope } from './study';
+import type {
+  AnkiTranscriptionLayout,
+  StudyCardItem,
+  StudyCoverageItem,
+  StudyTextScope,
+} from './study';
 import type { PartOfSpeech, UserProfile } from './types';
 
 export type StudyObservationSource = 'chapter-study' | 'chapter-study-repeat';
@@ -93,6 +98,7 @@ export interface StudySession {
 export interface StudyPersistenceState {
   schemaVersion: 1;
   lastRequestedCount: number;
+  ankiTranscriptionLayout: AnkiTranscriptionLayout;
   observations: StudyObservation[];
   chapterProgress: ChapterStudyProgress[];
   sessions: StudySession[];
@@ -126,10 +132,18 @@ export function createEmptyStudyState(
   return {
     schemaVersion: 1,
     lastRequestedCount,
+    ankiTranscriptionLayout: 'separate',
     observations: [],
     chapterProgress: [],
     sessions: [],
   };
+}
+
+export function updateStudyAnkiTranscriptionLayout(
+  state: StudyPersistenceState,
+  ankiTranscriptionLayout: AnkiTranscriptionLayout,
+): StudyPersistenceState {
+  return { ...state, ankiTranscriptionLayout };
 }
 
 export function isSameStudyContext(

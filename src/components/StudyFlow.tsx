@@ -50,6 +50,7 @@ import {
   getStudySessionFirstPassResults,
   isSameStudyContext,
   undoLastStudyCard,
+  updateStudyAnkiTranscriptionLayout,
   updateActiveStudyCardSession,
 } from "@/core/study-session";
 import type {
@@ -238,6 +239,10 @@ interface StudyExportDialogProps {
   wordsToLearn: StudyCardItem[];
   alreadyKnew: StudyCardItem[];
   disabled: boolean;
+  transcriptionLayout: AnkiTranscriptionLayout;
+  onTranscriptionLayoutChange: (
+    transcriptionLayout: AnkiTranscriptionLayout,
+  ) => void;
   onExport: (
     items: StudyCardItem[],
     transcriptionLayout: AnkiTranscriptionLayout,
@@ -248,14 +253,14 @@ function StudyExportDialog({
   wordsToLearn,
   alreadyKnew,
   disabled,
+  transcriptionLayout,
+  onTranscriptionLayoutChange,
   onExport,
 }: StudyExportDialogProps) {
   const [open, setOpen] = useState(false);
   const [selectedLexicalItemIds, setSelectedLexicalItemIds] = useState<
     Set<string>
   >(new Set());
-  const [transcriptionLayout, setTranscriptionLayout] =
-    useState<AnkiTranscriptionLayout>("separate");
   const [exportErrorMessage, setExportErrorMessage] = useState("");
   const allItems = [...wordsToLearn, ...alreadyKnew];
 
@@ -263,7 +268,6 @@ function StudyExportDialog({
     setSelectedLexicalItemIds(
       new Set(wordsToLearn.map((item) => item.lexicalItemId)),
     );
-    setTranscriptionLayout("separate");
     setExportErrorMessage("");
     setOpen(true);
   };
@@ -411,7 +415,9 @@ function StudyExportDialog({
               id="study-export-separate-transcriptions"
               checked={transcriptionLayout === "separate"}
               onCheckedChange={(checked) =>
-                setTranscriptionLayout(checked === true ? "separate" : "merged")
+                onTranscriptionLayoutChange(
+                  checked === true ? "separate" : "merged",
+                )
               }
             />
             <span className="min-w-0 text-sm font-medium">
@@ -1088,7 +1094,7 @@ export function StudyFlow({
     );
   }
 
-  if (!currentSession || !currentBatch) {
+  if (!studyState || !currentSession || !currentBatch) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-background p-6 text-foreground">
         <div className="max-w-md space-y-4 text-center">
@@ -1333,6 +1339,15 @@ export function StudyFlow({
               wordsToLearn={wordsToLearn}
               alreadyKnew={alreadyKnew}
               disabled={preparing}
+              transcriptionLayout={studyState.ankiTranscriptionLayout}
+              onTranscriptionLayoutChange={(transcriptionLayout) =>
+                persistState(
+                  updateStudyAnkiTranscriptionLayout(
+                    studyState,
+                    transcriptionLayout,
+                  ),
+                )
+              }
               onExport={(items, transcriptionLayout) =>
                 downloadStudyExport(
                   bookTitle,

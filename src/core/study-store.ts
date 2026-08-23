@@ -6,6 +6,7 @@ import {
 } from './constants';
 import { createEmptyStudyState } from './study-session';
 import type { StudyPersistenceState } from './study-session';
+import type { AnkiTranscriptionLayout } from './study';
 
 function isValidRequestedCount(value: unknown): value is number {
   return (
@@ -14,6 +15,12 @@ function isValidRequestedCount(value: unknown): value is number {
     value >= MIN_STUDY_WORD_COUNT &&
     value <= MAX_STUDY_WORD_COUNT
   );
+}
+
+function isAnkiTranscriptionLayout(
+  value: unknown,
+): value is AnkiTranscriptionLayout {
+  return value === 'separate' || value === 'merged';
 }
 
 function parseStudyState(value: unknown): StudyPersistenceState {
@@ -40,6 +47,11 @@ function parseStudyState(value: unknown): StudyPersistenceState {
     lastRequestedCount: isValidRequestedCount(candidate.lastRequestedCount)
       ? candidate.lastRequestedCount
       : DEFAULT_STUDY_WORD_COUNT,
+    ankiTranscriptionLayout: isAnkiTranscriptionLayout(
+      candidate.ankiTranscriptionLayout,
+    )
+      ? candidate.ankiTranscriptionLayout
+      : 'separate',
     observations: candidate.observations,
     chapterProgress: candidate.chapterProgress,
     sessions: candidate.sessions,
