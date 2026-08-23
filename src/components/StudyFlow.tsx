@@ -74,6 +74,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { CardSessionScreen } from "@/components/CardSessionScreen";
 import { yieldToBrowser } from "@/lib/browser";
 
@@ -360,13 +361,16 @@ function StudyExportDialog({
             </div>
           </div>
 
-          <div className="max-h-[min(58dvh,28rem)] overflow-y-auto border-t border-border">
+          <ScrollArea
+            className="border-t border-border"
+            viewportClassName="max-h-[min(58dvh,28rem)]"
+          >
             {groups.map((group) =>
               group.items.length > 0 ? (
                 <section key={group.id} aria-labelledby={`${group.id}-heading`}>
                   <h3
                     id={`${group.id}-heading`}
-                    className="sticky top-0 bg-background px-1 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                    className="px-1 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
                   >
                     {group.label} ({group.items.length})
                   </h3>
@@ -405,7 +409,7 @@ function StudyExportDialog({
                 </section>
               ) : null,
             )}
-          </div>
+          </ScrollArea>
 
           <label
             htmlFor="study-export-separate-transcriptions"
