@@ -3,6 +3,7 @@ import {
   finalizeCurrentCard,
   getFinalizedResponses,
   isCardSessionComplete,
+  resetCurrentCard,
 } from './card-session';
 import type { CardResponse, CardSessionState } from './card-session';
 import { createId } from './math';
@@ -571,7 +572,7 @@ export function undoLastStudyCard(
   }
   const nextBatch: StudyBatch = {
     ...batch,
-    cardSession: snapshot.previousCardSession,
+    cardSession: resetCurrentCard(snapshot.previousCardSession),
     completedAt: snapshot.previousBatchCompletedAt,
   };
   const nextSession: StudySession = {

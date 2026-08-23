@@ -123,6 +123,23 @@ export function correctCurrentCardResponse(
   };
 }
 
+export function resetCurrentCard(state: CardSessionState): CardSessionState {
+  const interaction = getCurrentInteraction(state);
+  return {
+    ...state,
+    items: {
+      ...state.items,
+      [interaction.id]: {
+        ...interaction,
+        initialResponse: null,
+        finalResponse: null,
+        revealed: false,
+        finalized: false,
+      },
+    },
+  };
+}
+
 export function finalizeCurrentCard(state: CardSessionState): CardSessionState {
   const interaction = getCurrentInteraction(state);
   if (

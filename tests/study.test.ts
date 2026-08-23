@@ -638,6 +638,18 @@ test("Undo restores prior Rasch observation, chapter state, history, and session
     restoredBatch.cardSession.items[item.lexicalItemId].finalized,
     false,
   );
+  assert.equal(
+    restoredBatch.cardSession.items[item.lexicalItemId].initialResponse,
+    null,
+  );
+  assert.equal(
+    restoredBatch.cardSession.items[item.lexicalItemId].finalResponse,
+    null,
+  );
+  assert.equal(
+    restoredBatch.cardSession.items[item.lexicalItemId].revealed,
+    false,
+  );
 });
 
 test("Learn more selection excludes current-session presentations", () => {
