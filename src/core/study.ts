@@ -31,6 +31,8 @@ export interface StudyTargetSpan {
   end: number;
 }
 
+export type AnkiTranscriptionLayout = 'separate' | 'merged';
+
 export interface StudyOccurrence {
   surfaceForm: string;
   sentence: string;
@@ -615,14 +617,48 @@ function normalizeExportField(
   return withoutTabs.replace(/\r\n|\r|\n/g, preserveLineBreaks ? '<br>' : ' ');
 }
 
-export function createAnkiStudyText(items: StudyCardItem[]): string {
+function normalizeExportTranscription(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('/') && trimmed.endsWith('/')) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function createAnkiTranscriptionFields(
+  item: StudyCardItem,
+  layout: AnkiTranscriptionLayout,
+): [string, string] {
+  const preferred = normalizeExportTranscription(item.preferredTranscription);
+  const alternatives = Array.from(
+    new Set(
+      item.alternativeTranscriptions
+        .map((transcription) => normalizeExportTranscription(transcription))
+        .filter(
+          (transcription) =>
+            transcription.length > 0 && transcription !== preferred,
+        ),
+    ),
+  );
+  if (layout === 'merged') {
+    return [[preferred, ...alternatives].filter(Boolean).join(', '), ''];
+  }
+  return [preferred, alternatives.join(', ')];
+}
+
+export function createAnkiStudyText(
+  items: StudyCardItem[],
+  transcriptionLayout: AnkiTranscriptionLayout,
+): string {
   const lines = ['#separator:tab', '#html:true'];
   for (const item of items) {
+    const [preferredTranscription, alternativeTranscriptions] =
+      createAnkiTranscriptionFields(item, transcriptionLayout);
     const fields = [
       item.spelling,
       item.partOfSpeech ?? '',
-      item.preferredTranscription,
-      item.alternativeTranscriptions.join(', '),
+      preferredTranscription,
+      alternativeTranscriptions,
       item.definition,
       createStudyExampleHtml(item.example),
     ];

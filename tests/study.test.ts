@@ -741,7 +741,7 @@ test("unfinished session restoration is scoped to profile, book, and chapter", (
 test("Anki text has exact headers, six one-line fields, normalized controls, and escaped marked context", () => {
   const item = createCardItem("withdrew", "verb");
   item.preferredTranscription = "";
-  item.alternativeTranscriptions = ["one\ttab", "two\nlines"];
+  item.alternativeTranscriptions = ["/one\ttab/", "/two\nlines/"];
   item.definition = "to leave\r\na place\tquietly";
   item.example = {
     sentence: "He <withdrew> & withdrew.",
@@ -757,7 +757,7 @@ test("Anki text has exact headers, six one-line fields, normalized controls, and
     createStudyExampleHtml(item.example),
     "He &lt;<b>withdrew</b>&gt; &amp; <b>withdrew</b>.",
   );
-  const output = createAnkiStudyText([item]);
+  const output = createAnkiStudyText([item], "separate");
   const lines = output.trimEnd().split("\n");
   assert.deepEqual(lines.slice(0, 2), ["#separator:tab", "#html:true"]);
   assert.equal(lines.length, 3);
@@ -766,4 +766,25 @@ test("Anki text has exact headers, six one-line fields, normalized controls, and
   assert.equal(fields[2], "");
   assert.equal(fields[3], "one tab, two<br>lines");
   assert.equal(fields[4], "to leave a place quietly");
+
+  const pronouncedItem = createCardItem("spoken", "adjective");
+  pronouncedItem.preferredTranscription = "/ˈspəʊkən/";
+  pronouncedItem.alternativeTranscriptions = ["/ˈspoʊkən/", "ˈspoʊ.kn̩"];
+  const pronouncedFields = createAnkiStudyText([pronouncedItem], "separate")
+    .trimEnd()
+    .split("\n")[2]
+    .split("\t");
+  assert.equal(pronouncedFields[2], "ˈspəʊkən");
+  assert.equal(pronouncedFields[3], "ˈspoʊkən, ˈspoʊ.kn̩");
+
+  const mergedPronunciationFields = createAnkiStudyText(
+    [pronouncedItem],
+    "merged",
+  )
+    .trimEnd()
+    .split("\n")[2]
+    .split("\t");
+  assert.equal(mergedPronunciationFields.length, 6);
+  assert.equal(mergedPronunciationFields[2], "ˈspəʊkən, ˈspoʊkən, ˈspoʊ.kn̩");
+  assert.equal(mergedPronunciationFields[3], "");
 });

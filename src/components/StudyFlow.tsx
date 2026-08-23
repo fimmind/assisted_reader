@@ -30,6 +30,7 @@ import {
   selectStudyBatch,
 } from "@/core/study";
 import type {
+  AnkiTranscriptionLayout,
   StudyCardItem,
   StudyCoverageEstimate,
   StudyCoverageItem,
@@ -215,11 +216,12 @@ function downloadStudyExport(
   bookTitle: string,
   chapterIndex: number,
   items: StudyCardItem[],
+  transcriptionLayout: AnkiTranscriptionLayout,
 ): void {
   if (items.length === 0) {
     throw new RangeError("Select at least one word to export.");
   }
-  const text = createAnkiStudyText(items);
+  const text = createAnkiStudyText(items, transcriptionLayout);
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -234,7 +236,10 @@ function downloadStudyExport(
 interface StudyExportDialogProps {
   wordsToLearn: StudyCardItem[];
   alreadyKnew: StudyCardItem[];
-  onExport: (items: StudyCardItem[]) => void;
+  onExport: (
+    items: StudyCardItem[],
+    transcriptionLayout: AnkiTranscriptionLayout,
+  ) => void;
 }
 
 function StudyExportDialog({
@@ -246,6 +251,8 @@ function StudyExportDialog({
   const [selectedLexicalItemIds, setSelectedLexicalItemIds] = useState<
     Set<string>
   >(new Set());
+  const [transcriptionLayout, setTranscriptionLayout] =
+    useState<AnkiTranscriptionLayout>("separate");
   const [exportErrorMessage, setExportErrorMessage] = useState("");
   const allItems = [...wordsToLearn, ...alreadyKnew];
 
@@ -253,6 +260,7 @@ function StudyExportDialog({
     setSelectedLexicalItemIds(
       new Set(wordsToLearn.map((item) => item.lexicalItemId)),
     );
+    setTranscriptionLayout("separate");
     setExportErrorMessage("");
     setOpen(true);
   };
@@ -274,7 +282,7 @@ function StudyExportDialog({
       selectedLexicalItemIds.has(item.lexicalItemId),
     );
     try {
-      onExport(selectedItems);
+      onExport(selectedItems, transcriptionLayout);
       setOpen(false);
     } catch (error) {
       setExportErrorMessage(
@@ -310,7 +318,7 @@ function StudyExportDialog({
         }}
       >
         <DialogContent className="max-h-[90dvh] sm:max-w-[520px] sm:rounded-sm">
-          <DialogHeader>
+          <DialogHeader className="-mx-6 border-b border-border px-6 pb-6">
             <DialogTitle>Export for Anki</DialogTitle>
             <DialogDescription>
               Choose the words to include to the exported file
@@ -345,7 +353,7 @@ function StudyExportDialog({
             </div>
           </div>
 
-          <div className="max-h-[min(58dvh,28rem)] overflow-y-auto border-y border-border">
+          <div className="max-h-[min(58dvh,28rem)] overflow-y-auto border-t border-border">
             {groups.map((group) =>
               group.items.length > 0 ? (
                 <section key={group.id} aria-labelledby={`${group.id}-heading`}>
@@ -391,6 +399,22 @@ function StudyExportDialog({
               ) : null,
             )}
           </div>
+
+          <label
+            htmlFor="study-export-separate-transcriptions"
+            className="-mx-6 -mt-2 flex cursor-pointer items-start gap-3 border-t border-border px-6 pt-6"
+          >
+            <Checkbox
+              id="study-export-separate-transcriptions"
+              checked={transcriptionLayout === "separate"}
+              onCheckedChange={(checked) =>
+                setTranscriptionLayout(checked === true ? "separate" : "merged")
+              }
+            />
+            <span className="min-w-0 text-sm font-medium">
+              Separate primary transcription
+            </span>
+          </label>
 
           {exportErrorMessage.length > 0 && (
             <p role="alert" className="text-sm text-destructive">
@@ -1298,8 +1322,13 @@ export function StudyFlow({
             <StudyExportDialog
               wordsToLearn={wordsToLearn}
               alreadyKnew={alreadyKnew}
-              onExport={(items) =>
-                downloadStudyExport(bookTitle, scope.chapterIndex, items)
+              onExport={(items, transcriptionLayout) =>
+                downloadStudyExport(
+                  bookTitle,
+                  scope.chapterIndex,
+                  items,
+                  transcriptionLayout,
+                )
               }
             />
           </div>
