@@ -74,6 +74,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CardSessionScreen } from "@/components/CardSessionScreen";
+import { yieldToBrowser } from "@/lib/browser";
 
 interface PreparedStudy {
   requestedCount: number;
@@ -236,6 +237,7 @@ function downloadStudyExport(
 interface StudyExportDialogProps {
   wordsToLearn: StudyCardItem[];
   alreadyKnew: StudyCardItem[];
+  disabled: boolean;
   onExport: (
     items: StudyCardItem[],
     transcriptionLayout: AnkiTranscriptionLayout,
@@ -245,6 +247,7 @@ interface StudyExportDialogProps {
 function StudyExportDialog({
   wordsToLearn,
   alreadyKnew,
+  disabled,
   onExport,
 }: StudyExportDialogProps) {
   const [open, setOpen] = useState(false);
@@ -303,7 +306,7 @@ function StudyExportDialog({
       <Button
         variant="ghost"
         className="gap-2"
-        disabled={allItems.length === 0}
+        disabled={disabled || allItems.length === 0}
         onClick={openDialog}
       >
         <Download size={16} /> Export for Anki
@@ -862,6 +865,7 @@ export function StudyFlow({
     }
     setPreparing(true);
     setErrorMessage("");
+    await yieldToBrowser();
     try {
       const profile = getActiveProfile(loadProfileState());
       const analysis = analyzeStudyScope({
@@ -1187,7 +1191,7 @@ export function StudyFlow({
     <Dialog
       open
       onOpenChange={(nextOpen) => {
-        if (!nextOpen) continueReading();
+        if (!nextOpen && !preparing) continueReading();
       }}
     >
       <DialogContent className="inset-0 left-0 top-0 flex h-dvh max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-y-auto border-0 p-0 shadow-none sm:rounded-none [&>button]:hidden">
@@ -1198,6 +1202,7 @@ export function StudyFlow({
               size="sm"
               className="-ml-2 gap-2 text-muted-foreground"
               onClick={continueReading}
+              disabled={preparing}
             >
               <ChevronLeft size={18} /> Reader
             </Button>
@@ -1212,7 +1217,7 @@ export function StudyFlow({
               size="sm"
               className="-mr-2 gap-2 text-muted-foreground"
               onClick={undo}
-              disabled={currentSession.lastUndo === null}
+              disabled={preparing || currentSession.lastUndo === null}
             >
               <Undo2 size={16} />
               <span className="hidden sm:inline">Undo</span>
@@ -1304,11 +1309,16 @@ export function StudyFlow({
             <Button
               className="sm:order-last sm:ml-auto"
               onClick={continueReading}
+              disabled={preparing}
             >
               Continue reading
             </Button>
             {canReviewMissed && (
-              <Button variant="outline" onClick={startReviewMissed}>
+              <Button
+                variant="outline"
+                onClick={startReviewMissed}
+                disabled={preparing}
+              >
                 Review missed
               </Button>
             )}
@@ -1317,11 +1327,12 @@ export function StudyFlow({
               onClick={() => void learnMoreWords()}
               disabled={preparing || noMoreWords}
             >
-              {preparing ? "Preparing…" : "Learn more words"}
+              {preparing ? "Preparing..." : "Learn more words"}
             </Button>
             <StudyExportDialog
               wordsToLearn={wordsToLearn}
               alreadyKnew={alreadyKnew}
+              disabled={preparing}
               onExport={(items, transcriptionLayout) =>
                 downloadStudyExport(
                   bookTitle,

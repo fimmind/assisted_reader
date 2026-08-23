@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { getActiveProfile, loadProfileState, upsertObservationsBatch } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { selectAdaptiveBatchWords } from '@/core/quiz';
+import { yieldToBrowser } from '@/lib/browser';
 
 interface QuizModalProps {
   open: boolean;
@@ -25,10 +26,6 @@ interface ActiveQuiz {
 function getTotalBatches(totalWords: number, batchSize: number): number {
   const safeBatchSize = Math.max(1, batchSize);
   return Math.ceil(totalWords / safeBatchSize);
-}
-
-function yieldToBrowser(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
 export function QuizModal({ open, onOpenChange }: QuizModalProps) {
