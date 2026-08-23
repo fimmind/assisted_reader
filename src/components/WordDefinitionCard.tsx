@@ -45,6 +45,17 @@ function formatPartOfSpeech(partOfSpeech: PartOfSpeech): string {
     .join(' ');
 }
 
+function resolveTrailingPunctuationEnd(
+  definitionText: string,
+  wordEnd: number,
+  rangeEnd: number,
+): number {
+  const match = definitionText
+    .slice(wordEnd, rangeEnd)
+    .match(/^[\p{P}\p{S}]+/u);
+  return wordEnd + (match?.[0].length ?? 0);
+}
+
 function renderClickableDefinitionRange(
   definitionText: string,
   rangeStart: number,
@@ -63,13 +74,18 @@ function renderClickableDefinitionRange(
     const word = match[0];
     const start = rangeStart + match.index;
     const end = start + word.length;
+    const punctuationEnd = resolveTrailingPunctuationEnd(
+      definitionText,
+      end,
+      rangeEnd,
+    );
     if (start > cursor) {
       nodes.push(definitionText.slice(cursor, start));
     }
     const wordIsActive = activeDefinitionSelection?.definitionText === definitionText
       && activeDefinitionSelection.start === start
       && activeDefinitionSelection.end === end;
-    nodes.push(
+    const wordButton = (
       <button
         key={`${start}-${end}`}
         type="button"
@@ -88,9 +104,19 @@ function renderClickableDefinitionRange(
         })}
       >
         {word}
-      </button>,
+      </button>
     );
-    cursor = end;
+    nodes.push(
+      punctuationEnd > end ? (
+        <span key={`word-punctuation-${start}-${punctuationEnd}`} className="whitespace-nowrap">
+          {wordButton}
+          {definitionText.slice(end, punctuationEnd)}
+        </span>
+      ) : (
+        wordButton
+      ),
+    );
+    cursor = punctuationEnd;
     match = matcher.exec(rangeText);
   }
 
@@ -126,6 +152,11 @@ function renderClickableDefinition(
   while (match) {
     const compoundStart = match.index;
     const compoundEnd = compoundStart + match[0].length;
+    const punctuationEnd = resolveTrailingPunctuationEnd(
+      definitionText,
+      compoundEnd,
+      definitionText.length,
+    );
     nodes.push(...renderClickableDefinitionRange(
       definitionText,
       cursor,
@@ -151,14 +182,14 @@ function renderClickableDefinition(
         {renderClickableDefinitionRange(
           definitionText,
           compoundStart,
-          compoundEnd,
+          punctuationEnd,
           compoundIsActive ? undefined : selection,
           false,
           onDefinitionWordClick,
         )}
       </span>,
     );
-    cursor = compoundEnd;
+    cursor = punctuationEnd;
     match = matcher.exec(definitionText);
   }
 
