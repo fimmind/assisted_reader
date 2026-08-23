@@ -48,6 +48,9 @@ export function CardSessionScreen({
   onRespond,
   onUndo,
 }: CardSessionScreenProps) {
+  const displayedPosition = position + 1;
+  const progressPercentage = (displayedPosition / total) * 100;
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isFormControl(document.activeElement)) {
@@ -123,20 +126,15 @@ export function CardSessionScreen({
         <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-5 sm:px-6 sm:py-8">
           <div
             className="mb-8 space-y-2"
-            aria-label={`Card ${position + 1} of ${total}`}
+            aria-label={`Card ${displayedPosition} of ${total}`}
           >
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               <span>
-                {position + 1} of {total}
+                {displayedPosition} of {total}
               </span>
-              <span>
-                {Math.round(
-                  ((position + (interaction.revealed ? 0.5 : 0)) / total) * 100,
-                )}
-                %
-              </span>
+              <span>{Math.round(progressPercentage)}%</span>
             </div>
-            <Progress value={(position / total) * 100} className="h-1" />
+            <Progress value={progressPercentage} className="h-1" />
           </div>
 
           <div className="mx-auto flex w-full max-w-xl flex-1 flex-col border border-border bg-card shadow-sm">
