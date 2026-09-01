@@ -733,19 +733,9 @@ export default function ReaderPage() {
   const lastScrollY = useRef(0);
   const lastScrollActivityAtRef = useRef(Number.NEGATIVE_INFINITY);
 
-  const rowRef = useRef<HTMLDivElement>(null);
-  const textColRef = useRef<HTMLDivElement>(null);
   const paraRefs = useRef<(HTMLParagraphElement | null)[]>([]);
-  const cardGrpRefs = useRef<(HTMLDivElement | null)[]>([]);
   const wordPopupRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  const [paraOffsets, setParaOffsets] = useState<number[]>([]);
-  const extraPaddingRef = useRef(0);
-  const [extraPadding, _setExtraPadding] = useState(0);
-  const setExtraPadding = useCallback((value: number) => {
-    extraPaddingRef.current = value;
-    _setExtraPadding((previous) => previous === value ? previous : value);
-  }, []);
   const setParagraphElement = useCallback((visibleParagraphIndex: number, element: HTMLParagraphElement | null) => {
     paraRefs.current[visibleParagraphIndex] = element;
   }, []);
@@ -1223,89 +1213,6 @@ export default function ReaderPage() {
     });
   };
 
-  const rafIdRef = useRef<number | null>(null);
-
-  const measure = useCallback(() => {
-    if (window.innerWidth < 768) {
-      setExtraPadding(0);
-      return;
-    }
-    if (!rowRef.current || !textColRef.current) return;
-
-    const rowRect = rowRef.current.getBoundingClientRect();
-    const rowStyles = window.getComputedStyle(rowRef.current);
-    const rowPaddingTop = Number.parseFloat(rowStyles.paddingTop) || 0;
-    const rowTop = rowRect.top + rowPaddingTop;
-    const measuredCards: Array<{
-      index: number;
-      desiredTop: number;
-      height: number;
-    }> = [];
-    cardGrpRefs.current.forEach((element, index) => {
-      const paragraphElement = paraRefs.current[index];
-      if (!element || !paragraphElement) {
-        return;
-      }
-      measuredCards.push({
-        index,
-        desiredTop: paragraphElement.getBoundingClientRect().top - rowTop,
-        height: element.offsetHeight,
-      });
-    });
-
-    const newOffsets = new Array<number>(paraRefs.current.length).fill(0);
-    const minCardGap = 12;
-    let nextMinTop = 0;
-    for (const card of measuredCards) {
-      const adjustedTop = Math.max(card.desiredTop, nextMinTop);
-      newOffsets[card.index] = adjustedTop;
-      nextMinTop = adjustedTop + card.height + minCardGap;
-    }
-    setParaOffsets((previous) =>
-      previous.length === newOffsets.length && previous.every((value, index) => value === newOffsets[index])
-        ? previous : [...newOffsets]);
-
-    const textElement = textColRef.current;
-    const naturalTextHeight = textElement.scrollHeight - extraPaddingRef.current;
-    const textTop = textElement.getBoundingClientRect().top - rowTop;
-    const textBottom = textTop + naturalTextHeight;
-
-    let maxOverflow = 0;
-    for (const card of measuredCards) {
-      const cardBottom = (newOffsets[card.index] ?? 0) + card.height;
-      if (cardBottom > textBottom) {
-        maxOverflow = Math.max(maxOverflow, cardBottom - textBottom);
-      }
-    }
-
-    setExtraPadding(maxOverflow > 0 ? maxOverflow + 24 : 0);
-  }, [setExtraPadding]);
-
-  const scheduleMeasure = useCallback(() => {
-    if (rafIdRef.current !== null) {
-      return;
-    }
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null;
-      measure();
-    });
-  }, [measure]);
-
-  useLayoutEffect(() => {
-    measure();
-  }, [measure, chapterAnalysis, settings.fontSize, settings.lineSpacing, settings.fontChoice, settings.pageWidth, settings.maxWordsPerParagraph, assistanceEnabled]);
-
-  useEffect(() => {
-    window.addEventListener('resize', scheduleMeasure);
-    return () => {
-      window.removeEventListener('resize', scheduleMeasure);
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-    };
-  }, [scheduleMeasure]);
-
   useEffect(() => {
     if (!book || isLoading) {
       return;
@@ -1388,8 +1295,8 @@ export default function ReaderPage() {
   );
 
   const getOuterWidthClass = () =>
-    settings.pageWidth === 'Narrow' ? 'max-w-4xl' :
-    settings.pageWidth === 'Wide' ? 'max-w-6xl' : 'max-w-5xl';
+    settings.pageWidth === 'Narrow' ? 'max-w-[576px]' :
+    settings.pageWidth === 'Wide' ? 'max-w-[832px]' : 'max-w-[704px]';
 
   const deleteCurrentBook = async () => {
     if (!book) {
@@ -1855,23 +1762,15 @@ export default function ReaderPage() {
         className={cn('mx-auto px-4 sm:px-6', getOuterWidthClass())}
         onClick={() => setHeaderVisible(true)}
       >
-        <div
-          ref={rowRef}
-          className="relative flex items-start gap-5 py-12 md:py-20"
-          data-testid="reading-row"
-        >
+        <div className="py-12 md:py-20" data-testid="reading-row">
           <div className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
             <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
               {chapterDisplayTitle}
             </h1>
 
             <div
-              ref={textColRef}
               className={cn(getTextFontClasses())}
-              style={{
-                fontSize: `${settings.fontSize}px`,
-                paddingBottom: extraPadding,
-              }}
+              style={{ fontSize: `${settings.fontSize}px` }}
               data-testid="text-column"
             >
               {visibleParagraphEntries.map((entry) => {
@@ -1887,7 +1786,7 @@ export default function ReaderPage() {
                     onOpenWordPopup={openRootWordPopup}
                   />
                   {assistanceEnabled && analysis.cardTargets.length > 0 && (
-                    <div className="md:hidden mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
+                    <div className="mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
                       {analysis.cardTargets.map((target) => {
                         const rawDefinition = definitionsByLemma.get(target.lemma)
                           ?? createFallbackLexiconEntry(target.lemma);
@@ -1949,54 +1848,6 @@ export default function ReaderPage() {
             </div>
           </div>
 
-          <div
-            className="hidden md:block relative w-[300px] flex-shrink-0"
-            style={{ minHeight: 1 }}
-            aria-label="Vocabulary cards"
-            data-testid="card-column"
-          >
-            {visibleParagraphEntries.map((entry) => {
-              const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardTargets: [] };
-              if (!analysis.cardTargets.length || !assistanceEnabled) return null;
-              return (
-                <div
-                  key={entry.sourceIndex}
-                  ref={(element) => { cardGrpRefs.current[entry.visibleIndex] = element; }}
-                  style={{ position: 'absolute', top: paraOffsets[entry.visibleIndex] ?? 0 }}
-                  className="flex flex-col gap-3 w-full"
-                  data-testid={`card-group-${entry.visibleIndex}`}
-                >
-                  {analysis.cardTargets.map((target) => {
-                    const rawDefinition = definitionsByLemma.get(target.lemma)
-                      ?? createFallbackLexiconEntry(target.lemma);
-                    const definition = resolveLexiconEntry(rawDefinition, target);
-                    const definitionStatus: DefinitionLoadStatus = loadingDefinitionLemmas.has(target.lemma)
-                      ? 'loading'
-                      : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
-                    const observation = observationLabels[target.lemma];
-                    return (
-                      <WordDefinitionCard
-                        key={definitionTargetKey(target)}
-                        definition={definition}
-                        activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
-                        fontSize={settings.fontSize}
-                        definitionStatus={definitionStatus}
-                        onDefinitionWordClick={(click) => {
-                          openDefinitionWordPopup(null, click, entry.sourceIndex);
-                        }}
-                        onMarkKnown={() => markLemma(target.lemma, true, entry.sourceIndex)}
-                        onMarkUnknown={() => markLemma(target.lemma, false, entry.sourceIndex)}
-                        isMarkedKnown={observation === 1}
-                        isMarkedUnknown={observation === 0}
-                        pronunciationVariant={settings.englishVariant}
-                        compact
-                      />
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
         </div>
       </main>
       {activeAnalysisRunId !== null && (
