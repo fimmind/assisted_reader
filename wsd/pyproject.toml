@@ -1,0 +1,15 @@
+[project]
+name = "assisted-reader-wsd"
+version = "0.1.0"
+description = "Reproducible gloss-ranking benchmarks for Assisted Reader"
+requires-python = ">=3.11"
+dependencies = [
+  "huggingface-hub>=0.30",
+  "nltk>=3.9",
+  "numpy>=2.0",
+  "sentence-transformers>=3.4",
+  "torch>=2.5",
+]
+
+[tool.uv]
+package = false

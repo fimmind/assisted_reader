@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assisted Reader WSD: Progress Report</title>
+  <style>
+    :root { color-scheme: light; --ink: #1d2935; --muted: #536273; --paper: #fbfcfe; --line: #ccd7e1; --blue: #075985; --green: #166534; --amber: #92400e; --red: #b42318; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eaf0f5; color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 960px; margin: 32px auto; padding: 42px 52px 56px; background: var(--paper); box-shadow: 0 6px 28px rgb(20 42 65 / 12%); }
+    h1, h2 { line-height: 1.2; margin: 0; color: #102a43; }
+    h1 { font-size: 2rem; }
+    h2 { font-size: 1.22rem; margin-top: 34px; }
+    p { margin: 12px 0; }
+    .lead { color: var(--muted); font-size: 1.1rem; }
+    .note { border-left: 4px solid #0f766e; background: #f0fdfa; padding: 12px 16px; margin: 20px 0; }
+    .warning { border-left-color: #d97706; background: #fffbeb; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0 4px; font-size: .93rem; }
+    th, td { padding: 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #eaf2f8; font-weight: 700; }
+    .good { color: var(--green); font-weight: 700; }
+    .bad { color: var(--red); font-weight: 700; }
+    code { padding: 1px 4px; background: #edf2f7; border-radius: 3px; font-size: .92em; }
+    a { color: var(--blue); }
+    ul { padding-left: 22px; }
+    li { margin: 7px 0; }
+    .small { color: var(--muted); font-size: .9rem; }
+    @media (max-width: 700px) { main { margin: 0; padding: 28px 18px 40px; } table { font-size: .8rem; } th, td { padding: 7px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Definition-ranking research: progress</h1>
+    <p class="lead">Assisted Reader, checkpoint of September 3, 2026</p>
+
+    <h2>Goal</h2>
+    <p>The reader will continue to show every available definition. The experiment is only about ordering them: definitions clearly incompatible with the current context should appear lower. Choosing among close, defensible definitions is a smaller concern.</p>
+
+    <div class="note">
+      <strong>Current conclusion:</strong> the existing POS signal is valuable, but neither tested semantic encoder is ready to replace the POS-first baseline. The next experiments should focus on ranking definitions that share the same POS.
+    </div>
+
+    <h2>What was built</h2>
+    <ul>
+      <li>A standalone <code>wsd/</code> benchmark workspace with repeatable download, preparation, validation, evaluation, and error-report scripts.</li>
+      <li>Normalized datasets: Raganato ALL (5,952 WordNet examples) and CoarseWSD-20 (10,196 examples, with 8,002 mapped to WordNet labels).</li>
+      <li>An approved reader-like development dataset: 28 contextual dictionary entries, 363 actual candidate definitions, with every candidate labelled <code>fits</code>, <code>plausible</code>, or <code>clearly_wrong</code>.</li>
+      <li>A self-contained clickable review page used to inspect the reader dataset. It remains available as <a href="data/reader-dev-v1-review.html">reader-dev-v1-review.html</a>.</li>
+      <li>Rankers for dictionary order, POS-first ordering, generic E5 embeddings, and the specialized WordNet sense-embedding model.</li>
+    </ul>
+
+    <h2>Important implementation correction</h2>
+    <p>The first draft used a lemmatized form to find definitions. That could erase grammatical information: for example, <code>interesting</code> could be treated as the noun <code>interest</code>. The draft builder now uses the exact displayed word first and carries a contextual POS. The product itself already follows the same exact-word-first lookup policy.</p>
+
+    <h2>Reader development results</h2>
+    <p>These are the product-oriented results. Lower catastrophic-error rate (CER) is better; pairwise accuracy measures whether acceptable definitions score above clearly wrong ones. All candidates remain visible in every experiment.</p>
+    <table>
+      <thead><tr><th>Ranker</th><th>Top-1 acceptable</th><th>CER at 1</th><th>MRR, first acceptable</th><th>Pairwise acceptable over wrong</th></tr></thead>
+      <tbody>
+        <tr><td>Dictionary order / MFS proxy</td><td>53.6%</td><td>46.4%</td><td>0.656</td><td>0.0%</td></tr>
+        <tr><td><strong>POS-first order</strong></td><td class="good">75.0%</td><td class="good">25.0%</td><td class="good">0.829</td><td>48.7%</td></tr>
+        <tr><td>POS + E5-small</td><td>39.3%</td><td>60.7%</td><td>0.554</td><td>79.3%</td></tr>
+        <tr><td>POS + WordNet sense embedding</td><td>53.6%</td><td>46.4%</td><td>0.702</td><td class="good">86.4%</td></tr>
+      </tbody>
+    </table>
+    <p class="small">CER at 3 is 100% for all current runs because many entries contain several clearly wrong definitions. It is not useful for this small, long-list dataset; CER at 1 and pairwise ranking are more informative.</p>
+
+    <h2>Academic sanity check: Raganato ALL</h2>
+    <table>
+      <thead><tr><th>Ranker</th><th>Exact top-1 accuracy</th><th>MRR</th></tr></thead>
+      <tbody>
+        <tr><td>WordNet MFS</td><td class="good">52.9%</td><td class="good">0.705</td></tr>
+        <tr><td>E5-small</td><td>31.4%</td><td>0.536</td></tr>
+        <tr><td>WordNet sense embedding</td><td>45.0%</td><td>0.645</td></tr>
+      </tbody>
+    </table>
+    <p>This set is an academic sanity check, not the production decision metric: it uses WordNet senses rather than the reader's dictionary definitions.</p>
+
+    <h2>What the numbers say</h2>
+    <ul>
+      <li>POS ordering alone substantially reduces obvious top-ranked mistakes.</li>
+      <li>The specialized model is much better than POS-order at separating acceptable from clearly wrong candidate pairs, but it still chooses the wrong top definition too often.</li>
+      <li>The remaining POS-first errors are largely same-POS ambiguities, including <code>company</code>, <code>subject</code>, <code>rule</code>, <code>model</code>, and <code>letter</code>.</li>
+      <li>The generic E5 retrieval formulation is currently weak as a top-1 ranker. It should remain a comparison point, not a product choice.</li>
+    </ul>
+
+    <h2>What remains</h2>
+    <div class="note warning">
+      <strong>Do not overinterpret this yet.</strong> The approved reader data is a 28-example development set and has already guided decisions. It is not a final unbiased test set. A separate held-out reader test set is needed before choosing a production model.
+    </div>
+    <ol>
+      <li>Evaluate the prepared CoarseWSD-20 diagnostic.</li>
+      <li>Test ready-made direct ranking models next, beginning with Babelscape WSL Retriever, then one or two compact generic controls such as MiniLM/BGE.</li>
+      <li>Run each model with and without POS-first ordering and inspect same-POS errors.</li>
+      <li>Create and freeze a larger held-out <code>reader-test-v1</code> before model selection.</li>
+      <li>Only then investigate ONNX/browser size, latency, quantization, and production licensing.</li>
+    </ol>
+
+    <h2>Model status</h2>
+    <ul>
+      <li><code>intfloat/e5-small-v2</code>: tested; compact generic encoder; not promising as top-1 ranker in the current formulation.</li>
+      <li><code>marksverdhei/wordnet-sense-embedding</code>: tested; specialized gloss bi-encoder; promising pairwise behavior but not yet good enough at rank 1.</li>
+      <li><code>Babelscape/wsl-retriever-e5-base-v2</code>: next direct candidate. It is WordNet-specific and larger; its published license is CC-BY-NC-SA-4.0, so it is research-only unless licensing changes.</li>
+      <li>PyMUSAS and similar semantic taggers: not direct gloss rankers, so they are lower priority.</li>
+    </ul>
+
+    <p class="small">Technical continuation notes are in <a href="NEXT-CODEX-CHECKPOINT.md">NEXT-CODEX-CHECKPOINT.md</a>. Raw result tables: <a href="results/reader-dev-v1-benchmark.csv">reader-dev-v1-benchmark.csv</a> and <a href="results/raganato-all-benchmark.csv">raganato-all-benchmark.csv</a>.</p>
+  </main>
+</body>
+</html>
