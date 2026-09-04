@@ -1,9 +1,10 @@
 # WSD / gloss-ranking benchmark
 
 This directory evaluates definition ranking, not definition suppression. Every
-candidate gloss stays in the ranking. The primary product dataset will be
-`data/processed/reader-dev-v1.jsonl`, annotated with `fits`, `plausible`, or
-`clearly_wrong` relevance labels.
+candidate gloss stays in the ranking. The current product development dataset
+is `data/processed/reader-dev-v2.jsonl`, annotated with `fits`, `plausible`, or
+`clearly_wrong` relevance labels. It is LLM-assisted development/evaluation
+data, not an unbiased test set.
 
 ## Phase 1
 
@@ -19,6 +20,10 @@ sanity check. It must not be used to choose the production model by itself.
 Once `reader-dev-v1.jsonl` is annotated, the same command reports product
 ranking metrics, including catastrophic-error rate and pairwise
 acceptable-vs-clearly-wrong accuracy.
+
+Reader evaluations emit separate `full` and `same-pos` rows. Reports include
+raw counts, Top2Acceptable, same-POS pairwise accuracy, and the mean
+best-acceptable minus best-wrong pre-POS score margin.
 
 `pos-order` and the `pos-*` encoder variants are ranking ablations, not
 definition filters: they retain every definition but place an inferred matching
@@ -63,3 +68,37 @@ with `fits`, `plausible`, or `clearly_wrong`, then export the reviewed records
 by running `uv run python scripts/apply_reader_review.py`. This creates
 `data/processed/reader-dev-v1.jsonl`, which must pass
 `uv run python scripts/validate_reader_data.py` before evaluation.
+
+## Creating reader-dev-v2
+
+Install the repository's locked Node dependencies from the repository root,
+then run:
+
+```powershell
+node wsd/scripts/run-ts-script.mjs wsd/scripts/build-reader-dev-v2.mts
+uv run --project wsd python wsd/scripts/seed_reader_dev_v2_review.py
+uv run --project wsd python wsd/scripts/apply_provisional_labels_v2.py
+uv run --project wsd python wsd/scripts/apply_reader_review.py --dataset reader-dev-v2
+uv run --project wsd python wsd/scripts/validate_reader_data.py --dataset reader-dev-v2
+```
+
+The builder imports `src/core/nlp.ts`, including deployed Compromise tagging,
+contextual POS corrections, and deinflection. It uses exact displayed-word
+lookup before lemma fallback, permits five occurrences per lemma, stores stable
+source-location IDs and original dictionary ranks, and retains every definition
+for each selected entry. Selection caps complete entries at 30 definitions to
+prevent a few huge entries from dominating review.
+
+The draft has 120 occurrences. Twelve documented product-POS failures in
+`data/reader-dev-v2-exclusions.json` remain inspectable but are excluded from
+the 108-example evaluation rather than receiving fabricated labels.
+`data/reader-dev-v2-stability-review.json` records the second review pass.
+
+`wsl-retriever` is a research reference only: it is CC-BY-NC-SA-4.0 and is not
+a production candidate without a separate license review. The adapter follows
+the official implementation's `question:` context and `passage:` sense-document
+prefixes.
+
+The single gloss-format ablation is named
+`pos-e5-small-definition-only`. Use `evaluate.py --append` for a focused run
+that should merge into, rather than replace, an existing benchmark CSV.

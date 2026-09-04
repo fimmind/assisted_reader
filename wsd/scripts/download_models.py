@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MODELS = {
     "e5-small": "intfloat/e5-small-v2",
     "wordnet-sense-embedding": "marksverdhei/wordnet-sense-embedding",
+    "minilm": "sentence-transformers/all-MiniLM-L6-v2",
+    "wsl-retriever": "Babelscape/wsl-retriever-e5-base-v2",
 }
 
 

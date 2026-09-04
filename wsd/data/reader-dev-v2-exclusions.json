@@ -1,0 +1,14 @@
+{
+  "reader-dev-v2-AiW-116-14": "presents is a plural noun in context, but product POS is verb",
+  "reader-dev-v2-AiW-1272-0": "Seals is a plural noun in context, but product POS is verb",
+  "reader-dev-v2-AiW-1723-36": "charges is a plural noun in context, but product POS is verb",
+  "reader-dev-v2-AiW-430-8": "tie is a verb in context, but product POS is noun",
+  "reader-dev-v2-AiW-548-2": "content is an adjective in context, but product POS is noun",
+  "reader-dev-v2-hitchhikers_guide-100-17": "points is a plural noun in context, but product POS is verb",
+  "reader-dev-v2-hitchhikers_guide-1394-3": "mine is a possessive pronoun in context, but product POS is noun",
+  "reader-dev-v2-hitchhikers_guide-1490-2": "bound is an adjective in the idiom bound to, but product POS is verb",
+  "reader-dev-v2-hitchhikers_guide-1886-7": "mine is a possessive pronoun in context, but product POS is noun",
+  "reader-dev-v2-hitchhikers_guide-2534-2": "mine is a possessive pronoun in context, but product POS is verb",
+  "reader-dev-v2-hitchhikers_guide-2858-4": "finest is an adjective in context, but product POS is noun",
+  "reader-dev-v2-hitchhikers_guide-2940-18": "finest is an adjective in context, but product POS is noun"
+}

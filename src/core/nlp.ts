@@ -94,6 +94,41 @@ const ADVERBIAL_QUESTION_WORDS = new Set<string>([
   'why',
 ]);
 
+const POSSESSIVE_PRONOUNS = new Set<string>([
+  'hers',
+  'ours',
+  'theirs',
+  'yours',
+]);
+
+// These forms are frequently tagged as nouns when they modify another noun.
+// Keep this deliberately small: suffix-only detection would misclassify noun
+// modifiers such as "forest floor" and "interest rate".
+const HIGH_CONFIDENCE_SUPERLATIVE_ADJECTIVES = new Set<string>([
+  'brightest',
+  'darkest',
+  'earliest',
+  'fastest',
+  'finest',
+  'greatest',
+  'highest',
+  'largest',
+  'latest',
+  'longest',
+  'lowest',
+  'nearest',
+  'oldest',
+  'poorest',
+  'richest',
+  'safest',
+  'shortest',
+  'slowest',
+  'smallest',
+  'strongest',
+  'weakest',
+  'youngest',
+]);
+
 function buildFallbackTerms(sentence: string): TaggedTerm[] {
   const terms: TaggedTerm[] = [];
   WORD_RE.lastIndex = 0;
@@ -448,22 +483,10 @@ export function inferPartOfSpeech(term: TaggedTerm): PartOfSpeech | null {
   if (tags.has('Determiner')) {
     return 'determiner';
   }
-  if (tags.has('Adverb')) {
-    return 'adverb';
-  }
-  if (tags.has('Adjective')) {
-    return 'adjective';
-  }
-  if (tags.has('Verb')) {
-    return 'verb';
-  }
   for (const tag of COMPROMISE_PROPER_TAGS) {
     if (tags.has(tag)) {
       return 'proper-noun';
     }
-  }
-  if (tags.has('Noun')) {
-    return 'noun';
   }
   if (tags.has('Preposition')) {
     return 'preposition';
@@ -480,7 +503,24 @@ export function inferPartOfSpeech(term: TaggedTerm): PartOfSpeech | null {
   if (tags.has('Particle')) {
     return 'particle';
   }
-  return null;
+
+  const openClassCandidates: PartOfSpeech[] = [];
+  if (tags.has('Adverb')) {
+    openClassCandidates.push('adverb');
+  }
+  if (tags.has('Adjective')) {
+    openClassCandidates.push('adjective');
+  }
+  if (tags.has('Verb')) {
+    openClassCandidates.push('verb');
+  }
+  if (tags.has('Noun')) {
+    openClassCandidates.push('noun');
+  }
+
+  // Compromise can attach several incompatible open-class tags. Choosing by
+  // tag priority is false confidence; null preserves all dictionary POS groups.
+  return openClassCandidates.length === 1 ? openClassCandidates[0] : null;
 }
 
 function isCalendarTimeNoun(
@@ -517,12 +557,149 @@ function inferQuestionWordPartOfSpeech(
   return 'pronoun';
 }
 
+function isNominalTerm(term: TaggedTerm | null): boolean {
+  if (term === null) {
+    return false;
+  }
+  if (term.tags.has('Noun')) {
+    return true;
+  }
+  for (const tag of COMPROMISE_PROPER_TAGS) {
+    if (term.tags.has(tag)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPossessivePronounUse(
+  term: TaggedTerm,
+  previous: TaggedTerm | null,
+  previousPrevious: TaggedTerm | null,
+): boolean {
+  if (POSSESSIVE_PRONOUNS.has(term.normalized)) {
+    return true;
+  }
+  if (term.normalized !== 'mine') {
+    return false;
+  }
+  return (
+    previous?.normalized === 'of' ||
+    previous?.tags.has('Copula') === true ||
+    (previous?.tags.has('Conjunction') === true &&
+      previousPrevious !== null &&
+      (POSSESSIVE_PRONOUNS.has(previousPrevious.normalized) ||
+        previousPrevious.normalized === 'mine'))
+  );
+}
+
+function isSuperlativeNounModifier(
+  term: TaggedTerm,
+  next: TaggedTerm | null,
+): boolean {
+  return (
+    HIGH_CONFIDENCE_SUPERLATIVE_ADJECTIVES.has(term.normalized) &&
+    isNominalTerm(next)
+  );
+}
+
+function isBoundToAdjective(
+  term: TaggedTerm,
+  previous: TaggedTerm | null,
+  next: TaggedTerm | null,
+  nextNext: TaggedTerm | null,
+): boolean {
+  return (
+    term.normalized === 'bound' &&
+    previous?.tags.has('Copula') === true &&
+    next?.normalized === 'to' &&
+    nextNext?.tags.has('Verb') === true
+  );
+}
+
+function isCoordinatedNoun(
+  term: TaggedTerm,
+  previous: TaggedTerm | null,
+  previousPrevious: TaggedTerm | null,
+  inferredPartOfSpeech: PartOfSpeech | null,
+): boolean {
+  return (
+    inferredPartOfSpeech === 'verb' &&
+    term.tags.has('PresentTense') &&
+    previous?.tags.has('Conjunction') === true &&
+    isNominalTerm(previousPrevious)
+  );
+}
+
+function isLeadingParallelNoun(
+  term: TaggedTerm,
+  next: TaggedTerm | null,
+  nextNext: TaggedTerm | null,
+  inferredPartOfSpeech: PartOfSpeech | null,
+): boolean {
+  return (
+    inferredPartOfSpeech === 'verb' &&
+    term.sentenceInitial &&
+    term.tags.has('PresentTense') &&
+    term.normalized.endsWith('s') &&
+    isNominalTerm(next) &&
+    isNominalTerm(nextNext)
+  );
+}
+
+function isGerundObjectNoun(
+  term: TaggedTerm,
+  previous: TaggedTerm | null,
+  next: TaggedTerm | null,
+  inferredPartOfSpeech: PartOfSpeech | null,
+): boolean {
+  return (
+    inferredPartOfSpeech === 'verb' &&
+    term.tags.has('PresentTense') &&
+    term.normalized.endsWith('s') &&
+    previous?.tags.has('Gerund') === true &&
+    (next?.normalized === 'to' || next?.normalized === 'for')
+  );
+}
+
+function isPointLabelNoun(
+  term: TaggedTerm,
+  previous: TaggedTerm | null,
+  next: TaggedTerm | null,
+  inferredPartOfSpeech: PartOfSpeech | null,
+): boolean {
+  return (
+    inferredPartOfSpeech === 'verb' &&
+    (term.normalized === 'point' || term.normalized === 'points') &&
+    previous?.tags.has('Preposition') === true &&
+    next !== null &&
+    (/^[A-Z]$/.test(next.raw) || next.tags.has('Acronym'))
+  );
+}
+
+function isUncertainCopularComplement(
+  previous: TaggedTerm | null,
+  previousPrevious: TaggedTerm | null,
+  inferredPartOfSpeech: PartOfSpeech | null,
+): boolean {
+  if (inferredPartOfSpeech !== 'noun') {
+    return false;
+  }
+  return (
+    previous?.tags.has('Copula') === true ||
+    (previous?.tags.has('Pronoun') === true &&
+      previousPrevious?.tags.has('Copula') === true)
+  );
+}
+
 export function inferPartsOfSpeech(
   terms: TaggedTerm[],
 ): Array<PartOfSpeech | null> {
   return terms.map((term, index) => {
     const previous = index > 0 ? terms[index - 1] : null;
+    const previousPrevious = index > 1 ? terms[index - 2] : null;
     const next = index < terms.length - 1 ? terms[index + 1] : null;
+    const nextNext = index < terms.length - 2 ? terms[index + 2] : null;
 
     if (isCalendarTimeNoun(term, previous)) {
       return 'noun';
@@ -536,7 +713,43 @@ export function inferPartsOfSpeech(
       return 'particle';
     }
     const questionWordPartOfSpeech = inferQuestionWordPartOfSpeech(term, next);
-    return questionWordPartOfSpeech ?? inferPartOfSpeech(term);
+    if (questionWordPartOfSpeech !== null) {
+      return questionWordPartOfSpeech;
+    }
+
+    const inferredPartOfSpeech = inferPartOfSpeech(term);
+    if (isPossessivePronounUse(term, previous, previousPrevious)) {
+      return 'pronoun';
+    }
+    if (isSuperlativeNounModifier(term, next)) {
+      return 'adjective';
+    }
+    if (isBoundToAdjective(term, previous, next, nextNext)) {
+      return 'adjective';
+    }
+    if (
+      isCoordinatedNoun(
+        term,
+        previous,
+        previousPrevious,
+        inferredPartOfSpeech,
+      ) ||
+      isLeadingParallelNoun(term, next, nextNext, inferredPartOfSpeech) ||
+      isGerundObjectNoun(term, previous, next, inferredPartOfSpeech) ||
+      isPointLabelNoun(term, previous, next, inferredPartOfSpeech)
+    ) {
+      return 'noun';
+    }
+    if (
+      isUncertainCopularComplement(
+        previous,
+        previousPrevious,
+        inferredPartOfSpeech,
+      )
+    ) {
+      return null;
+    }
+    return inferredPartOfSpeech;
   });
 }
 

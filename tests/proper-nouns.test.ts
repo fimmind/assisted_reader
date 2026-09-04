@@ -291,6 +291,106 @@ function assertSentencePartsOfSpeech(
   );
 }
 
+function assertTargetPartOfSpeech(
+  sentence: string,
+  target: string,
+  expected: PartOfSpeech | null,
+): void {
+  const terms = tagSentenceTerms(sentence, nlp);
+  const targetIndex = terms.findIndex(
+    (term) => term.normalized === normalizeToken(target),
+  );
+  assert.notEqual(targetIndex, -1, `Token '${target}' not found: ${sentence}`);
+  assert.equal(
+    inferPartsOfSpeech(terms)[targetIndex],
+    expected,
+    `Unexpected POS for '${target}' in: ${sentence}`,
+  );
+}
+
+test('POS inference applies conservative corrections from reader failures', () => {
+  const cases: Array<{
+    sentence: string;
+    target: string;
+    expected: PartOfSpeech | null;
+  }> = [
+    {
+      sentence: "There's no use in sending presents to one's own feet.",
+      target: 'presents',
+      expected: 'noun',
+    },
+    {
+      sentence: 'Seals, turtles, salmon, and so on; they all move about.',
+      target: 'Seals',
+      expected: 'noun',
+    },
+    {
+      sentence: 'There are no fees or charges.',
+      target: 'charges',
+      expected: 'noun',
+    },
+    {
+      sentence: 'Are you content now?',
+      target: 'content',
+      expected: null,
+    },
+    {
+      sentence: 'Point D is the same distance from points A, B and C.',
+      target: 'points',
+      expected: 'noun',
+    },
+    {
+      sentence: 'A bright idea of mine, said Ford.',
+      target: 'mine',
+      expected: 'pronoun',
+    },
+    {
+      sentence: 'You are bound to feel nervous.',
+      target: 'bound',
+      expected: 'adjective',
+    },
+    {
+      sentence: 'He was a friend of mine.',
+      target: 'mine',
+      expected: 'pronoun',
+    },
+    {
+      sentence: 'Yours or mine?',
+      target: 'mine',
+      expected: 'pronoun',
+    },
+    {
+      sentence: 'They take the finest laser-measuring equipment.',
+      target: 'finest',
+      expected: 'adjective',
+    },
+    {
+      sentence: 'A desk of finest ultramahogany stood there.',
+      target: 'finest',
+      expected: 'adjective',
+    },
+  ];
+
+  for (const sample of cases) {
+    assertTargetPartOfSpeech(sample.sentence, sample.target, sample.expected);
+  }
+});
+
+test('POS confidence and corrections avoid nearby false positives', () => {
+  assertTargetPartOfSpeech('They mine coal here.', 'mine', 'verb');
+  assertTargetPartOfSpeech('He presents the award.', 'presents', 'verb');
+  assertTargetPartOfSpeech('The forest floor was wet.', 'forest', 'noun');
+  assertTargetPartOfSpeech('They charge fees for entry.', 'charge', 'verb');
+
+  const ambiguousTerm: TaggedTerm = {
+    raw: 'record',
+    normalized: 'record',
+    tags: new Set<string>(['Noun', 'Verb']),
+    sentenceInitial: false,
+  };
+  assert.equal(inferPartsOfSpeech([ambiguousTerm])[0], null);
+});
+
 test('contextual POS inference handles the provided Hitchhiker sentence', () => {
   const sentence =
     'On Wednesday night it had rained very heavily, the lane was wet and muddy, but the Thursday morning sun was bright and clear as it shone on Arthur Dent’s house for what was to be the last time.';

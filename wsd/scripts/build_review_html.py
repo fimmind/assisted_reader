@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
+import argparse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "data" / "reader-dev-v1-draft.jsonl"
-OUTPUT = ROOT / "data" / "reader-dev-v1-review.html"
 
 HTML = r'''<!doctype html>
 <html lang="en">
@@ -56,7 +55,7 @@ HTML = r'''<!doctype html>
 </main>
 <script>
 const examples = __DATA__;
-const storageKey = 'assisted-reader-reader-dev-v1-review';
+const storageKey = 'assisted-reader-__DATASET__-review';
 const seedLabels = Object.fromEntries(examples.flatMap(example => example.candidates
   .filter(candidate => ['fits', 'plausible', 'clearly_wrong'].includes(candidate.relevance))
   .map(candidate => [`${example.id}:${candidate.sense_id}`, candidate.relevance])));
@@ -74,7 +73,7 @@ function render() {
   const example = examples[index];
   const done = examples.filter(reviewed).length;
   document.getElementById('progress').textContent = `${done} / ${examples.length} contexts reviewed`;
-  document.getElementById('meta').textContent = `${index + 1} of ${examples.length}  |  ${example.source.file}  |  ${example.candidates.length} definitions`;
+  document.getElementById('meta').textContent = `${index + 1} of ${examples.length}  |  ${example.source.file}  |  ${example.pos || 'unknown POS'}  |  ${example.number_of_matching_pos_candidates ?? '?'} matching POS / ${example.candidates.length} definitions  |  confidence: ${example.annotation_confidence || 'unreviewed'}`;
   document.getElementById('context').innerHTML = contextWithTarget(example);
   const container = document.getElementById('candidates');
   container.innerHTML = '';
@@ -93,10 +92,10 @@ function render() {
   }
 }
 function exportCsv() {
-  const rows = [['example_id','source_file','context','target','lemma','part_of_speech','sense_id','gloss','relevance','reviewer_notes']];
-  for (const example of examples) for (const candidate of example.candidates) rows.push([example.id, example.source.file, example.context, example.target, example.lemma, candidate.part_of_speech, candidate.sense_id, candidate.gloss, labels[key(example, candidate)] || 'needs_review', '']);
+  const rows = [['example_id','source_file','context','target','lemma','contextual_pos','number_of_candidates','number_of_matching_pos_candidates','part_of_speech','sense_id','original_rank','gloss','relevance','annotation_confidence','reviewer_notes']];
+  for (const example of examples) for (const candidate of example.candidates) rows.push([example.id, example.source.file, example.context, example.target, example.lemma, example.pos || '', example.candidates.length, example.number_of_matching_pos_candidates ?? '', candidate.part_of_speech, candidate.sense_id, candidate.original_rank ?? '', candidate.gloss, labels[key(example, candidate)] || 'needs_review', example.annotation_confidence || 'unreviewed', '']);
   const csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\r\n');
-  const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'})); link.download = 'reader-dev-v1-review.csv'; link.click(); URL.revokeObjectURL(link.href);
+  const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'})); link.download = '__DATASET__-review.csv'; link.click(); URL.revokeObjectURL(link.href);
 }
 function importCsv(file) {
   const reader = new FileReader(); reader.onload = () => {
@@ -118,19 +117,29 @@ render();
 
 
 def main() -> None:
-    examples = [json.loads(line) for line in SOURCE.read_text(encoding="utf-8").splitlines() if line]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="reader-dev-v1")
+    args = parser.parse_args()
+    source_path = ROOT / "data" / f"{args.dataset}-draft.jsonl"
+    output_path = ROOT / "data" / f"{args.dataset}-review.html"
+    examples = [json.loads(line) for line in source_path.read_text(encoding="utf-8").splitlines() if line]
     labels: dict[str, str] = {}
-    review = ROOT / "data" / "reader-dev-v1-review.csv"
+    confidence: dict[str, str] = {}
+    review = ROOT / "data" / f"{args.dataset}-review.csv"
     if review.exists():
         import csv
         with review.open(newline="", encoding="utf-8") as source:
             for row in csv.DictReader(source):
                 labels[f"{row['example_id']}:{row['sense_id']}"] = row["relevance"]
+                if row.get("annotation_confidence"):
+                    confidence[row["example_id"]] = row["annotation_confidence"]
     for example in examples:
+        example["annotation_confidence"] = confidence.get(example["id"], example.get("annotation_confidence", "unreviewed"))
         for candidate in example["candidates"]:
             candidate["relevance"] = labels.get(f"{example['id']}:{candidate['sense_id']}", "needs_review")
-    OUTPUT.write_text(HTML.replace("__DATA__", json.dumps(examples, ensure_ascii=True).replace("</", "<\\/")), encoding="utf-8")
-    print(f"wrote {OUTPUT}")
+    rendered = HTML.replace("__DATASET__", args.dataset).replace("__DATA__", json.dumps(examples, ensure_ascii=True).replace("</", "<\\/"))
+    output_path.write_text(rendered, encoding="utf-8")
+    print(f"wrote {output_path}")
 
 
 if __name__ == "__main__":

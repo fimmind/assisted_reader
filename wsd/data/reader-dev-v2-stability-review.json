@@ -1,0 +1,43 @@
+{
+  "reviewed_without_label_changes": {
+    "low_confidence": [
+      "reader-dev-v2-hitchhikers_guide-1892-30"
+    ],
+    "pos_order_catastrophic_errors": [
+      "reader-dev-v2-AiW-1423-6",
+      "reader-dev-v2-AiW-1425-6",
+      "reader-dev-v2-AiW-1437-20",
+      "reader-dev-v2-AiW-1444-12",
+      "reader-dev-v2-AiW-1459-13",
+      "reader-dev-v2-AiW-5-9",
+      "reader-dev-v2-AiW-628-12",
+      "reader-dev-v2-hitchhikers_guide-1034-26",
+      "reader-dev-v2-hitchhikers_guide-1249-6",
+      "reader-dev-v2-hitchhikers_guide-131-10",
+      "reader-dev-v2-hitchhikers_guide-1511-11",
+      "reader-dev-v2-hitchhikers_guide-1518-22",
+      "reader-dev-v2-hitchhikers_guide-1710-7",
+      "reader-dev-v2-hitchhikers_guide-1804-6",
+      "reader-dev-v2-hitchhikers_guide-1892-30",
+      "reader-dev-v2-hitchhikers_guide-1991-19",
+      "reader-dev-v2-hitchhikers_guide-2158-7",
+      "reader-dev-v2-hitchhikers_guide-2162-16",
+      "reader-dev-v2-hitchhikers_guide-2436-14",
+      "reader-dev-v2-hitchhikers_guide-256-11",
+      "reader-dev-v2-hitchhikers_guide-2702-4"
+    ],
+    "seeded_random_sample_20260904": [
+      "reader-dev-v2-AiW-1862-8",
+      "reader-dev-v2-hitchhikers_guide-1004-12",
+      "reader-dev-v2-hitchhikers_guide-144-1",
+      "reader-dev-v2-hitchhikers_guide-1172-34",
+      "reader-dev-v2-hitchhikers_guide-1710-7",
+      "reader-dev-v2-hitchhikers_guide-1137-29",
+      "reader-dev-v2-hitchhikers_guide-2582-2",
+      "reader-dev-v2-hitchhikers_guide-164-11",
+      "reader-dev-v2-AiW-281-12",
+      "reader-dev-v2-AiW-1104-28"
+    ]
+  },
+  "review_method": "Candidate definitions were reread in original dictionary order without consulting semantic-model rankings. No label changes were required."
+}

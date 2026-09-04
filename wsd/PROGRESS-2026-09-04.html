@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assisted Reader WSD — September 4, 2026</title>
+  <style>
+    :root { color-scheme: light; --ink: #1d2935; --muted: #536273; --paper: #fbfcfe; --line: #ccd7e1; --blue: #075985; --green: #166534; --amber: #92400e; --red: #b42318; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eaf0f5; color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 1000px; margin: 32px auto; padding: 42px 52px 56px; background: var(--paper); box-shadow: 0 6px 28px rgb(20 42 65 / 12%); }
+    h1, h2, h3 { line-height: 1.2; color: #102a43; }
+    h1 { margin: 0; font-size: 2rem; }
+    h2 { margin: 34px 0 10px; font-size: 1.25rem; }
+    h3 { margin: 22px 0 8px; font-size: 1.05rem; }
+    p { margin: 11px 0; }
+    .lead { color: var(--muted); font-size: 1.1rem; }
+    .note { border-left: 4px solid #0f766e; background: #f0fdfa; padding: 13px 16px; margin: 20px 0; }
+    .warning { border-left-color: #d97706; background: #fffbeb; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0; }
+    .stat { border: 1px solid var(--line); border-radius: 6px; padding: 13px; background: #fff; }
+    .stat strong { display: block; color: #102a43; font-size: 1.25rem; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0 4px; font-size: .91rem; }
+    th, td { padding: 9px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #eaf2f8; font-weight: 700; }
+    .good { color: var(--green); font-weight: 700; }
+    .bad { color: var(--red); font-weight: 700; }
+    code { padding: 1px 4px; background: #edf2f7; border-radius: 3px; font-size: .92em; }
+    pre { overflow-x: auto; padding: 14px; background: #edf2f7; border-radius: 5px; font-size: .86rem; }
+    a { color: var(--blue); }
+    ul, ol { padding-left: 22px; }
+    li { margin: 7px 0; }
+    .small { color: var(--muted); font-size: .9rem; }
+    @media (max-width: 760px) { main { margin: 0; padding: 28px 18px 40px; } .grid { grid-template-columns: 1fr; } table { font-size: .79rem; } th, td { padding: 6px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Definition ranking and POS awareness</h1>
+    <p class="lead">Assisted Reader work completed on September 4, 2026</p>
+
+    <div class="note">
+      <strong>Outcome:</strong> dictionary order plus contextual POS remains the safest Top-1 system. Semantic models contain useful same-POS ranking signal, but none of the tested small models is safe enough for browser integration. Separately, the reader's cheap POS layer was improved without adding a model or changing the UI.
+    </div>
+
+    <h2>What was completed</h2>
+    <ul>
+      <li>Expanded the reader development set from 28 to 108 evaluated contextual occurrences, retaining all 1,371 deployed dictionary candidates.</li>
+      <li>Added a same-POS hard slice, raw error counts, Top-2 acceptable rate, same-POS pairwise accuracy, score margins, and detailed candidate-level error reports.</li>
+      <li>Evaluated dictionary order, POS order, lexical overlap, E5-small, MiniLM, WordNet sense embeddings, WSL Retriever, and dictionary-rank fusion.</li>
+      <li>Ran separate CoarseWSD-20 and Raganato ALL diagnostics.</li>
+      <li>Implemented a conservative production POS-confidence fallback and high-confidence contextual corrections.</li>
+    </ul>
+
+    <div class="grid">
+      <div class="stat"><strong>108</strong>evaluated reader occurrences</div>
+      <div class="stat"><strong>1,371</strong>dictionary candidates retained</div>
+      <div class="stat"><strong>88</strong>same-POS hard examples</div>
+    </div>
+
+    <h2>Main reader results</h2>
+    <p>Lower catastrophic-error rate (CER) is better. Pairwise accuracy asks whether an acceptable definition outranks a clearly wrong definition of the same POS. Every definition remains visible.</p>
+    <table>
+      <thead><tr><th>Ranker</th><th>Full CER@1</th><th>Same-POS CER@1</th><th>Same-POS pairwise</th><th>Full Top-2</th><th>MRR</th></tr></thead>
+      <tbody>
+        <tr><td>Dictionary order</td><td>38/108 (35.19%)</td><td>31/88 (35.23%)</td><td>78.30%</td><td>71.30%</td><td>0.7285</td></tr>
+        <tr><td><strong>POS + dictionary order</strong></td><td class="good">21/108 (19.44%)</td><td class="good">21/88 (23.86%)</td><td>78.30%</td><td>83.33%</td><td class="good">0.8510</td></tr>
+        <tr><td>POS + lexical overlap</td><td class="bad">67/108 (62.04%)</td><td>67/88 (76.14%)</td><td>48.52%</td><td>60.19%</td><td>0.5761</td></tr>
+        <tr><td>POS + E5-small</td><td>48/108 (44.44%)</td><td>48/88 (54.55%)</td><td>61.70%</td><td>66.67%</td><td>0.6781</td></tr>
+        <tr><td>POS + E5, definition only</td><td>40/108 (37.04%)</td><td>40/88 (45.45%)</td><td>79.10%</td><td>83.33%</td><td>0.7675</td></tr>
+        <tr><td>POS + WordNet sense embedding</td><td>59/108 (54.63%)</td><td>59/88 (67.05%)</td><td>75.16%</td><td>70.37%</td><td>0.6510</td></tr>
+        <tr><td>POS + MiniLM</td><td>49/108 (45.37%)</td><td>49/88 (55.68%)</td><td>67.35%</td><td>71.30%</td><td>0.6983</td></tr>
+        <tr><td>POS + WSL Retriever</td><td>43/108 (39.81%)</td><td>43/88 (48.86%)</td><td>82.15%</td><td>82.41%</td><td>0.7571</td></tr>
+        <tr><td>POS + E5/dictionary fusion</td><td>44/108 (40.74%)</td><td>44/88 (50.00%)</td><td>71.12%</td><td>73.15%</td><td>0.7220</td></tr>
+        <tr><td>POS + WSL/dictionary fusion</td><td>33/108 (30.56%)</td><td>33/88 (37.50%)</td><td class="good">84.48%</td><td class="good">86.11%</td><td>0.8165</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Practical conclusions</h2>
+    <ul>
+      <li><strong>Dictionary order is valuable data.</strong> It is not merely a placeholder baseline; combining it with POS gave the safest first result.</li>
+      <li><strong>Semantics is better suited to cautious assistance.</strong> WSL fusion improved same-POS pairwise accuracy and Top-2 coverage, but caused 12 more catastrophic Top-1 errors than POS + dictionary order.</li>
+      <li><strong>Candidate formatting matters.</strong> Removing repeated lemma and POS text from E5 candidates raised same-POS pairwise accuracy from 61.70% to 79.10% at no extra runtime cost.</li>
+      <li><strong>Lexical overlap is not worth pursuing.</strong> Its 62.04% catastrophic-error rate was much worse than the zero-model POS-order baseline.</li>
+      <li><strong>No small model advances to browser integration.</strong> A future semantic feature should probably anchor the first dictionary sense and rerank later senses, or require a very strong override margin.</li>
+    </ul>
+
+    <h2>Cheap POS-awareness improvement</h2>
+    <p>The draft exposed 12 Compromise/product POS failures. The production reader now avoids false confidence when incompatible open-class tags are present and applies a small contextual correction layer.</p>
+    <table>
+      <thead><tr><th>Pattern</th><th>Example</th><th>New behavior</th></tr></thead>
+      <tbody>
+        <tr><td>Possessive pronoun</td><td><code>friend of mine</code>, <code>yours or mine</code></td><td>Pronoun</td></tr>
+        <tr><td>Superlative modifier</td><td><code>finest equipment</code></td><td>Adjective</td></tr>
+        <tr><td>Bound-to construction</td><td><code>are bound to feel</code></td><td>Adjective</td></tr>
+        <tr><td>Parallel/list noun</td><td><code>fees or charges</code>, <code>Seals, turtles, salmon</code></td><td>Noun</td></tr>
+        <tr><td>Gerund object</td><td><code>sending presents to</code></td><td>Noun</td></tr>
+        <tr><td>Labeled point</td><td><code>from points A, B and C</code></td><td>Noun</td></tr>
+        <tr><td>Ambiguous copular complement</td><td><code>Are you content?</code></td><td>Unknown; show every POS group</td></tr>
+      </tbody>
+    </table>
+    <p>Ten of the eleven failures covered by this patch now receive the intended exact POS. The remaining covered case, <code>content</code>, safely becomes unknown instead of incorrectly selecting noun. The imperative <code>tie ’em together</code> belongs to the postponed clause-boundary/imperative step.</p>
+
+    <h3>Regression protection</h3>
+    <ul>
+      <li>New tests cover all eleven in-scope observed failures.</li>
+      <li>Counterexamples protect verb <code>mine</code>, verb <code>presents</code>, verb <code>charge</code>, and noun modifier <code>forest floor</code>.</li>
+      <li>TypeScript validation passed and all 46 compiled tests passed.</li>
+      <li>No UI or definition-filtering behavior changed.</li>
+    </ul>
+
+    <div class="note warning">
+      <strong>Dataset note:</strong> the benchmark table above is the frozen result produced before the production POS patch. The 12 original failures remain documented in the draft and exclusion manifest. Do not silently mix regenerated examples with the existing annotated evaluation set.
+    </div>
+
+    <h2>Recommended next work</h2>
+    <ol>
+      <li>Add conservative imperative recognition if the remaining <code>tie ’em together</code> failure is important enough to justify clause-boundary handling.</li>
+      <li>Measure the new POS layer on a fresh, separately reported diagnostic sample before drawing prevalence claims from the deliberately ambiguity-heavy development set.</li>
+      <li>If semantic ranking resumes, test a do-no-harm policy: retain the dictionary's first same-POS sense and rerank positions 2+, or override only at a large frozen margin.</li>
+      <li>Do not begin ONNX/browser integration until a method beats POS + dictionary order on catastrophic Top-1 errors.</li>
+    </ol>
+
+    <h2>Files and continuation</h2>
+    <ul>
+      <li><a href="WSD-RESULTS-2026-09-04.md">Detailed result report</a></li>
+      <li><a href="NEXT-CODEX-CHECKPOINT.md">Technical continuation checkpoint</a></li>
+      <li><a href="results/reader-dev-v2-benchmark.csv">Machine-readable reader benchmark</a></li>
+      <li><a href="data/reader-dev-v2-exclusions.json">Original product-POS exclusions</a></li>
+      <li><a href="data/reader-dev-v2-review.html">Reader dataset review page</a></li>
+    </ul>
+    <p class="small">The product invariant remains unchanged: definitions may be reordered, but none may be suppressed.</p>
+  </main>
+</body>
+</html>
