@@ -536,10 +536,10 @@ Runtime POS selection:
 - Compromise tags are normalized to the same canonical POS vocabulary used by
   the lexicon.
 - Deterministic contextual corrections cover articles, question words,
-  infinitival `to`, calendar-time noun phrases, possessive pronouns,
-  high-confidence superlative noun modifiers, `bound to`, coordinated/list
-  nouns, gerund-object nouns, and labeled points where raw Compromise tags are
-  ambiguous or incorrect.
+  infinitival `to`, colloquial object-pronoun `’em`, calendar-time noun phrases,
+  possessive pronouns, high-confidence superlative noun modifiers, `bound to`,
+  coordinated/list nouns, gerund-object nouns, and labeled points where raw
+  Compromise tags are ambiguous or incorrect.
 - Incompatible open-class tags and structurally ambiguous bare copular
   complements resolve to unknown POS instead of relying on tag priority. This
   preserves every dictionary POS group, as required by the definition-card

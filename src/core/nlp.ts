@@ -201,8 +201,12 @@ function flattenCompromiseTerms(
   return output;
 }
 
+function normalizeColloquialObjectPronounsForTagging(sentence: string): string {
+  return sentence.replace(/(^|[^A-Za-z])['’]em\b/giu, '$1them');
+}
+
 function tagWithCompromise(sentence: string, nlp: NlpLike): TaggedTerm[] {
-  const doc = nlp(sentence);
+  const doc = nlp(normalizeColloquialObjectPronounsForTagging(sentence));
   const jsonTerms = doc.terms().json();
   const flattened = flattenCompromiseTerms(jsonTerms);
   const output: TaggedTerm[] = [];

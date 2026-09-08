@@ -330,6 +330,11 @@ test('POS inference applies conservative corrections from reader failures', () =
       expected: 'noun',
     },
     {
+      sentence: '—Here, put ’em up at this corner—No, tie ’em together first—they don’t reach half high enough yet—Oh!',
+      target: 'tie',
+      expected: 'verb',
+    },
+    {
       sentence: 'Are you content now?',
       target: 'content',
       expected: null,
@@ -381,6 +386,8 @@ test('POS confidence and corrections avoid nearby false positives', () => {
   assertTargetPartOfSpeech('He presents the award.', 'presents', 'verb');
   assertTargetPartOfSpeech('The forest floor was wet.', 'forest', 'noun');
   assertTargetPartOfSpeech('They charge fees for entry.', 'charge', 'verb');
+  assertTargetPartOfSpeech('The em dash was long.', 'em', 'noun');
+  assertTargetPartOfSpeech('The tie was loose.', 'tie', 'noun');
 
   const ambiguousTerm: TaggedTerm = {
     raw: 'record',
