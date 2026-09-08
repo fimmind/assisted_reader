@@ -1,0 +1,15 @@
+{
+  "reviewed_without_model_rankings": {
+    "all_medium_confidence_annotations": 13,
+    "all_fixed_top_3_failures_from_dictionary_and_two_fusions": 39,
+    "deterministic_random_high_confidence_sample": 10
+  },
+  "changes": {
+    "new_exclusions": {
+      "reader-filter-dev-v1-AiW-58-10": "Compound-tokenization mismatch for tea-time.",
+      "reader-filter-dev-v1-hitchhikers_guide-4062-10": "Predicative adjective clear was tagged as a verb.",
+      "reader-filter-dev-v1-hitchhikers_guide-4790-1": "Morphology-only dictionary entry does not explain passive got hit."
+    }
+  },
+  "notes": "Definitions and contexts were reread after identifying the review sets. Labels were not changed to agree with model outputs. The three invalid examples were excluded rather than assigned fabricated acceptable senses."
+}

@@ -35,9 +35,21 @@ def main() -> None:
             errors.append(f"line {line_number}: incorrect number_of_candidates")
         if record.get("number_of_matching_pos_candidates", actual_matching) != actual_matching:
             errors.append(f"line {line_number}: incorrect number_of_matching_pos_candidates")
+        if record.get("number_of_runtime_candidates", actual_matching) != actual_matching:
+            errors.append(f"line {line_number}: incorrect number_of_runtime_candidates")
+        benchmark_split = record.get("benchmark_split")
+        if benchmark_split is not None and benchmark_split not in {"calibration", "evaluation"}:
+            errors.append(f"line {line_number}: invalid benchmark_split {benchmark_split!r}")
         labels = [candidate.get("relevance") for candidate in record["candidates"]]
         if not set(labels) <= ALLOWED or not any(label in {"fits", "plausible"} for label in labels):
             errors.append(f"line {line_number}: invalid relevance labels")
+        runtime_candidates = [
+            candidate
+            for candidate in record["candidates"]
+            if candidate.get("part_of_speech") == record.get("pos")
+        ] or record["candidates"]
+        if not any(candidate.get("relevance") in {"fits", "plausible"} for candidate in runtime_candidates):
+            errors.append(f"line {line_number}: runtime candidates have no acceptable definition")
     if errors:
         raise SystemExit("\n".join(errors))
     confidence = Counter(record.get("annotation_confidence", "unspecified") for record in records)

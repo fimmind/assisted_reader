@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 import math
 import re
+import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +13,13 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_ROOT = ROOT / ".cache" / "models"
 TOKEN_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+
+
+@dataclass(frozen=True)
+class BenchmarkScores:
+    scores: list[list[float]]
+    preparation_ms: float
+    online_ms: float
 
 
 class Ranker(ABC):
@@ -30,6 +39,12 @@ class Ranker(ABC):
     def score_with_raw_many(self, examples: list[dict]) -> tuple[list[list[float]], list[list[float]]]:
         scores = self.score_many(examples)
         return scores, scores
+
+    def benchmark_score_many(self, examples: list[dict]) -> BenchmarkScores:
+        started = time.perf_counter()
+        scores = self.score_many(examples)
+        online_ms = (time.perf_counter() - started) * 1000
+        return BenchmarkScores(scores=scores, preparation_ms=0.0, online_ms=online_ms)
 
 
 class MfsRanker(Ranker):
@@ -59,6 +74,36 @@ def apply_pos_first(example: dict, scores: list[float]) -> list[float]:
     # Cosine similarity is bounded by [-1, 1], so this preserves semantic
     # ordering within the POS while always placing matching POS first.
     return [score + 2.1 if candidate_pos(candidate) == target_pos else score for candidate, score in zip(example["candidates"], scores)]
+
+
+def ascending_ordinal_ranks(values: list[int]) -> dict[int, int]:
+    order = sorted(range(len(values)), key=lambda index: (values[index], index))
+    return {index: rank for rank, index in enumerate(order, start=1)}
+
+
+def reciprocal_rank_fusion_scores(
+    example: dict,
+    semantic_scores: list[float],
+    k: int,
+    semantic_weight: float,
+) -> list[float]:
+    semantic_order = sorted(
+        range(len(semantic_scores)),
+        key=lambda index: (-semantic_scores[index], index),
+    )
+    semantic_rank = {
+        index: rank for rank, index in enumerate(semantic_order, start=1)
+    }
+    original_ranks = [
+        int(candidate.get("original_rank", index))
+        for index, candidate in enumerate(example["candidates"])
+    ]
+    dictionary_rank = ascending_ordinal_ranks(original_ranks)
+    return [
+        semantic_weight / (k + semantic_rank[index])
+        + (1 - semantic_weight) / (k + dictionary_rank[index])
+        for index in range(len(example["candidates"]))
+    ]
 
 
 class PosOrderRanker(Ranker):
@@ -104,6 +149,42 @@ class EmbeddingRanker(Ranker):
             scores.append((gloss_embeddings[offset:offset + count] @ context).tolist())
             offset += count
         return scores
+
+    def benchmark_score_many(self, examples: list[dict]) -> BenchmarkScores:
+        glosses = [
+            self.gloss_input(example, candidate)
+            for example in examples
+            for candidate in example["candidates"]
+        ]
+        preparation_started = time.perf_counter()
+        gloss_embeddings = np.asarray(self.model.encode(
+            glosses,
+            batch_size=256,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        ))
+        preparation_ms = (time.perf_counter() - preparation_started) * 1000
+
+        online_started = time.perf_counter()
+        contexts = [self.context_input(example) for example in examples]
+        context_embeddings = np.asarray(self.model.encode(
+            contexts,
+            batch_size=256,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        ))
+        scores: list[list[float]] = []
+        offset = 0
+        for example, context in zip(examples, context_embeddings):
+            count = len(example["candidates"])
+            scores.append((gloss_embeddings[offset:offset + count] @ context).tolist())
+            offset += count
+        online_ms = (time.perf_counter() - online_started) * 1000
+        return BenchmarkScores(
+            scores=scores,
+            preparation_ms=preparation_ms,
+            online_ms=online_ms,
+        )
 
 
 class E5SmallRanker(EmbeddingRanker):
@@ -159,6 +240,77 @@ class MiniLMRanker(EmbeddingRanker):
 
     def score(self, example: dict) -> list[float]:
         return EmbeddingRanker.score_many(self, [example])[0]
+
+
+class ArcticEmbedXsRanker(EmbeddingRanker):
+    name = "arctic-embed-xs"
+
+    def __init__(self) -> None:
+        from sentence_transformers import SentenceTransformer
+
+        model_path = MODEL_ROOT / "arctic-embed-xs"
+        if not model_path.exists():
+            raise FileNotFoundError(
+                "Arctic Embed XS is missing. Run: "
+                "python scripts/download_models.py arctic-embed-xs"
+            )
+        self.model = SentenceTransformer(str(model_path), local_files_only=True)
+
+    @staticmethod
+    def context_input(example: dict) -> str:
+        return (
+            "Represent this sentence for searching relevant passages: "
+            f"Target word: {example['target']}. Context: {example['context']}"
+        )
+
+    @staticmethod
+    def gloss_input(example: dict, candidate: dict) -> str:
+        return candidate["gloss"]
+
+    def score(self, example: dict) -> list[float]:
+        return EmbeddingRanker.score_many(self, [example])[0]
+
+
+class CrossEncoderRanker(Ranker):
+    def __init__(self, model_name: str, name: str) -> None:
+        from sentence_transformers import CrossEncoder
+
+        model_path = MODEL_ROOT / model_name
+        if not model_path.exists():
+            raise FileNotFoundError(
+                f"{name} is missing. Run: python scripts/download_models.py {model_name}"
+            )
+        self.name = name
+        self.model = CrossEncoder(str(model_path), local_files_only=True)
+
+    @staticmethod
+    def context_input(example: dict) -> str:
+        return f"Target word: {example['target']}. Context: {example['context']}"
+
+    @staticmethod
+    def gloss_input(example: dict, candidate: dict) -> str:
+        pos = candidate_pos(candidate) or "unknown part of speech"
+        return f"{example['lemma']} ({pos}): {candidate['gloss']}"
+
+    def score_many(self, examples: list[dict]) -> list[list[float]]:
+        pairs = [
+            (self.context_input(example), self.gloss_input(example, candidate))
+            for example in examples
+            for candidate in example["candidates"]
+        ]
+        flat_scores = np.asarray(
+            self.model.predict(pairs, batch_size=128, show_progress_bar=False)
+        ).reshape(-1)
+        scores: list[list[float]] = []
+        offset = 0
+        for example in examples:
+            count = len(example["candidates"])
+            scores.append(flat_scores[offset:offset + count].tolist())
+            offset += count
+        return scores
+
+    def score(self, example: dict) -> list[float]:
+        return self.score_many([example])[0]
 
 
 class WslRetrieverRanker(E5SmallRanker):
@@ -232,23 +384,25 @@ class PosFirstWrapper(Ranker):
 
 
 class ReciprocalRankFusionRanker(Ranker):
-    def __init__(self, base: Ranker, name: str, k: int = 60) -> None:
+    def __init__(self, base: Ranker, name: str, k: int, semantic_weight: float) -> None:
+        if semantic_weight < 0 or semantic_weight > 1:
+            raise ValueError(f"semantic_weight must be between zero and one, got {semantic_weight}")
         self.base = base
         self.name = name
         self.k = k
+        self.semantic_weight = semantic_weight
 
     def raw_score_many(self, examples: list[dict]) -> list[list[float]]:
         semantic_scores = self.base.score_many(examples)
-        fused: list[list[float]] = []
-        for example, scores in zip(examples, semantic_scores):
-            semantic_order = sorted(range(len(scores)), key=lambda index: (-scores[index], index))
-            semantic_rank = {index: rank for rank, index in enumerate(semantic_order, start=1)}
-            fused.append([
-                1 / (self.k + semantic_rank[index])
-                + 1 / (self.k + int(candidate.get("original_rank", index)) + 1)
-                for index, candidate in enumerate(example["candidates"])
-            ])
-        return fused
+        return [
+            reciprocal_rank_fusion_scores(
+                example,
+                scores,
+                self.k,
+                self.semantic_weight,
+            )
+            for example, scores in zip(examples, semantic_scores)
+        ]
 
     def score_many(self, examples: list[dict]) -> list[list[float]]:
         return [apply_pos_first(example, scores) for example, scores in zip(examples, self.raw_score_many(examples))]
@@ -260,9 +414,27 @@ class ReciprocalRankFusionRanker(Ranker):
         raw = self.raw_score_many(examples)
         return [apply_pos_first(example, scores) for example, scores in zip(examples, raw)], raw
 
+    def benchmark_score_many(self, examples: list[dict]) -> BenchmarkScores:
+        semantic = self.base.benchmark_score_many(examples)
+        fused = [
+            reciprocal_rank_fusion_scores(
+                example,
+                scores,
+                self.k,
+                self.semantic_weight,
+            )
+            for example, scores in zip(examples, semantic.scores)
+        ]
+        return BenchmarkScores(
+            scores=fused,
+            preparation_ms=semantic.preparation_ms,
+            online_ms=semantic.online_ms,
+        )
+
 
 def load_ranker(name: str) -> Ranker:
     choices = {
+        "arctic-embed-xs": ArcticEmbedXsRanker,
         "mfs": MfsRanker,
         "pos-mfs": PosMfsRanker,
         "pos-order": PosOrderRanker,
@@ -273,6 +445,16 @@ def load_ranker(name: str) -> Ranker:
         "wsl-retriever": WslRetrieverRanker,
         "wordnet-sense-embedding": WordNetSenseEmbeddingRanker,
     }
+    if name == "tinybert-cross-encoder":
+        return CrossEncoderRanker(name, name)
+    if name == "tinybert-wiktextract-wsd":
+        return CrossEncoderRanker(name, name)
+    if name == "tinybert-wiktextract-listwise":
+        return CrossEncoderRanker(name, name)
+    if name == "minilm-l2-cross-encoder":
+        return CrossEncoderRanker(name, name)
+    if name == "minilm-l6-cross-encoder":
+        return CrossEncoderRanker(name, name)
     if name == "pos-e5-small":
         return PosFirstWrapper(E5SmallRanker(), name)
     if name == "pos-e5-small-definition-only":
@@ -284,9 +466,21 @@ def load_ranker(name: str) -> Ranker:
     if name == "pos-wsl-retriever":
         return PosFirstWrapper(WslRetrieverRanker(), name)
     if name == "pos-e5-small-rrf":
-        return ReciprocalRankFusionRanker(E5SmallRanker(), name)
+        return ReciprocalRankFusionRanker(E5SmallRanker(), name, 60, 0.5)
+    if name == "e5-definition-only-rrf":
+        return ReciprocalRankFusionRanker(E5DefinitionOnlyRanker(), name, 60, 0.5)
+    if name == "arctic-embed-xs-rrf":
+        return ReciprocalRankFusionRanker(ArcticEmbedXsRanker(), name, 60, 0.5)
+    e5_weight_match = re.fullmatch(r"e5-definition-only-rrf-(25|75)", name)
+    if e5_weight_match:
+        weight = int(e5_weight_match.group(1)) / 100
+        return ReciprocalRankFusionRanker(E5DefinitionOnlyRanker(), name, 60, weight)
+    arctic_weight_match = re.fullmatch(r"arctic-embed-xs-rrf-(25|75)", name)
+    if arctic_weight_match:
+        weight = int(arctic_weight_match.group(1)) / 100
+        return ReciprocalRankFusionRanker(ArcticEmbedXsRanker(), name, 60, weight)
     if name == "pos-wsl-retriever-rrf":
-        return ReciprocalRankFusionRanker(WslRetrieverRanker(), name)
+        return ReciprocalRankFusionRanker(WslRetrieverRanker(), name, 60, 0.5)
     if name == "pos-wordnet-sense-embedding":
         return PosFirstWrapper(WordNetSenseEmbeddingRanker(), name)
     return choices[name]()

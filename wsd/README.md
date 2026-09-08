@@ -1,10 +1,15 @@
-# WSD / gloss-ranking benchmark
+# WSD / definition-selection benchmarks
 
-This directory evaluates definition ranking, not definition suppression. Every
-candidate gloss stays in the ranking. The current product development dataset
-is `data/processed/reader-dev-v2.jsonl`, annotated with `fits`, `plausible`, or
-`clearly_wrong` relevance labels. It is LLM-assisted development/evaluation
-data, not an unbiased test set.
+This directory evaluates both definition ranking and conservative contextual
+filtering. Production reader behavior remains unchanged. The hard-ranking
+dataset is `data/processed/reader-dev-v2.jsonl`; the crowded, ordinary-word
+filtering dataset is `data/processed/reader-filter-dev-v1.jsonl`. Both use
+`fits`, `plausible`, and `clearly_wrong` relevance labels. They are
+Codex-assisted development data, not independent test sets.
+
+The current filtering result is a no-launch decision. See
+`WSD-FILTERING-RESULTS-2026-09-08.md` for the benchmark design, model comparison,
+and deployment recommendation.
 
 ## Phase 1
 
@@ -102,3 +107,32 @@ prefixes.
 The single gloss-format ablation is named
 `pos-e5-small-definition-only`. Use `evaluate.py --append` for a focused run
 that should merge into, rather than replace, an existing benchmark CSV.
+
+## Creating and evaluating reader-filter-dev-v1
+
+Install the repository's locked Node dependencies from the repository root,
+then run:
+
+```powershell
+node wsd/scripts/run-ts-script.mjs wsd/scripts/build-reader-filter-v1.mts
+uv run --project wsd python wsd/scripts/apply_filter_annotations.py
+uv run --project wsd python wsd/scripts/validate_reader_data.py --dataset reader-filter-dev-v1
+uv run --project wsd python wsd/scripts/evaluate_filtering.py --dataset reader-filter-dev-v1 --model mfs lexical-overlap e5-small e5-small-definition-only minilm arctic-embed-xs tinybert-cross-encoder minilm-l2-cross-encoder e5-definition-only-rrf arctic-embed-xs-rrf-25 --max-definitions 3
+```
+
+The builder deterministically samples ordinary open-class word occurrences
+whose current reader POS group contains 6–30 definitions. It uses the deployed
+lookup and POS pipeline, excludes occurrences already used by `reader-dev-v2`,
+caps each lemma at five occurrences, and assigns entire lemmas to either
+calibration or evaluation. Sampling happens before model scoring and retains
+every lexicon definition in each selected entry.
+
+The filter evaluator first reproduces the reader's visible POS group. It
+reports fixed Top 1–3 policies, a capped score-margin policy, and uncapped
+split-conformal margin policies calibrated only on the calibration split. The
+conformal policies may exceed three definitions when the scores do not support
+safe removal. The primary safety metric, `unsafe_exclusions`, counts an
+occurrence where every `fits` or `plausible` definition was hidden. Neural
+bi-encoder timing excludes definition embeddings because those can be prepared
+with the lexicon; cross-encoder timing includes every context/definition pair.
+Machine-readable CSV output is written under the ignored `results/` directory.

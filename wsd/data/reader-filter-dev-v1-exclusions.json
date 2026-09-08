@@ -1,0 +1,12 @@
+{
+  "reader-filter-dev-v1-AiW-1126-5": "Product POS error: copular verb 'is' was tagged as a noun, leaving no acceptable runtime definition.",
+  "reader-filter-dev-v1-AiW-58-10": "Compound-tokenization mismatch: the occurrence is the 'time' component of 'tea-time'; the reader should target the complete compound.",
+  "reader-filter-dev-v1-hitchhikers_guide-3462-19": "Product POS error: 'sitting' is a present participle in the clause but was tagged as a noun.",
+  "reader-filter-dev-v1-hitchhikers_guide-4062-10": "Product POS error: 'clear' is a predicative adjective in 'made it clear' but was tagged as a verb.",
+  "reader-filter-dev-v1-hitchhikers_guide-4442-13": "Product POS error: 'cast' is the past participle of the verb here but was tagged as a noun.",
+  "reader-filter-dev-v1-hitchhikers_guide-4790-1": "Dictionary coverage gap: the displayed entry gives only morphology and does not explain passive 'got hit'.",
+  "reader-filter-dev-v1-hitchhikers_guide-4820-35": "Multiword-expression/POS failure: 'in order for' expresses purpose; none of the displayed noun definitions fit.",
+  "reader-filter-dev-v1-hitchhikers_guide-4995-4": "Product POS error: 'done' is the past participle in 'has done' but was tagged as an adjective.",
+  "reader-filter-dev-v1-hitchhikers_guide-1846-5": "Dictionary/multiword gap: 'let into' means fitted or inset here; none of the displayed verb definitions fit.",
+  "reader-filter-dev-v1-hitchhikers_guide-234-19": "Compound-tokenization mismatch: the occurrence is the 'hyper' component of 'hyper-space'; the reader's compound lookup should target the whole word."
+}

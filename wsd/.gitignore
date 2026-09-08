@@ -2,5 +2,7 @@
 .cache/
 data/raw/
 data/processed/
+data/training/
 results/
 __pycache__/
+*.egg-info/

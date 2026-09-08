@@ -1,0 +1,100 @@
+{"id":"reader-filter-dev-v1-AiW-1062-4","fits":["think.verb.6"],"plausible":["think.verb.7"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-1105-34","fits":["voice.noun.1"],"plausible":["voice.noun.2"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-1126-5","exclude_reason":"Product POS error: copular verb 'is' was tagged as a noun, leaving no acceptable runtime definition."}
+{"id":"reader-filter-dev-v1-AiW-1135-24","fits":["like.verb.6"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-132-9","fits":["ask.verb.4"],"plausible":["ask.verb.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-140-3","fits":["great.adjective.2"],"plausible":["great.adjective.5"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-AiW-141-22","fits":["could.verb.6"],"plausible":["could.verb.1"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-AiW-1439-1","fits":["could.verb.1"],"plausible":["could.verb.6"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-AiW-1446-1","fits":["read.verb.4"],"plausible":["read.verb.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-1455-11","fits":["piece.noun.10"],"plausible":["piece.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-151-25","fits":["repeat.verb.1"],"plausible":["repeat.verb.4"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-1554-6","fits":["business.noun.8"],"plausible":["business.noun.20"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-1631-12","fits":["court.noun.12"],"plausible":["court.noun.11"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-1653-6","fits":["long.adjective.8"],"plausible":["long.adjective.9"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-262-15","fits":["tell.verb.8"],"plausible":["tell.verb.7"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-264-1","fits":["was.verb.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-291-16","fits":["would.verb.9"],"plausible":["would.verb.8"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-30-22","fits":["look.verb.1"],"plausible":["look.verb.13"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-345-57","fits":["little.adjective.1","little.adjective.2"],"plausible":["little.adjective.3"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-372-11","fits":["put.verb.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-382-11","fits":["woman.noun.1"],"plausible":["woman.noun.3"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-466-17","fits":["size.noun.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-533-2","fits":["old.adjective.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-572-5","fits":["stuff.noun.4"],"plausible":["stuff.noun.9"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-58-10","exclude_reason":"Compound-tokenization mismatch: the occurrence is the 'time' component of 'tea-time'; the reader should target the complete compound."}
+{"id":"reader-filter-dev-v1-AiW-672-18","fits":["moment.noun.4"],"plausible":["moment.noun.3"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-710-11","fits":["face.noun.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-728-4","fits":["deal.noun.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-735-8","fits":["right.adjective.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-768-19","fits":["quite.adverb.15"],"plausible":["quite.adverb.4"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-AiW-834-4","fits":["riddle.noun.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-908-2","fits":["personal.adjective.7"],"plausible":["personal.adjective.2"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-AiW-983-3","fits":["doubtful.adjective.2"],"plausible":["doubtful.adjective.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-1034-17","fits":["white.adjective.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3283-3","fits":["was.verb.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3372-1","fits":["so.adverb.3"],"plausible":["so.adverb.2","so.adverb.8"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3389-2","fits":["will.verb.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3410-34","fits":["say.verb.1"],"plausible":["say.verb.7"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3448-9","fits":["dreadful.adjective.3"],"plausible":["dreadful.adjective.2"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3462-19","exclude_reason":"Product POS error: 'sitting' is a present participle in the clause but was tagged as a noun."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3795-7","fits":["work.verb.8"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3855-6","fits":["appeal.noun.11"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3868-5","fits":["gently.adverb.1"],"plausible":["gently.adverb.2","gently.adverb.3"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3896-3","fits":["was.verb.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4062-10","exclude_reason":"Product POS error: 'clear' is a predicative adjective in 'made it clear' but was tagged as a verb."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4373-1","fits":["like.verb.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4407-4","fits":["bit.noun.14"],"plausible":["bit.noun.10"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4442-13","exclude_reason":"Product POS error: 'cast' is the past participle of the verb here but was tagged as a noun."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4494-3","fits":["think.verb.6"],"plausible":["think.verb.7"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4607-8","fits":["connection.noun.8"],"plausible":["connection.noun.11"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4752-36","fits":["girl.noun.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4790-1","exclude_reason":"Dictionary coverage gap: the displayed entry gives only morphology and does not explain passive 'got hit'."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4820-35","exclude_reason":"Multiword-expression/POS failure: 'in order for' expresses purpose; none of the displayed noun definitions fit."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4915-6","fits":["cannon.noun.2"],"plausible":["cannon.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-4995-4","exclude_reason":"Product POS error: 'done' is the past participle in 'has done' but was tagged as an adjective."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-5081-4","fits":["script.noun.5"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-5130-11","fits":["blessing.noun.5"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-5144-6","fits":["subtle.adjective.10"],"plausible":["subtle.adjective.11"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-5165-19","fits":["brilliant.adjective.5"],"plausible":["brilliant.adjective.4","brilliant.adjective.6"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-5262-2","fits":["wish.verb.5"],"plausible":["wish.verb.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-540-9","fits":["house.noun.1"],"plausible":["house.noun.5"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-564-28","fits":["air.noun.6"],"plausible":["air.noun.1"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-691-0","fits":["water.noun.2"],"plausible":["water.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-712-6","fits":["long.adjective.1"],"plausible":["long.adjective.2"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-719-9","fits":["away.adverb.2"],"plausible":["away.adverb.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-731-8","fits":["would.verb.2"],"plausible":["would.verb.14"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-890-11","fits":["lift.noun.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-891-13","fits":["evil.adjective.1","evil.adjective.2"],"plausible":["evil.adjective.5"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-919-2","fits":["around.adverb.4"],"plausible":["around.adverb.7"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-1369-9","fits":["fit.verb.2"],"plausible":["fit.verb.3"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-1517-13","fits":["lab.noun.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-1713-7","fits":["was.verb.2"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-172-3","fits":["would.verb.3"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-180-10","fits":["ask.verb.2"],"plausible":["ask.verb.3"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-1846-5","exclude_reason":"Dictionary/multiword gap: 'let into' means fitted or inset here; none of the displayed verb definitions fit."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-190-23","fits":["book.noun.2"],"plausible":["book.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-1924-9","fits":["know.verb.11"],"plausible":["know.verb.1"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-1986-5","fits":["oval.noun.4"],"plausible":["oval.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2013-19","fits":["external.adjective.11"],"plausible":["external.adjective.1"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2054-19","fits":["small.adjective.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2060-13","fits":["matter.noun.2"],"plausible":["matter.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2067-40","fits":["orbit.noun.4"],"plausible":["orbit.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-234-19","exclude_reason":"Compound-tokenization mismatch: the occurrence is the 'hyper' component of 'hyper-space'; the reader's compound lookup should target the whole word."}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2463-14","fits":["rise.noun.8"],"plausible":["rise.noun.7"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2517-4","fits":["too.adverb.3"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2602-0","fits":["then.adverb.2"],"plausible":["then.adverb.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2826-7","fits":["circular.adjective.2"],"plausible":["circular.adjective.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-2846-1","fits":["tight.adjective.1"],"plausible":["tight.adjective.3"],"confidence":"medium"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3022-2","fits":["admission.noun.2"],"plausible":["admission.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3071-31","fits":["voice.noun.3"],"plausible":["voice.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3094-29","fits":["study.noun.4"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3133-26","fits":["leather.noun.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3140-13","fits":["great.adjective.5"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3145-14","fits":["front.noun.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3147-7","fits":["communication.noun.2"],"plausible":["communication.noun.1"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3194-3","fits":["tough.adjective.7"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3209-11","fits":["tell.verb.8"],"plausible":["tell.verb.7"],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-326-5","fits":["away.adverb.1"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3261-21","fits":["way.noun.5"],"plausible":[],"confidence":"high"}
+{"id":"reader-filter-dev-v1-hitchhikers_guide-3273-35","fits":["deal.verb.3"],"plausible":["deal.verb.13"],"confidence":"high"}

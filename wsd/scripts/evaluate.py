@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def local_cache_size_mb(name: str) -> float:
     name = {
+        "pos-arctic-embed-xs": "arctic-embed-xs",
         "pos-e5-small": "e5-small",
         "pos-e5-small-rrf": "e5-small",
         "e5-small-definition-only": "e5-small",
@@ -42,6 +43,7 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, help="Processed basename, for example raganato-all or reader-dev-v1")
     parser.add_argument("--model", nargs="+", required=True, choices=[
         "mfs", "pos-mfs", "pos-order", "lexical-overlap", "pos-lexical-overlap",
+        "arctic-embed-xs", "tinybert-cross-encoder", "tinybert-wiktextract-wsd", "tinybert-wiktextract-listwise", "minilm-l2-cross-encoder", "minilm-l6-cross-encoder",
         "e5-small", "pos-e5-small", "e5-small-definition-only", "pos-e5-small-definition-only", "minilm", "pos-minilm",
         "wordnet-sense-embedding", "pos-wordnet-sense-embedding",
         "wsl-retriever", "pos-wsl-retriever", "pos-e5-small-rrf", "pos-wsl-retriever-rrf",
