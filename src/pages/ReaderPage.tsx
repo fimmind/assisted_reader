@@ -1564,20 +1564,28 @@ export default function ReaderPage() {
       }
     };
 
-    const handleViewportChange = () => {
+    const handleViewportResize = () => {
+      closeAllWordPopups();
+    };
+
+    const handleViewportScroll = (event: Event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('[data-word-popup-index]')) {
+        return;
+      }
       closeAllWordPopups();
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleEscape);
-    window.addEventListener('resize', handleViewportChange);
-    window.addEventListener('scroll', handleViewportChange, true);
+    window.addEventListener('resize', handleViewportResize);
+    window.addEventListener('scroll', handleViewportScroll, true);
 
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
-      window.removeEventListener('resize', handleViewportChange);
-      window.removeEventListener('scroll', handleViewportChange, true);
+      window.removeEventListener('resize', handleViewportResize);
+      window.removeEventListener('scroll', handleViewportScroll, true);
     };
   }, [closeAllWordPopups, wordPopups.length]);
 

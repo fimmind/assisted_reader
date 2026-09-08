@@ -9,7 +9,7 @@
     "sync:data": "mkdir -p public/data && rm -rf public/data/* && cp -R data/. public/data/",
     "build:lexicon:wiktextract": "node scripts/build-lexicon-from-wiktextract.mjs",
     "ensure:lexicon": "node scripts/ensure-lexicon-generated.mjs",
-    "predev": "pnpm run sync:data",
+    "predev": "pnpm run ensure:lexicon && pnpm run sync:data",
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
     "prebuild": "pnpm run ensure:lexicon && pnpm run sync:data",
     "build": "pnpm run typecheck && vite build --config vite.config.ts",
