@@ -20,6 +20,8 @@
   --color-popover-foreground: hsl(var(--popover-foreground));
   --color-popover-border: hsl(var(--popover-border));
 
+  --color-vocabulary-card-border: hsl(var(--vocabulary-card-border));
+
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
   --color-primary-border: var(--primary-border);
@@ -78,6 +80,8 @@
   --popover: 40 20% 98%;
   --popover-foreground: 240 10% 15%;
   --popover-border: 40 15% 90%;
+
+  --vocabulary-card-border: 40 15% 90%;
 
   /* Terracotta / Warm amber accent */
   --primary: 25 75% 55%;
@@ -141,6 +145,8 @@
   --popover: 220 20% 13%;
   --popover-foreground: 40 15% 90%;
   --popover-border: 220 15% 20%;
+
+  --vocabulary-card-border: 220 15% 27%;
 
   /* Terracotta / Warm amber accent */
   --primary: 25 70% 60%;

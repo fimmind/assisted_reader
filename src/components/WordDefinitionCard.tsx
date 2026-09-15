@@ -1,10 +1,15 @@
 import type { ReactNode } from 'react';
-import { Check, X } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { HYPHENATED_WORD_RE, WORD_RE } from '@/core/constants';
 import { resolveLexiconPronunciations } from '@/core/lexicon';
 import type { LexiconEntry, PartOfSpeech } from '@/core/types';
 import { cn } from '@/lib/utils';
-import { Button } from './ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from './ui/tooltip';
 
 export interface DefinitionWordClick {
   element: HTMLElement;
@@ -31,6 +36,81 @@ interface WordDefinitionCardProps {
   isMarkedUnknown?: boolean;
   pronunciationVariant?: 'US' | 'UK';
   definitionStatus?: 'loading' | 'ready' | 'error';
+}
+
+interface VocabularyStatusControlProps {
+  isMarkedKnown: boolean;
+  isMarkedUnknown: boolean;
+  onMarkKnown: (() => void) | undefined;
+  onMarkUnknown: (() => void) | undefined;
+  tooltipSideOffset: number;
+}
+
+const vocabularyStatusTooltipClassName: string = 'border-0 bg-transparent px-1 py-0 text-[10px] font-normal text-muted-foreground shadow-none drop-shadow-[0_1px_1px_rgba(0,0,0,0.35)]';
+
+function VocabularyStatusControl({
+  isMarkedKnown,
+  isMarkedUnknown,
+  onMarkKnown,
+  onMarkUnknown,
+  tooltipSideOffset,
+}: VocabularyStatusControlProps): ReactNode {
+  return (
+    <TooltipProvider delayDuration={400}>
+      <div
+        className="inline-flex -translate-y-0.5 shrink-0"
+        role="group"
+        aria-label="Vocabulary status"
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onMarkUnknown}
+              className={cn(
+                'flex h-7 w-6 items-center justify-center rounded-sm text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                isMarkedUnknown && 'font-semibold text-foreground',
+              )}
+              aria-label="Mark as still learning"
+              aria-pressed={isMarkedUnknown}
+            >
+              <span aria-hidden="true">?</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent
+            side="top"
+            sideOffset={tooltipSideOffset}
+            className={vocabularyStatusTooltipClassName}
+          >
+            Still learning
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onMarkKnown}
+              className={cn(
+                'flex h-7 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                isMarkedKnown && 'text-primary',
+              )}
+              aria-label="Mark as known"
+              aria-pressed={isMarkedKnown}
+            >
+              <Check size={14} aria-hidden="true" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent
+            side="top"
+            sideOffset={tooltipSideOffset}
+            className={vocabularyStatusTooltipClassName}
+          >
+            Known
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    </TooltipProvider>
+  );
 }
 
 function resolveDefinitionCardFontSize(readerFontSize: number): number {
@@ -264,35 +344,18 @@ export function WordDefinitionCard({
     return (
       <div
         data-definition-card="true"
-        className="inline-flex flex-col bg-popover border border-border rounded-md shadow-sm px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] max-h-[70vh] overflow-y-auto align-middle"
+        className="inline-flex flex-col bg-popover border border-vocabulary-card-border rounded-md shadow-sm dark:shadow-md px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] max-h-[70vh] overflow-y-auto align-middle"
         style={{ fontSize: `${cardFontSize}px` }}
       >
         <div className="flex items-center justify-between gap-3 mb-1.5">
           <span className="font-serif font-medium text-[1.1em]">{definition.word}</span>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={onMarkKnown}
-              className={cn(
-                'p-1 text-muted-foreground hover:text-primary transition-colors rounded-sm hover:bg-muted',
-                isMarkedKnown && 'bg-primary/15 text-primary hover:text-primary',
-              )}
-              aria-label="Mark as known"
-            >
-              <Check size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={onMarkUnknown}
-              className={cn(
-                'p-1 text-muted-foreground hover:text-destructive transition-colors rounded-sm hover:bg-muted',
-                isMarkedUnknown && 'bg-destructive/15 text-destructive hover:text-destructive',
-              )}
-              aria-label="Mark as unknown"
-            >
-              <X size={14} />
-            </button>
-          </div>
+          <VocabularyStatusControl
+            isMarkedKnown={isMarkedKnown}
+            isMarkedUnknown={isMarkedUnknown}
+            onMarkKnown={onMarkKnown}
+            onMarkUnknown={onMarkUnknown}
+            tooltipSideOffset={10}
+          />
         </div>
         {definitionStatus === 'loading' ? (
           <p className="text-muted-foreground leading-snug">Loading definition…</p>
@@ -327,37 +390,18 @@ export function WordDefinitionCard({
   return (
     <div
       data-definition-card="true"
-      className="bg-popover rounded-lg p-5 w-[300px]"
+      className="bg-popover border border-vocabulary-card-border rounded-lg shadow-sm dark:shadow-md p-5 w-[300px]"
       style={{ fontSize: `${cardFontSize}px` }}
     >
       <div className="flex justify-between items-start mb-3">
         <h3 className="font-serif text-[1.33em] font-medium text-foreground">{definition.word}</h3>
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onMarkKnown}
-            className={cn(
-              'h-8 w-8 rounded-full hover:bg-primary/10 hover:text-primary',
-              isMarkedKnown && 'bg-primary/15 text-primary hover:text-primary',
-            )}
-            aria-label="Mark as known"
-          >
-            <Check size={18} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onMarkUnknown}
-            className={cn(
-              'h-8 w-8 rounded-full hover:bg-destructive/10 hover:text-destructive',
-              isMarkedUnknown && 'bg-destructive/15 text-destructive hover:text-destructive',
-            )}
-            aria-label="Mark as unknown"
-          >
-            <X size={18} />
-          </Button>
-        </div>
+        <VocabularyStatusControl
+          isMarkedKnown={isMarkedKnown}
+          isMarkedUnknown={isMarkedUnknown}
+          onMarkKnown={onMarkKnown}
+          onMarkUnknown={onMarkUnknown}
+          tooltipSideOffset={20}
+        />
       </div>
       {definitionStatus === 'loading' ? (
         <p className="text-muted-foreground leading-relaxed">Loading definition…</p>
