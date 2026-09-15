@@ -1794,7 +1794,7 @@ export default function ReaderPage() {
                     onOpenWordPopup={openRootWordPopup}
                   />
                   {assistanceEnabled && analysis.cardTargets.length > 0 && (
-                    <div className="mt-3 flex flex-col gap-3" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
+                    <div className="mt-3 flex flex-wrap items-start gap-3 [&>[data-definition-card]]:w-[250px]" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
                       {analysis.cardTargets.map((target) => {
                         const rawDefinition = definitionsByLemma.get(target.lemma)
                           ?? createFallbackLexiconEntry(target.lemma);
