@@ -68,13 +68,26 @@ function VocabularyStatusControl({
               type="button"
               onClick={onMarkUnknown}
               className={cn(
-                'flex h-7 w-6 items-center justify-center rounded-sm text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                isMarkedUnknown && 'font-semibold text-foreground',
+                'flex h-7 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                isMarkedUnknown && 'text-foreground',
               )}
               aria-label="Mark as still learning"
               aria-pressed={isMarkedUnknown}
             >
-              <span aria-hidden="true">?</span>
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2.25}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M9.1 9a3 3 0 1 1 5.8 1c0 2-2.9 2.6-2.9 4" />
+                <path d="M12 18h.01" />
+              </svg>
             </button>
           </TooltipTrigger>
           <TooltipContent
@@ -97,7 +110,7 @@ function VocabularyStatusControl({
               aria-label="Mark as known"
               aria-pressed={isMarkedKnown}
             >
-              <Check size={14} aria-hidden="true" />
+              <Check className="h-4 w-4" strokeWidth={2.25} aria-hidden="true" />
             </button>
           </TooltipTrigger>
           <TooltipContent
