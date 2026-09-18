@@ -1,7 +1,10 @@
 # WSD / definition-selection benchmarks
 
 This directory evaluates both definition ranking and conservative contextual
-filtering. Production reader behavior remains unchanged. The hard-ranking
+filtering against the previous Wiktionary-first card inventory. The reader now
+uses WordNet definitions when a matching POS is available, so these datasets
+must be rebuilt against WordNet before evaluating a production disambiguator.
+The hard-ranking
 dataset is `data/processed/reader-dev-v2.jsonl`; the crowded, ordinary-word
 filtering dataset is `data/processed/reader-filter-dev-v1.jsonl`. Both use
 `fits`, `plausible`, and `clearly_wrong` relevance labels. They are

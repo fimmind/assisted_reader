@@ -128,26 +128,34 @@ The app depends on files under `data/`, including:
 
 ### Lexicon source
 
-Definition entries are sourced from **Wiktionary** via **Wiktextract** exports.
+Definition entries are sourced from **WordNet 3.0** when a matching part of speech is available. **Wiktionary** via **Wiktextract** supplies pronunciations and definitions for parts of speech absent from WordNet.
 
 - Runtime files consumed by the app:
   - `data/lexicon/index.json`
   - `data/lexicon/*.json`
+  - `data/wordnet/index.json`
+  - `data/wordnet/*.json`
 - Build script:
   - `scripts/build-lexicon-from-wiktextract.mjs`
 - Rebuild command:
   - `pnpm run build:lexicon:wiktextract`
 
-`pnpm run build` and `pnpm run deploy` automatically run `ensure:lexicon`, which generates chunked lexicon files if they are missing.
+`pnpm run build` and `pnpm run deploy` automatically run `ensure:lexicon`, which generates chunked Wiktionary files if they are missing, and `verify:wordnet`, which rejects incomplete or malformed WordNet assets before copying data into the build.
 
 The script auto-downloads the Wiktextract archive from [kaikki.org](https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz) into `downloads/` when missing, and reuses it when already present.
 
-The builder includes every English (`lang_code = "en"`) headword matching the reader's single-word tokenizer. Words from `data/words.csv` are also retained as empty fallback entries when Wiktextract has no usable definition.
+The builder includes every English (`lang_code = "en"`) headword matching the reader's lookup grammar. Words from `data/words.csv` are also retained as empty fallback entries when Wiktextract has no usable definition. The existing Wiktionary assets remain separate and complete.
+
+WordNet 3.0 senses are exported from the NLTK WordNet corpus by `wsd/scripts/export_wordnet_lexicon.py`. The checked-in `data/wordnet/` contains 1,024 on-demand buckets, an index, stable synset IDs, and the WordNet license. To regenerate it after building `data/lexicon/`, run:
+
+```bash
+uv run --project wsd python wsd/scripts/export_wordnet_lexicon.py --wordnet-archive /path/to/wordnet.zip --wiktionary-lexicon data/lexicon --output data/wordnet
+```
 
 Generated lexicon entry behavior:
 
 - definitions are grouped by part of speech in each word's `senses` array
-- up to 2 bundled definitions per part of speech, with near-identical inflection glosses filtered out
+- deduplicated definitions per part of speech, with near-identical inflection glosses filtered out
 - each part-of-speech group carries its own US/UK pronunciation fields when available
 - entries are distributed across 1,024 deterministic hash buckets for on-demand lookup
 - the lexicon index is schema-versioned so incompatible generated assets are rebuilt automatically
@@ -156,9 +164,11 @@ Runtime display behavior:
 
 - Settings include **English Variant** (`US` or `UK`)
 - definition cards select pronunciation by that variant (`ipaUs`/`ipaUk`) with fallback when one variant is missing
+- WordNet definitions replace Wiktionary definitions for a matching part of speech; Wiktionary remains the source of transcription
+- parts of speech absent from WordNet retain their Wiktionary definitions
 - contextual POS inference selects the matching definition group for automatic cards, clicked words, and nested lookups
 - when POS is unknown or unavailable in the lexicon, cards display all available groups with visible POS labels
-- dictionary files are not fetched during reader startup; automatic and clicked cards fetch and cache only the required buckets
+- dictionary files are not fetched during reader startup; automatic and clicked cards fetch and cache only the required WordNet and Wiktionary buckets
 - clicked words try their exact displayed form before falling back to the inferred lemma
 
 These assets must exist in `public/data/` for runtime fetches. `sync:data` handles this.
@@ -168,9 +178,11 @@ These assets must exist in `public/data/` for runtime fetches. `sync:data` handl
 `pnpm run verify:deploy-assets` validates that deploy output (`dist/`) includes:
 
 - `data/lexicon/index.json`
+- `data/wordnet/index.json` and all WordNet buckets
+- `data/wordnet/LICENSE`
 - every deterministic bucket declared by `index.json`
 
-and validates every bucket assignment, entry, POS group, and definition against the current schema.
+and validates every bucket assignment, entry, POS group, and definition against the current schema. It also compares both dictionaries byte for byte with `data/`, including the WordNet license. The deployment command runs these checks before publishing.
 
 ## Useful commands
 

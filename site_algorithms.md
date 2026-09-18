@@ -505,7 +505,7 @@ Runtime analysis is incremental and cache-backed:
 
 ### 6.2.1 Summary
 
-Word definition cards use static lexicon artifacts built offline.
+Word definition cards use static WordNet and Wiktionary artifacts built offline.
 
 ### 6.2.2 Technical Specification
 
@@ -528,8 +528,21 @@ Script: `scripts/build-lexicon-from-wiktextract.mjs`
    - a schema-versioned `index.json` describing the deterministic bucket layout
 
 Wiktextract records are accumulated by `(word, partOfSpeech)` rather than using
-the first record for a spelling. Each POS group retains up to two deduplicated
+the first record for a spelling. Each POS group retains deduplicated
 definitions and its own pronunciation variants.
+
+WordNet 3.0 is exported by `wsd/scripts/export_wordnet_lexicon.py` into
+`data/wordnet/`. It contains stable synset IDs and glosses for every WordNet
+headword matching the reader's lookup grammar, plus inflected forms from the
+shipped Wiktionary lexicon that WordNet can resolve. The WordNet assets use the
+same 1,024-bucket hash layout and include the source license. The original
+Wiktionary assets remain separate and complete.
+
+Each definition lookup fetches the matching bucket from both sources. A
+WordNet POS group supplies the definitions when present. Its transcription
+comes from the corresponding Wiktionary POS group. Wiktionary groups absent
+from WordNet remain available, including when contextual POS inference selects
+one. WordNet sense order is retained; no contextual sense ranking is applied.
 
 Runtime POS selection:
 
@@ -554,7 +567,8 @@ Runtime POS selection:
 Runtime load strategy:
 
 - Reader startup constructs the lexicon service without issuing a dictionary request.
-- The first definition request loads the small index and the target word's hash bucket.
+- The first definition request loads each source's small index and the target
+  word's hash bucket from each source.
 - Index and bucket promises are cached for the browser session.
 - When the clicked component is inside a hyphenated word, lookup first queries
   the complete compound with unknown POS. Only when the compound is absent does

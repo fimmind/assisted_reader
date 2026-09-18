@@ -1,5 +1,6 @@
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { verifyWordNetAssets } from './verify-wordnet-assets.mjs';
 import {
   CANONICAL_PARTS_OF_SPEECH,
   LEXICON_BUCKET_ALGORITHM,
@@ -16,6 +17,8 @@ const requiredFiles = [
   'data/lemma_dict.json',
   'data/hitchhikers_guide.txt',
   'data/lexicon/index.json',
+  'data/wordnet/index.json',
+  'data/wordnet/LICENSE',
 ];
 
 async function assertFileExists(relativePath) {
@@ -106,11 +109,33 @@ async function verifyLexiconChunks() {
   }
 }
 
+async function verifyDictionaryCopies() {
+  for (const source of ['lexicon', 'wordnet']) {
+    const files = [
+      'index.json',
+      ...Array.from({ length: LEXICON_BUCKET_COUNT }, (_, bucketId) => resolveLexiconBucketFileName(bucketId)),
+      ...(source === 'wordnet' ? ['LICENSE'] : []),
+    ];
+    for (const file of files) {
+      const relativePath = `data/${source}/${file}`;
+      const [original, deployed] = await Promise.all([
+        readFile(path.resolve(relativePath)),
+        readFile(path.join(DIST_DIR, relativePath)),
+      ]);
+      if (!original.equals(deployed)) {
+        throw new Error(`Deployed dictionary differs from source: file=${relativePath}`);
+      }
+    }
+  }
+}
+
 async function main() {
   for (const file of requiredFiles) {
     await assertFileExists(file);
   }
   await verifyLexiconChunks();
+  await verifyWordNetAssets(path.join(DIST_DIR, 'data/wordnet'));
+  await verifyDictionaryCopies();
   console.log('Deploy asset verification passed.');
 }
 
