@@ -18,7 +18,7 @@ export interface ImportedBook {
   id: string;
   title: string;
   author: string;
-  sourceType: 'txt' | 'epub';
+  sourceType: 'txt' | 'epub' | 'pdf';
   createdAt: string;
   updatedAt: string;
   currentChapter: number;

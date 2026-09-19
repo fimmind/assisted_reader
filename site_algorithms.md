@@ -91,6 +91,24 @@ EPUB (`parseEpubBook`):
 
 ---
 
+### PDF import (React reader)
+
+`src/core/book-parser.ts` lazily loads `pdf-parser.ts` for local `.pdf` files.
+PDF.js reads an in-memory byte array and calls `getTextContent()` for every page.
+`pdf-text.ts` groups text runs into lines using EOL flags and baseline positions,
+infers spaces from horizontal gaps, and retains paragraph gaps and indentation.
+Line-end hyphens followed by a lowercase continuation are removed only within
+the same paragraph; punctuation spacing is normalized. Content order is retained
+without attempting column reconstruction.
+
+Each nonempty page becomes a normal `BookChapter` titled `Page N` (original page
+number). Empty pages are omitted. A document with no selectable text is rejected
+with an explicit scanned-PDF message. Workers and page resources are released
+after extraction, including on errors. `books-store` persists only the normal
+book payload with filename-derived title and `sourceType: 'pdf'`; no PDF bytes
+or Blob are retained. Reader analysis, POS, dictionary lookup and click handling
+use the same pipeline as TXT and EPUB.
+
 ## 2. Deinflection
 
 ### 2.1 Summary

@@ -9,9 +9,21 @@ Assisted Reader is a Vite + React web app for reading books with vocabulary assi
 
 This README covers setup, build/run/deploy, and project structure.
 
+## Importing books
+
+Use **Import Book** in the library to select TXT, EPUB, or PDF files. PDF text
+is extracted locally in the browser with PDF.js; no file is uploaded and the
+original PDF is not stored. Each nonempty PDF page becomes a `Page N` chapter
+in the normal book store and uses the existing vocabulary assistance.
+
+PDF import joins wrapped lines and hyphenated line breaks, and uses line gaps
+and indentation to retain paragraph boundaries. It is intended for simple
+single-column text. Scanned PDFs without selectable text, OCR, images, tables,
+and reconstruction of complex layouts are not supported.
+
 ## Requirements
 
-- Node.js 20+ (recommended)
+- Node.js 22.13+ or 24+ (required by PDF.js)
 - `pnpm` (required by repository policy)
 
 ## Install

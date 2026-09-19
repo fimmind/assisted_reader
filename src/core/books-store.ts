@@ -66,7 +66,7 @@ function normalizeBook(raw: unknown): ImportedBook | null {
     id: candidate.id,
     title: typeof candidate.title === 'string' && candidate.title.length > 0 ? candidate.title : fallbackTitle,
     author: typeof candidate.author === 'string' && candidate.author.length > 0 ? candidate.author : fallbackAuthor,
-    sourceType: candidate.sourceType === 'epub' ? 'epub' : 'txt',
+    sourceType: candidate.sourceType === 'epub' || candidate.sourceType === 'pdf' ? candidate.sourceType : 'txt',
     createdAt: typeof candidate.createdAt === 'string' && candidate.createdAt.length > 0 ? candidate.createdAt : new Date().toISOString(),
     updatedAt: typeof candidate.updatedAt === 'string' && candidate.updatedAt.length > 0 ? candidate.updatedAt : new Date().toISOString(),
     currentChapter: normalizeChapterNumber(candidate.currentChapter, normalizedChapters.length),

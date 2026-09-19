@@ -569,7 +569,7 @@ export default function LibraryPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".txt,.epub"
+          accept=".txt,.epub,.pdf"
           multiple
           className="hidden"
           onChange={onImportFiles}

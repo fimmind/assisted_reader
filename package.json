@@ -68,6 +68,7 @@
     "input-otp": "^1.4.2",
     "lucide-react": "catalog:",
     "next-themes": "^0.4.6",
+    "pdfjs-dist": "^6.3.289",
     "prettier": "^3.8.3",
     "react": "catalog:",
     "react-day-picker": "^9.11.1",

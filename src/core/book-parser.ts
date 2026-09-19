@@ -5,7 +5,7 @@ import { loadJsZip } from './external';
 interface ParsedBookPayload {
   title: string;
   author: string;
-  sourceType: 'txt' | 'epub';
+  sourceType: ImportedBook['sourceType'];
   chapters: BookChapter[];
 }
 
@@ -201,6 +201,16 @@ async function parseUploadedBook(file: File): Promise<ParsedBookPayload> {
       author: 'Unknown Author',
       sourceType: 'epub',
       chapters,
+    };
+  }
+
+  if (lowerName.endsWith('.pdf')) {
+    const { parsePdfBook } = await import('./pdf-parser');
+    return {
+      title,
+      author: 'Unknown Author',
+      sourceType: 'pdf',
+      chapters: await parsePdfBook(await file.arrayBuffer()),
     };
   }
 
