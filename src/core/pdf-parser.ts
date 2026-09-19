@@ -10,21 +10,21 @@ export async function parsePdfBook(buffer: ArrayBuffer): Promise<BookChapter[]> 
   const loadingTask = getDocument({ data: new Uint8Array(buffer) });
   try {
     const pdf = await loadingTask.promise;
-    const chapters: BookChapter[] = [];
+    const paragraphs: string[] = [];
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber);
       try {
         const content = await page.getTextContent();
-        const paragraphs = pdfPageParagraphs(content.items);
-        if (paragraphs.length > 0) chapters.push({ title: `Page ${pageNumber}`, paragraphs });
+        // Keep page boundaries as paragraph breaks, not reader chapter breaks.
+        for (const paragraph of pdfPageParagraphs(content.items)) paragraphs.push(paragraph);
       } finally {
         page.cleanup();
       }
     }
-    if (chapters.length === 0) {
+    if (paragraphs.length === 0) {
       throw new Error('No selectable text found in this PDF. Scanned PDFs are not supported yet.');
     }
-    return chapters;
+    return [{ title: 'Chapter 1', paragraphs }];
   } catch (error) {
     if (error instanceof Error && error.name === 'PasswordException') {
       throw new Error('This PDF is password-protected. Please import an unlocked copy.');

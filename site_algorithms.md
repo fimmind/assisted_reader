@@ -101,8 +101,9 @@ Line-end hyphens followed by a lowercase continuation are removed only within
 the same paragraph; punctuation spacing is normalized. Content order is retained
 without attempting column reconstruction.
 
-Each nonempty page becomes a normal `BookChapter` titled `Page N` (original page
-number). Empty pages are omitted. A document with no selectable text is rejected
+All pages contribute paragraphs to one normal `BookChapter` titled `Chapter 1`.
+Page order and paragraph boundaries are retained; paragraphs from different
+pages are not merged. Empty pages are omitted. A document with no selectable text is rejected
 with an explicit scanned-PDF message. Workers and page resources are released
 after extraction, including on errors. `books-store` persists only the normal
 book payload with filename-derived title and `sourceType: 'pdf'`; no PDF bytes

@@ -13,8 +13,9 @@ This README covers setup, build/run/deploy, and project structure.
 
 Use **Import Book** in the library to select TXT, EPUB, or PDF files. PDF text
 is extracted locally in the browser with PDF.js; no file is uploaded and the
-original PDF is not stored. Each nonempty PDF page becomes a `Page N` chapter
-in the normal book store and uses the existing vocabulary assistance.
+original PDF is not stored. All pages are imported as one chapter in the normal
+book store and use the existing vocabulary assistance. Paragraphs stay in page
+order, with a paragraph break at each page boundary; empty pages are skipped.
 
 PDF import joins wrapped lines and hyphenated line breaks, and uses line gaps
 and indentation to retain paragraph boundaries. It is intended for simple
