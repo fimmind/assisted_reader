@@ -1,6 +1,5 @@
 import type { BookChapter, ImportedBook } from './types';
-import { createId } from './math';
-import { loadJsZip } from './external';
+import { createId } from './math.js';
 
 interface ParsedBookPayload {
   title: string;
@@ -46,131 +45,6 @@ export function parseTxtBook(text: string): BookChapter[] {
   return chapters.filter((chapter) => chapter.paragraphs.length > 0);
 }
 
-function resolveRelativePath(basePath: string, relativePath: string): string {
-  const baseParts = basePath.split('/');
-  baseParts.pop();
-  const relParts = relativePath.split('/');
-
-  for (const part of relParts) {
-    if (part === '' || part === '.') {
-      continue;
-    }
-    if (part === '..') {
-      baseParts.pop();
-      continue;
-    }
-    baseParts.push(part);
-  }
-
-  return baseParts.join('/');
-}
-
-function parseXml(xmlText: string): Document {
-  const parser = new DOMParser();
-  return parser.parseFromString(xmlText, 'application/xml');
-}
-
-function parseHtml(htmlText: string): Document {
-  const parser = new DOMParser();
-  return parser.parseFromString(htmlText, 'text/html');
-}
-
-function extractChapterTitle(doc: Document, fallbackIndex: number): string {
-  const heading = doc.querySelector('h1, h2, title');
-  const value = heading?.textContent?.trim();
-  if (value && value.length > 0) {
-    return value;
-  }
-  return `Chapter ${fallbackIndex}`;
-}
-
-function splitFallbackParagraphs(text: string): string[] {
-  return normalizeParagraphs(text.split(/(?<=[.!?])\s+/));
-}
-
-async function parseEpubBook(buffer: ArrayBuffer): Promise<BookChapter[]> {
-  const JSZip = await loadJsZip();
-  const zip = await JSZip.loadAsync(buffer);
-
-  const containerFile = zip.file('META-INF/container.xml');
-  if (!containerFile) {
-    throw new Error('EPUB parsing failed: META-INF/container.xml not found.');
-  }
-
-  const containerXml = await containerFile.async('string');
-  const containerDoc = parseXml(containerXml);
-  const rootfile = containerDoc.querySelector('rootfile');
-  const opfPath = rootfile?.getAttribute('full-path');
-  if (!opfPath) {
-    throw new Error('EPUB parsing failed: OPF package path is missing in container.xml.');
-  }
-
-  const opfFile = zip.file(opfPath);
-  if (!opfFile) {
-    throw new Error(`EPUB parsing failed: OPF file missing at path=${opfPath}`);
-  }
-
-  const opfXml = await opfFile.async('string');
-  const opfDoc = parseXml(opfXml);
-  const manifestItems = new Map<string, string>();
-
-  const manifestNodes = Array.from(opfDoc.querySelectorAll('manifest > item'));
-  for (const item of manifestNodes) {
-    const id = item.getAttribute('id');
-    const href = item.getAttribute('href');
-    if (!id || !href) {
-      continue;
-    }
-    manifestItems.set(id, href);
-  }
-
-  const spineRefs = Array.from(opfDoc.querySelectorAll('spine > itemref'));
-  const chapters: BookChapter[] = [];
-
-  for (let index = 0; index < spineRefs.length; index += 1) {
-    const itemRef = spineRefs[index];
-    const idRef = itemRef.getAttribute('idref');
-    if (!idRef) {
-      continue;
-    }
-    const href = manifestItems.get(idRef);
-    if (!href) {
-      continue;
-    }
-
-    const contentPath = resolveRelativePath(opfPath, href);
-    const chapterFile = zip.file(contentPath);
-    if (!chapterFile) {
-      continue;
-    }
-
-    const chapterMarkup = await chapterFile.async('string');
-    const chapterDoc = parseHtml(chapterMarkup);
-    const title = extractChapterTitle(chapterDoc, index + 1);
-
-    const paragraphNodes = Array.from(chapterDoc.querySelectorAll('p'));
-    let paragraphs = paragraphNodes
-      .map((node) => node.textContent ?? '')
-      .map((text) => text.replace(/\s+/g, ' ').trim())
-      .filter((text) => text.length > 0);
-
-    if (paragraphs.length === 0) {
-      const fallbackText = chapterDoc.body?.textContent ?? chapterDoc.documentElement.textContent ?? '';
-      paragraphs = splitFallbackParagraphs(fallbackText);
-    }
-
-    if (paragraphs.length > 0) {
-      chapters.push({ title, paragraphs });
-    }
-  }
-
-  if (chapters.length === 0) {
-    throw new Error('EPUB parsing failed: no readable chapters found in spine content.');
-  }
-
-  return chapters;
-}
-
 function inferTitleFromFileName(fileName: string): string {
   const withoutExtension = fileName.replace(/\.[^.]+$/, '');
   if (withoutExtension.trim().length === 0) {
@@ -195,12 +69,24 @@ async function parseUploadedBook(file: File): Promise<ParsedBookPayload> {
 
   if (lowerName.endsWith('.epub')) {
     const buffer = await file.arrayBuffer();
-    const chapters = await parseEpubBook(buffer);
+    const { parseEpubBook } = await import('./epub-parser.js');
+    const epub = await parseEpubBook(buffer);
     return {
-      title,
-      author: 'Unknown Author',
+      title: epub.title || title,
+      author: epub.author || 'Unknown Author',
       sourceType: 'epub',
-      chapters,
+      chapters: epub.chapters,
+    };
+  }
+
+  if (lowerName.endsWith('.fb2')) {
+    const { parseFb2Book } = await import('./fb2-parser.js');
+    const fb2 = parseFb2Book(await file.arrayBuffer());
+    return {
+      title: fb2.title || title,
+      author: fb2.author || 'Unknown Author',
+      sourceType: 'fb2',
+      chapters: fb2.chapters,
     };
   }
 

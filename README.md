@@ -11,11 +11,26 @@ This README covers setup, build/run/deploy, and project structure.
 
 ## Importing books
 
-Use **Import Book** in the library to select TXT, EPUB, or PDF files. PDF text
+EPUB import runs locally with a bundled ZIP reader, without a CDN dependency.
+It uses the book's title and author when available, reads chapters in spine
+order, and retains paragraphs, lists, and div-based prose. Navigation documents
+and supplementary non-linear spine items are skipped. Missing chapters and
+invalid archives produce an import error. Image-only and DRM-protected books
+are not supported. Only extracted text and metadata are stored.
+
+FB2 import reads uncompressed `.fb2` files locally, including UTF-8, UTF-16,
+and XML-declared encodings such as Windows-1251. It preserves title/author
+metadata, nested sections, paragraphs and verse. The separate notes body and
+embedded images are omitted; malformed or empty books produce an import error.
+
+Use **Import Book** in the library to select TXT, EPUB, FB2, or PDF files. PDF text
 is extracted locally in the browser with PDF.js; no file is uploaded and the
 original PDF is not stored. All pages are imported as one chapter in the normal
 book store and use the existing vocabulary assistance. Paragraphs stay in page
-order, with a paragraph break at each page boundary; empty pages are skipped.
+order. Repeated, isolated margin headers/footers and page numbers are removed.
+Likely paragraph continuations across adjacent pages are joined, including
+hyphenated words. Ambiguous boundaries, indents, headings and blank pages remain
+separate. Re-import existing PDFs to apply these improvements.
 
 PDF import joins wrapped lines and hyphenated line breaks, and uses line gaps
 and indentation to retain paragraph boundaries. It is intended for simple

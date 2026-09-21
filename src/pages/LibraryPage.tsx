@@ -534,6 +534,8 @@ export default function LibraryPage() {
               className="flex gap-2 text-muted-foreground hover:text-foreground"
               onClick={triggerImport}
               disabled={isImporting}
+              aria-label="Import book (TXT, EPUB, FB2, or PDF)"
+              title="Import TXT, EPUB, FB2, or PDF"
             >
               <Upload size={18} />
               <span className="hidden sm:inline">{isImporting ? 'Importing...' : 'Import Book'}</span>
@@ -569,7 +571,7 @@ export default function LibraryPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".txt,.epub,.pdf"
+          accept=".txt,.epub,.fb2,.pdf,text/plain,application/epub+zip,application/x-fictionbook+xml,application/pdf"
           multiple
           className="hidden"
           onChange={onImportFiles}

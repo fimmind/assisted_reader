@@ -1,6 +1,7 @@
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { pdfPageParagraphs } from './pdf-text';
+import { pdfDocumentParagraphs, pdfTextLines } from './pdf-text';
+import type { PdfTextPage } from './pdf-text';
 import type { BookChapter } from './types';
 
 // Vite emits the matching worker locally, including under a deployment base path.
@@ -10,17 +11,23 @@ export async function parsePdfBook(buffer: ArrayBuffer): Promise<BookChapter[]> 
   const loadingTask = getDocument({ data: new Uint8Array(buffer) });
   try {
     const pdf = await loadingTask.promise;
-    const paragraphs: string[] = [];
+    const pages: PdfTextPage[] = [];
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber);
       try {
         const content = await page.getTextContent();
-        // Keep page boundaries as paragraph breaks, not reader chapter breaks.
-        for (const paragraph of pdfPageParagraphs(content.items)) paragraphs.push(paragraph);
+        const [x, y, right, top] = page.view;
+        pages.push({
+          lines: pdfTextLines(content.items).map((line) => ({ ...line, x: line.x - x, y: line.y - y })),
+          width: right - x,
+          height: top - y,
+          rotated: page.rotate !== 0,
+        });
       } finally {
         page.cleanup();
       }
     }
+    const paragraphs = pdfDocumentParagraphs(pages);
     if (paragraphs.length === 0) {
       throw new Error('No selectable text found in this PDF. Scanned PDFs are not supported yet.');
     }

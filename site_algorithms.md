@@ -91,6 +91,33 @@ EPUB (`parseEpubBook`):
 
 ---
 
+### EPUB import (React reader)
+
+`src/core/book-parser.ts` lazily loads `epub-parser.ts`, including bundled JSZip,
+when importing EPUB. No CDN script or server upload is needed. Namespace-aware
+XML parsing resolves the container, package metadata, manifest and spine. Chapter
+paths resolve relative to the OPF, including parent paths, URL escapes and fragments.
+Navigation documents and `linear="no"` spine entries are skipped. Missing chapter
+files fail the import instead of silently producing an incomplete book.
+
+An inert HTML document is walked in document order, retaining paragraphs, headings,
+lists and container text without duplicating nested blocks. Scripts, styles,
+navigation and explicitly hidden elements are removed. The first body heading
+becomes the chapter title, with document title and numbered chapter fallbacks.
+Package title and creators populate book metadata, falling back to the filename
+and Unknown Author. Only ordinary book text and metadata are persisted.
+
+### FB2 import (React reader)
+
+`book-parser.ts` lazily loads `fb2-parser.ts` for uncompressed `.fb2` files.
+TextDecoder honors UTF-16 byte order and XML-declared encodings, with UTF-8 as
+the default. DOMParser validates FictionBook XML; DTDs are rejected. Title and
+authors come from `description/title-info`, with filename/Unknown Author
+fallbacks. Body sections are walked in document order, flushing parent prose
+before nested chapters to avoid duplication. Paragraphs, verse, subtitles and
+table row text are retained; images, binary data and the named notes body are
+omitted. The normal book store preserves `sourceType: 'fb2'`.
+
 ### PDF import (React reader)
 
 `src/core/book-parser.ts` lazily loads `pdf-parser.ts` for local `.pdf` files.
@@ -101,14 +128,26 @@ Line-end hyphens followed by a lowercase continuation are removed only within
 the same paragraph; punctuation spacing is normalized. Content order is retained
 without attempting column reconstruction.
 
+Document cleanup examines up to two isolated lines in the top/bottom 10% of each
+unrotated page. Normalized recurring text and decimal/Roman page numbers must
+occur on at least two pages and 40% of nonempty pages before removal. Numbered
+chapter headings and lines without a separating gap are retained.
+
+Adjacent pages are joined only when the previous text has no sentence-ending
+punctuation and the next starts lowercase, both lie near their page boundaries,
+font heights and left margins agree, and the next line is not indented.
+Hyphenated continuations use the same repair as wrapped lines. Empty pages and
+rotated pages prevent joining. These conservative heuristics may leave ambiguous
+headers and paragraph continuations unchanged.
+
 All pages contribute paragraphs to one normal `BookChapter` titled `Chapter 1`.
-Page order and paragraph boundaries are retained; paragraphs from different
-pages are not merged. Empty pages are omitted. A document with no selectable text is rejected
+Page order is retained. A document with no selectable text is rejected
 with an explicit scanned-PDF message. Workers and page resources are released
 after extraction, including on errors. `books-store` persists only the normal
 book payload with filename-derived title and `sourceType: 'pdf'`; no PDF bytes
 or Blob are retained. Reader analysis, POS, dictionary lookup and click handling
-use the same pipeline as TXT and EPUB.
+use the same pipeline as TXT, EPUB and FB2. Existing imported PDFs must be
+re-imported to apply the new extraction rules.
 
 ## 2. Deinflection
 

@@ -76,7 +76,6 @@ export const TITLE_CASE_NOISE = new Set<string>([
   'from',
 ]);
 
-export const JSZIP_CDN_URL = 'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js';
 export const COMPROMISE_CDN_URL = 'https://unpkg.com/compromise@14.15.0/builds/compromise.min.js';
 
 export const ADAPTIVE_TOP_K = 3;

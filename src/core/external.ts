@@ -1,13 +1,4 @@
-import { COMPROMISE_CDN_URL, JSZIP_CDN_URL } from './constants';
-
-type JsZipGlobal = {
-  loadAsync: (data: ArrayBuffer) => Promise<JsZipFile>;
-};
-
-type JsZipFile = {
-  files: Record<string, { dir?: boolean }>;
-  file: (path: string) => { async: (kind: 'string') => Promise<string> } | null;
-};
+import { COMPROMISE_CDN_URL } from './constants';
 
 type CompromiseDoc = {
   terms: () => {
@@ -24,7 +15,6 @@ type CompromiseGlobal = {
 
 declare global {
   interface Window {
-    JSZip?: JsZipGlobal;
     nlp?: CompromiseGlobal;
   }
 }
@@ -71,17 +61,6 @@ function loadScript(url: string): Promise<void> {
     }, { once: true });
     document.head.appendChild(script);
   });
-}
-
-export async function loadJsZip(): Promise<JsZipGlobal> {
-  if (window.JSZip) {
-    return window.JSZip;
-  }
-  await loadScript(JSZIP_CDN_URL);
-  if (!window.JSZip) {
-    throw new Error('JSZip failed to initialize after script load.');
-  }
-  return window.JSZip;
 }
 
 export async function loadCompromise(): Promise<CompromiseGlobal | null> {
