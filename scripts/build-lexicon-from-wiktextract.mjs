@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import { once } from 'node:events';
 import https from 'node:https';
 import path from 'node:path';
-import readline from 'node:readline';
 import zlib from 'node:zlib';
 import {
   CANONICAL_PARTS_OF_SPEECH,
@@ -40,6 +39,28 @@ function resolveBucketId(word, bucketCount) {
 
 function normalizeSpaces(value) {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+async function* readLfSeparatedLines(inputStream) {
+  inputStream.setEncoding('utf8');
+  let remainder = '';
+
+  for await (const chunk of inputStream) {
+    const text = remainder + chunk;
+    let lineStart = 0;
+    let lineEnd = text.indexOf('\n', lineStart);
+    while (lineEnd >= 0) {
+      const line = text.slice(lineStart, lineEnd);
+      yield line.endsWith('\r') ? line.slice(0, -1) : line;
+      lineStart = lineEnd + 1;
+      lineEnd = text.indexOf('\n', lineStart);
+    }
+    remainder = text.slice(lineStart);
+  }
+
+  if (remainder.length > 0) {
+    yield remainder.endsWith('\r') ? remainder.slice(0, -1) : remainder;
+  }
 }
 
 function normalizePartOfSpeech(value, unmappedPartsOfSpeech) {
@@ -371,12 +392,11 @@ async function partitionEnglishLexicon(inputPath, partitionDir) {
   const unmappedPartsOfSpeech = new Set();
   const inputStream = fs.createReadStream(inputPath);
   const textStream = inputPath.endsWith('.gz') ? inputStream.pipe(zlib.createGunzip()) : inputStream;
-  const lineReader = readline.createInterface({ input: textStream, crlfDelay: Infinity });
   let scannedLines = 0;
   let compatibleRecords = 0;
 
   try {
-    for await (const line of lineReader) {
+    for await (const line of readLfSeparatedLines(textStream)) {
       scannedLines += 1;
       if (scannedLines % EXTRACT_PROGRESS_LINE_INTERVAL === 0) {
         console.log('lexicon-extract-progress', { scannedLines, compatibleRecords });
@@ -429,12 +449,8 @@ async function partitionEnglishLexicon(inputPath, partitionDir) {
 
 async function loadPartitionEntries(partitionPath) {
   const entryMap = new Map();
-  const lineReader = readline.createInterface({
-    input: fs.createReadStream(partitionPath),
-    crlfDelay: Infinity,
-  });
   let lineNumber = 0;
-  for await (const line of lineReader) {
+  for await (const line of readLfSeparatedLines(fs.createReadStream(partitionPath))) {
     lineNumber += 1;
     if (line.length === 0) {
       continue;
