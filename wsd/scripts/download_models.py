@@ -19,6 +19,7 @@ MODELS = {
     "wsl-retriever": "Babelscape/wsl-retriever-e5-base-v2",
 }
 MODEL_FILES = [
+    "*.bin",
     "*.json",
     "*.model",
     "*.safetensors",
@@ -36,6 +37,15 @@ def download_model(repository: str, target: Path) -> None:
     for attempt in range(1, 4):
         try:
             snapshot_download(repository, local_dir=target, allow_patterns=MODEL_FILES)
+            weight_files = [
+                *target.glob("*.safetensors"),
+                *target.glob("*.bin"),
+            ]
+            if not weight_files:
+                raise FileNotFoundError(
+                    f"Downloaded model has no weight file: repository={repository!r}, "
+                    f"target={str(target)!r}; the repository may require access approval"
+                )
             return
         except Exception as error:
             last_error = error

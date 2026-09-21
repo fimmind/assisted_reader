@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import sys
 import math
 import re
+import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -340,15 +340,20 @@ class WordNetSenseEmbeddingRanker(EmbeddingRanker):
         if not model_path.exists():
             raise FileNotFoundError("WordNet sense embedding is missing. Run: uv run python scripts/download_models.py wordnet-sense-embedding")
         sys.path.insert(0, str(model_path))
-        # The published helper assumes POSIX paths when deciding whether it is
-        # loading a checkpoint. Build its two modules directly so the same
-        # target-token pooling works on Windows and current sentence-transformers.
-        from sentence_transformers import SentenceTransformer
-        from sentence_transformers.models import Transformer
         from word_pooling import WordPooling
+        from word_pooling import WordSenseTransformer
 
-        transformer = Transformer(str(model_path))
-        self.model = SentenceTransformer(modules=[transformer, WordPooling(transformer.get_embedding_dimension())])
+        # WordSenseTransformer.tokenize creates the word_mask consumed by
+        # WordPooling. Current sentence-transformers cannot resolve the
+        # checkpoint's training-script module path and silently substitutes
+        # ordinary mean pooling, so replace that parameter-free module.
+        self.model = WordSenseTransformer(str(model_path), local_files_only=True)
+        transformer = self.model._first_module()
+        self.model._modules["1"] = WordPooling(
+            transformer.get_embedding_dimension()
+        )
+        if not any(isinstance(module, WordPooling) for module in self.model):
+            raise TypeError(f"Word-sense model has no target-word pooling module: {model_path}")
 
     @staticmethod
     def context_input(example: dict) -> str:

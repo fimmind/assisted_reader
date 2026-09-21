@@ -76,8 +76,14 @@ def main() -> None:
                     "lemma": lemma,
                     "pos": pos.lower(),
                     "candidates": [
-                        {"sense_id": candidate.name(), "gloss": candidate.definition(), "frequency": sum(item.count() for item in candidate.lemmas())}
-                        for candidate in candidates
+                        {
+                            "sense_id": candidate.name(),
+                            "gloss": candidate.definition(),
+                            # wn.synsets preserves WordNet's sense-number order,
+                            # including morphological lookup such as best -> good.
+                            "original_rank": index,
+                        }
+                        for index, candidate in enumerate(candidates)
                     ],
                     "gold": sorted(gold_synsets),
                 }
