@@ -106,8 +106,18 @@ chapters declared as HTML use HTML parsing directly. Missing spine entries and
 empty extracted text have separate errors; empty text is not treated as proof
 of DRM. An inert document is walked in document order, retaining paragraphs, headings,
 lists and container text without duplicating nested blocks. Scripts, styles,
-navigation and explicitly hidden elements are removed. The first body heading
-becomes the chapter title, with document title and numbered chapter fallbacks.
+navigation and explicitly hidden elements are removed. Headings remain in the
+text. EPUB 3 `nav` with `epub:type="toc"` is preferred; EPUB 2 NCX `navMap`
+is tried next. Page-list and landmark navigation do not define chapters.
+TOC paths resolve relative to the navigation file, and decoded fragment IDs
+map to text positions within content files. Consecutive text belongs to its
+preceding TOC entry, including across spine file boundaries. Duplicate opening
+positions use the last label; text before the first entry is kept as front matter.
+Missing targets, unresolved anchors, malformed navigation or backwards entries
+invalidate that TOC. If no usable TOC remains, all readable spine text becomes
+one `Chapter 1`, without guessing chapter boundaries from files or headings.
+Missing actual spine content still fails import instead of losing book text.
+Existing EPUBs must be re-imported to use the new grouping.
 Package title and creators populate book metadata, falling back to the filename
 and Unknown Author. Only ordinary book text and metadata are persisted.
 

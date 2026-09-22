@@ -38,8 +38,7 @@ test('EPUB upload preserves metadata, spine order and mixed block content', asyn
   assert.equal(imported.author, 'An Author');
   assert.equal(imported.currentChapter, 1);
   assert.deepEqual(imported.chapters, [
-    { title: 'First Chapter', paragraphs: ['Hello world & friends.', 'Div prose.', 'Nested paragraph.', 'Trailing prose.', 'List item.', 'Line one.', 'Line two.'] },
-    { title: 'Second Chapter', paragraphs: ['Plain body text.'] },
+    { title: 'Chapter 1', paragraphs: ['First Chapter', 'Hello world & friends.', 'Div prose.', 'Nested paragraph.', 'Trailing prose.', 'List item.', 'Line one.', 'Line two.', 'Plain body text.'] },
   ]);
 });
 
@@ -82,8 +81,7 @@ test('EPUB XHTML self-closing head tags do not swallow chapters after an image c
     <body><h2>Chapter One</h2><p>Alice followed the rabbit.</p><p/><p>The next paragraph.</p></body></html>`);
   const imported = await importBookFromFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'self-closing.epub'));
   assert.deepEqual(imported.chapters, [
-    { title: 'Chapter One', paragraphs: ['Alice followed the rabbit.', 'The next paragraph.'] },
-    { title: 'Second Chapter', paragraphs: ['Plain body text.'] },
+    { title: 'Chapter 1', paragraphs: ['Chapter One', 'Alice followed the rabbit.', 'The next paragraph.', 'Plain body text.'] },
   ]);
 });
 
@@ -93,7 +91,79 @@ test('EPUB retains prefixed XHTML and CDATA, with a fallback for mislabeled HTML
   zip.file('Text/second.xhtml', '<html><head><title>Legacy chapter</title></head><body><p>Legacy&nbsp;text.<br>More text.</p></body></html>');
   const imported = await importBookFromFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'mixed.epub'));
   assert.deepEqual(imported.chapters, [
-    { title: 'Namespaced chapter', paragraphs: ['Text & more text.'] },
-    { title: 'Legacy chapter', paragraphs: ['Legacy text.', 'More text.'] },
+    { title: 'Chapter 1', paragraphs: ['Namespaced chapter', 'Text & more text.', 'Legacy text.', 'More text.'] },
   ]);
+});
+
+async function navigationBook(nav?: string, ncx?: string): Promise<File> {
+  const zip = new JSZip();
+  zip.file('META-INF/container.xml', '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>');
+  zip.file('OPS/book.opf', `<package><manifest>
+    <item id="a" href="Text/a.xhtml" media-type="application/xhtml+xml"/>
+    <item id="b" href="Text/b.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c" href="Text/c.xhtml" media-type="application/xhtml+xml"/>
+    ${nav === undefined ? '' : '<item id="nav" href="Nav/nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>'}
+    ${ncx === undefined ? '' : '<item id="ncx" href="Nav/toc.ncx" media-type="application/x-dtbncx+xml"/>'}
+    </manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/></spine></package>`);
+  zip.file('OPS/Text/a.xhtml', '<html><body><p>Opening.</p><h1 id="one">First heading</h1><p>First page.</p></body></html>');
+  zip.file('OPS/Text/b.xhtml', '<html><body><p>Second page.</p><p id="two words">Next chapter.</p><p>More text.</p></body></html>');
+  zip.file('OPS/Text/c.xhtml', '<html><body><p>Last page.</p></body></html>');
+  if (nav !== undefined) zip.file('OPS/Nav/nav.xhtml', nav);
+  if (ncx !== undefined) zip.file('OPS/Nav/toc.ncx', ncx);
+  return new File([await zip.generateAsync({ type: 'arraybuffer' })], 'navigation.epub');
+}
+
+const navDocument = (links: string) => `<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+  <nav epub:type="page-list"><ol><li><a href="../Text/a.xhtml">1</a></li><li><a href="../Text/b.xhtml">2</a></li></ol></nav>
+  <nav epub:type="toc"><ol>${links}</ol></nav></body></html>`;
+const ncxDocument = (points: string) => `<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>${points}</navMap></ncx>`;
+const point = (label: string, href: string) => `<navPoint><navLabel><text>${label}</text></navLabel><content src="${href}"/></navPoint>`;
+const allParagraphs = ['Opening.', 'First heading', 'First page.', 'Second page.', 'Next chapter.', 'More text.', 'Last page.'];
+
+test('EPUB 3 TOC groups pages, resolves encoded fragments, and ignores page-list navigation', async () => {
+  const nav = navDocument('<li><a href="../Text/a.xhtml#one">One</a></li><li><a href="../Text/b.xhtml#two%20words">Two</a></li>');
+  const imported = await importBookFromFile(await navigationBook(nav));
+  assert.deepEqual(imported.chapters, [
+    { title: 'Front matter', paragraphs: ['Opening.'] },
+    { title: 'One', paragraphs: ['First heading', 'First page.', 'Second page.'] },
+    { title: 'Two', paragraphs: ['Next chapter.', 'More text.', 'Last page.'] },
+  ]);
+});
+
+test('EPUB 2 NCX groups multiple content files under a chapter', async () => {
+  const imported = await importBookFromFile(await navigationBook(undefined, ncxDocument(point('One', '../Text/a.xhtml') + point('Two', '../Text/c.xhtml'))));
+  assert.deepEqual(imported.chapters, [
+    { title: 'One', paragraphs: allParagraphs.slice(0, 6) },
+    { title: 'Two', paragraphs: ['Last page.'] },
+  ]);
+});
+
+test('EPUB NCX splits chapters inside one file and deduplicates nested opening entries', async () => {
+  const ncx = ncxDocument(`<navPoint><navLabel><text>Part</text></navLabel><content src="../Text/a.xhtml"/>
+    ${point('One', '../Text/a.xhtml')}${point('Two', '../Text/a.xhtml#one')}</navPoint>`);
+  const imported = await importBookFromFile(await navigationBook(undefined, ncx));
+  assert.deepEqual(imported.chapters, [
+    { title: 'One', paragraphs: ['Opening.'] },
+    { title: 'Two', paragraphs: allParagraphs.slice(1) },
+  ]);
+});
+
+test('EPUB prefers EPUB 3 navigation, but tries NCX when it cannot resolve that navigation', async () => {
+  const ncx = ncxDocument(point('NCX chapter', '../Text/a.xhtml'));
+  const good = navDocument('<li><a href="../Text/a.xhtml">Navigation chapter</a></li>');
+  assert.equal((await importBookFromFile(await navigationBook(good, ncx))).chapters[0].title, 'Navigation chapter');
+  const bad = navDocument('<li><a href="../Text/a.xhtml#missing">Broken</a></li>');
+  assert.equal((await importBookFromFile(await navigationBook(bad, ncx))).chapters[0].title, 'NCX chapter');
+});
+
+test('EPUB missing, malformed, empty, external, partial or unordered TOCs fall back to one complete chapter', async () => {
+  for (const nav of [undefined, '<broken', navDocument(''),
+    navDocument('<li><a href="https://example.com/book">External</a></li>'),
+    navDocument('<li><a href="../Text/a.xhtml">Good</a></li><li><a href="../Text/missing.xhtml">Missing</a></li>'),
+    navDocument('<li><a href="../Text/a.xhtml#absent">Missing anchor</a></li>'),
+    navDocument('<li><a href="../Text/c.xhtml">Last</a></li><li><a href="../Text/a.xhtml">First</a></li>'),
+  ]) {
+    const imported = await importBookFromFile(await navigationBook(nav));
+    assert.deepEqual(imported.chapters, [{ title: 'Chapter 1', paragraphs: allParagraphs }]);
+  }
 });

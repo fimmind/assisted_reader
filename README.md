@@ -12,8 +12,13 @@ This README covers setup, build/run/deploy, and project structure.
 ## Importing books
 
 EPUB import runs locally with a bundled ZIP reader, without a CDN dependency.
-It uses the book's title and author when available, reads chapters in spine
-order, and retains paragraphs, lists, and div-based prose. Navigation documents
+It uses the book's title and author when available and reads text in spine
+order. EPUB 3 navigation or EPUB 2 NCX contents determine chapter titles and
+boundaries, including chapters spread across files and links into a file.
+If neither table of contents is usable, the entire book becomes one chapter.
+Text before the first chapter is retained as front matter. Re-import existing
+EPUBs to apply this grouping. Paragraphs, headings, lists and div-based prose
+are retained. Navigation documents
 and supplementary non-linear spine items are skipped. Missing chapters and
 invalid archives produce an import error. Image-only and DRM-protected books
 are not supported. Only extracted text and metadata are stored.
