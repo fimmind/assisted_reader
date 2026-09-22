@@ -19,12 +19,27 @@ function resolvePath(base: string, href: string): string {
 
 // Walk blocks in document order, retaining lists, headings and div-based prose
 // without duplicating text from nested containers or executing book markup.
-function chapterContent(markup: string, index: number): BookChapter {
-  const doc = new DOMParser().parseFromString(markup, 'text/html');
+function chapterContent(markup: string, index: number, mediaType: string): BookChapter {
+  let doc: Document;
+  if (mediaType === 'application/xhtml+xml') {
+    // XHTML permits <title/> and <script/>. HTML parsing treats these as
+    // unclosed tags and can swallow the entire chapter into the head.
+    try {
+      doc = parseXml(markup);
+    } catch {
+      // Some older EPUBs label HTML (e.g. unescaped entities) as XHTML.
+      doc = new DOMParser().parseFromString(markup, 'text/html');
+    }
+  } else {
+    doc = new DOMParser().parseFromString(markup, 'text/html');
+  }
   doc.querySelectorAll('script, style, nav, noscript, template, [hidden], [aria-hidden="true"]')
     .forEach((node) => node.remove());
-  const heading = doc.body.querySelector('h1, h2');
-  const title = normalize(heading?.textContent || doc.title || '') || `Chapter ${index}`;
+  const body = elements(doc, 'body')[0];
+  if (!body) throw new Error(`EPUB chapter ${index} has no readable body.`);
+  const heading = Array.from(body.getElementsByTagNameNS('*', '*'))
+    .find((node) => node.localName === 'h1' || node.localName === 'h2');
+  const title = normalize(heading?.textContent || elements(doc, 'title')[0]?.textContent || '') || `Chapter ${index}`;
   const paragraphs: string[] = [];
   let current = '';
   const flush = () => {
@@ -35,7 +50,7 @@ function chapterContent(markup: string, index: number): BookChapter {
   const blocks = new Set(['p', 'div', 'section', 'article', 'blockquote', 'li', 'ul', 'ol',
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'tr', 'dl', 'dt', 'dd', 'hr']);
   const visit = (node: Node) => {
-    if (node.nodeType === 3) { current += node.textContent ?? ''; return; }
+    if (node.nodeType === 3 || node.nodeType === 4) { current += node.textContent ?? ''; return; }
     if (node.nodeType !== 1) return;
     const element = node as Element;
     const tag = element.localName;
@@ -46,7 +61,7 @@ function chapterContent(markup: string, index: number): BookChapter {
     if (tag === 'td' || tag === 'th') current += ' ';
     if (blocks.has(tag)) flush();
   };
-  visit(doc.body);
+  visit(body);
   flush();
   return { title, paragraphs };
 }
@@ -78,8 +93,10 @@ export async function parseEpubBook(buffer: ArrayBuffer): Promise<{
     const title = normalize(metadata ? elements(metadata, 'title')[0]?.textContent ?? '' : '');
     const author = metadata ? elements(metadata, 'creator').map((node) => normalize(node.textContent ?? '')).filter(Boolean).join(', ') : '';
     const manifest = new Map(elements(opf, 'item').map((item) => [item.getAttribute('id'), item]));
+    const spineRefs = elements(opf, 'itemref');
+    if (!spineRefs.length) throw new Error('Could not read the EPUB chapter list.');
     const chapters: BookChapter[] = [];
-    for (const ref of elements(opf, 'itemref')) {
+    for (const ref of spineRefs) {
       if (ref.getAttribute('linear') === 'no') continue;
       const item = manifest.get(ref.getAttribute('idref'));
       const href = item?.getAttribute('href');
@@ -91,10 +108,10 @@ export async function parseEpubBook(buffer: ArrayBuffer): Promise<{
       }
       const path = resolvePath(opfPath, href);
       if (encryptedPaths.has(path)) throw new Error('DRM-protected EPUB chapters are not supported. Please import an unlocked copy.');
-      const chapter = chapterContent(await read(path), chapters.length + 1);
+      const chapter = chapterContent(await read(path), chapters.length + 1, mediaType);
       if (chapter.paragraphs.length) chapters.push(chapter);
     }
-    if (!chapters.length) throw new Error('No readable chapters found. Image-only and DRM-protected EPUBs are not supported.');
+    if (!chapters.length) throw new Error('No readable text could be extracted from this EPUB. This does not necessarily mean the book is image-only or DRM-protected.');
     return { title, author, chapters };
   } catch (error) {
     throw new Error(`Could not import EPUB: ${error instanceof Error ? error.message : 'Invalid book.'}`);

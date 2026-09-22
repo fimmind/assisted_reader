@@ -100,7 +100,11 @@ paths resolve relative to the OPF, including parent paths, URL escapes and fragm
 Navigation documents and `linear="no"` spine entries are skipped. Missing chapter
 files fail the import instead of silently producing an incomplete book.
 
-An inert HTML document is walked in document order, retaining paragraphs, headings,
+XHTML chapters are parsed as XML so self-closing elements such as `<title/>`
+cannot swallow chapter text. Invalid legacy XHTML falls back to HTML parsing;
+chapters declared as HTML use HTML parsing directly. Missing spine entries and
+empty extracted text have separate errors; empty text is not treated as proof
+of DRM. An inert document is walked in document order, retaining paragraphs, headings,
 lists and container text without duplicating nested blocks. Scripts, styles,
 navigation and explicitly hidden elements are removed. The first body heading
 becomes the chapter title, with document title and numbered chapter fallbacks.
