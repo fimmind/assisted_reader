@@ -6,11 +6,19 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW = ROOT / "data" / "raw" / "WSD_Evaluation_Framework" / "Evaluation_Datasets"
 OUT = ROOT / "data" / "processed"
 WN_POS = {"NOUN": "n", "VERB": "v", "ADJ": "a", "ADV": "r"}
+SITE_POS = {"NOUN": "noun", "VERB": "verb", "ADJ": "adjective", "ADV": "adverb"}
+
+
+class SynsetLike(Protocol):
+    def name(self) -> str: ...
+
+    def definition(self) -> str: ...
 
 
 def sentence_text(sentence: ET.Element) -> str:
@@ -18,8 +26,6 @@ def sentence_text(sentence: ET.Element) -> str:
 
 
 def target_char_start(sentence: ET.Element, instance: ET.Element) -> int:
-    tokens = [(token.text or "").strip() for token in sentence if (token.text or "").strip()]
-    target = (instance.text or "").strip()
     index = next(index for index, token in enumerate(sentence) if token is instance)
     before = [((token.text or "").strip()) for token in list(sentence)[:index] if (token.text or "").strip()]
     return len(" ".join(before)) + (1 if before else 0)
@@ -32,6 +38,17 @@ def gold_by_id(path: Path) -> dict[str, list[str]]:
         if len(parts) >= 2:
             values[parts[0]] = parts[1:]
     return values
+
+
+def unique_synsets(synsets: list[SynsetLike]) -> list[SynsetLike]:
+    seen: set[str] = set()
+    unique: list[SynsetLike] = []
+    for synset in synsets:
+        name = synset.name()
+        if name not in seen:
+            seen.add(name)
+            unique.append(synset)
+    return unique
 
 
 def main() -> None:
@@ -58,9 +75,10 @@ def main() -> None:
                 lemma = instance.attrib["<lemma"] if "<lemma" in instance.attrib else instance.attrib.get("lemma", "")
                 pos = instance.attrib.get("pos", "")
                 wn_pos = WN_POS.get(pos)
-                if not lemma or not wn_pos:
+                site_pos = SITE_POS.get(pos)
+                if not lemma or not wn_pos or not site_pos:
                     continue
-                candidates = list(wn.synsets(lemma, pos=wn_pos))
+                candidates = unique_synsets(list(wn.synsets(lemma, pos=wn_pos)))
                 if len(candidates) < 2:
                     continue
                 gold_synsets = {wn.lemma_from_key(key).synset().name() for key in sense_keys}
@@ -74,11 +92,12 @@ def main() -> None:
                     "target": target,
                     "target_start": target_char_start(sentence, instance),
                     "lemma": lemma,
-                    "pos": pos.lower(),
+                    "pos": site_pos,
                     "candidates": [
                         {
                             "sense_id": candidate.name(),
                             "gloss": candidate.definition(),
+                            "part_of_speech": site_pos,
                             # wn.synsets preserves WordNet's sense-number order,
                             # including morphological lookup such as best -> good.
                             "original_rank": index,

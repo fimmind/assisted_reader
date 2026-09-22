@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import argparse
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -20,7 +20,16 @@ def main() -> None:
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         record = json.loads(line)
         records.append(record)
-        required = {"id", "dataset", "context", "target", "lemma", "pos", "candidates"}
+        required = {
+            "id",
+            "dataset",
+            "context",
+            "target",
+            "target_start",
+            "lemma",
+            "pos",
+            "candidates",
+        }
         missing = required - record.keys()
         if missing:
             errors.append(f"line {line_number}: missing {sorted(missing)}")
@@ -30,6 +39,14 @@ def main() -> None:
         if record["id"] in ids:
             errors.append(f"line {line_number}: duplicate id {record['id']}")
         ids.add(record["id"])
+        target_start = record["target_start"]
+        target_end = target_start + len(record["target"]) if type(target_start) is int else -1
+        if (
+            type(target_start) is not int
+            or target_start < 0
+            or record["context"][target_start:target_end] != record["target"]
+        ):
+            errors.append(f"line {line_number}: target_start does not identify target occurrence")
         actual_matching = sum(candidate.get("part_of_speech") == record.get("pos") for candidate in record["candidates"])
         if record.get("number_of_candidates", len(record["candidates"])) != len(record["candidates"]):
             errors.append(f"line {line_number}: incorrect number_of_candidates")

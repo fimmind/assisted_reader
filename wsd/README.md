@@ -19,8 +19,9 @@ and deployment recommendation.
 1. Create an isolated environment: `uv sync`
 2. Download data and WordNet: `uv run python scripts/download_data.py`
 3. Download models: `uv run python scripts/download_models.py e5-small wordnet-sense-embedding`
-4. Convert Raganato ALL: `uv run python scripts/prepare_raganato.py --dataset ALL`
-4. Run baselines: `uv run python scripts/evaluate.py --dataset raganato-all --model mfs pos-mfs`
+4. Convert ALL and each component split with `prepare_raganato.py`; the component
+   files are required for calibration and held-out filtering evaluation.
+5. Run baselines: `uv run python scripts/evaluate.py --dataset raganato-all --model mfs pos-mfs`
 6. Run encoders: `uv run python scripts/evaluate.py --dataset raganato-all --model e5-small wordnet-sense-embedding`
 
 The first model comparison targets the Raganato `ALL` aggregate as an academic
@@ -39,7 +40,26 @@ part of speech ahead of other POS groups. They quantify how much value the
 existing POS inference adds before semantic disambiguation.
 
 Use `--limit N` only as an installation smoke test. It selects the first `N`
-examples and is not a representative model comparison.
+examples and is not a representative model comparison. Smoke output is written
+to a separate `*-smoke-N.csv`; it cannot replace a complete benchmark row.
+
+Long filtering runs save one model at a time and resume from score checkpoints
+under ignored `results/checkpoints/`. Results record the dataset hash, exact
+model revision, dependency versions, completion status, definition-cache use,
+and the number of unique definition inputs. Bi-encoder definition embeddings
+are deduplicated and persisted under `.cache/definition-embeddings/`.
+
+Measure card-opening cost separately from batch throughput:
+
+```sh
+uv run python scripts/benchmark_interactive.py --dataset raganato-all \
+  --model minilm --example-index 0 --warmups 2 --repetitions 20
+```
+
+This reports model startup, offline definition preparation, warmed p50/p95
+single-occurrence latency, and process peak RSS. Termux CPU benchmarks pin
+OpenBLAS and OpenMP to one thread to avoid the platform's native allocator race;
+the settings are stored with every result.
 
 `local_cache_mb` is the local downloaded snapshot, including optional ONNX and
 OpenVINO artifacts. It is not a browser-download claim; browser package and
@@ -56,11 +76,13 @@ without a WordNet mapping are never treated as a production glossary result.
 ## Reader-dev schema
 
 ```json
-{"id":"reader-001","dataset":"reader-dev-v1","context":"He sat on the bank and watched the river.","target":"bank","lemma":"bank","pos":"noun","candidates":[{"sense_id":"bank-1","gloss":"A financial institution.","relevance":"clearly_wrong"},{"sense_id":"bank-2","gloss":"Land alongside a river.","relevance":"fits"}]}
+{"id":"reader-001","dataset":"reader-dev-v1","context":"He sat on the bank and watched the river.","target":"bank","target_start":14,"lemma":"bank","pos":"noun","candidates":[{"sense_id":"bank-1","gloss":"A financial institution.","relevance":"clearly_wrong"},{"sense_id":"bank-2","gloss":"Land alongside a river.","relevance":"fits"}]}
 ```
 
 Candidates must be copied from the definitions displayed by Assisted Reader for
-that occurrence, without dropping alternatives. `scripts/validate_reader_data.py`
+that occurrence, without dropping alternatives. `target_start` identifies the
+exact occurrence in `context`, including when the surface word repeats.
+`scripts/validate_reader_data.py`
 checks this file before it is evaluated.
 
 ## Creating the initial reader dataset

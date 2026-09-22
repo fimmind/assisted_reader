@@ -5,6 +5,17 @@ import csv
 import json
 from pathlib import Path
 
+from benchmarking import (
+    checkpoint_path,
+    files_digest,
+    load_score_checkpoint,
+    native_thread_settings,
+    ranker_implementation_sha256,
+    ranker_revision,
+    runtime_versions,
+    save_score_checkpoint,
+    write_csv_rows,
+)
 from filtering import (
     ScoredExample,
     calibrate_margin_threshold,
@@ -60,6 +71,7 @@ def evaluate_policy(
     preparation_ms: float,
     online_ms: float,
     threshold: float | str,
+    provenance: dict[str, float | int | str],
 ) -> dict[str, float | int | str]:
     return {
         "model": model_name,
@@ -70,6 +82,7 @@ def evaluate_policy(
         "offline_preparation_ms": preparation_ms,
         "online_ms": online_ms,
         "online_examples_per_second": len(scored) / (online_ms / 1000) if online_ms else 0.0,
+        **provenance,
         **filtering_metrics(scored, selections),
     }
 
@@ -87,12 +100,48 @@ def main() -> None:
         )
 
     source = ROOT / "data" / "processed" / f"{args.dataset}.jsonl"
+    dataset_sha256 = files_digest([source])
     original_examples = read_jsonl(source)
     examples = [runtime_example(example) for example in original_examples]
+    output_dir = ROOT / "results"
+    output_dir.mkdir(exist_ok=True)
+    output = output_dir / f"{args.dataset}-filtering.csv"
     output_rows: list[dict[str, float | int | str]] = []
+    if args.append and output.exists():
+        output_rows = [
+            row
+            for row in read_csv(output)
+            if row.get("status") == "complete"
+            and row.get("dataset_sha256") == dataset_sha256
+        ]
     for model_name in args.model:
         ranker = load_ranker(model_name)
-        benchmark = ranker.benchmark_score_many(examples)
+        revision = ranker_revision(ranker)
+        checkpoint = checkpoint_path(
+            output_dir,
+            f"{args.dataset}-filtering-{dataset_sha256[:12]}",
+            model_name,
+        )
+        benchmark = load_score_checkpoint(checkpoint, dataset_sha256, revision)
+        score_source = "checkpoint"
+        if benchmark is None:
+            benchmark = ranker.benchmark_score_many(examples)
+            save_score_checkpoint(checkpoint, dataset_sha256, revision, benchmark)
+            score_source = "computed"
+        provenance: dict[str, float | int | str] = {
+            "status": "complete",
+            "dataset_sha256": dataset_sha256,
+            "model_revision": revision,
+            "runtime_versions": runtime_versions(),
+            "ranker_implementation_sha256": ranker_implementation_sha256(),
+            "native_thread_settings": native_thread_settings(),
+            "score_source": score_source,
+            "definition_inputs": benchmark.definition_inputs,
+            "unique_definition_inputs": benchmark.unique_definition_inputs,
+            "definition_cache_hit": str(benchmark.definition_cache_hit).lower(),
+        }
+        output_rows = [row for row in output_rows if row.get("model") != model_name]
+        model_rows: list[dict[str, float | int | str]] = []
         scored = [
             ScoredExample(example=example, scores=scores)
             for example, scores in zip(examples, benchmark.scores)
@@ -116,7 +165,7 @@ def main() -> None:
             ratio = len(slice_scored) / len(scored)
             for maximum in range(1, args.max_definitions + 1):
                 selections = [fixed_top_k(item.scores, maximum) for item in slice_scored]
-                output_rows.append(evaluate_policy(
+                model_rows.append(evaluate_policy(
                     model_name=model_name,
                     policy=f"fixed-top-{maximum}",
                     slice_name=slice_name,
@@ -125,6 +174,7 @@ def main() -> None:
                     preparation_ms=benchmark.preparation_ms * ratio,
                     online_ms=benchmark.online_ms * ratio,
                     threshold="",
+                    provenance=provenance,
                 ))
 
         calibration = slices.get("calibration")
@@ -137,7 +187,7 @@ def main() -> None:
                     within_best_margin(item.scores, args.max_definitions, threshold)
                     for item in slice_scored
                 ]
-                output_rows.append(evaluate_policy(
+                model_rows.append(evaluate_policy(
                     model_name=model_name,
                     policy="adaptive-margin",
                     slice_name=slice_name,
@@ -146,6 +196,7 @@ def main() -> None:
                     preparation_ms=benchmark.preparation_ms * ratio,
                     online_ms=benchmark.online_ms * ratio,
                     threshold=threshold,
+                    provenance=provenance,
                 ))
             for miscoverage_rate in (0.05, 0.1):
                 conformal_threshold = conformal_margin_threshold(
@@ -161,7 +212,7 @@ def main() -> None:
                         within_best_margin_unbounded(item.scores, conformal_threshold)
                         for item in slice_scored
                     ]
-                    output_rows.append(evaluate_policy(
+                    model_rows.append(evaluate_policy(
                         model_name=model_name,
                         policy=f"conformal-{miscoverage_rate:.2f}",
                         slice_name=slice_name,
@@ -170,25 +221,11 @@ def main() -> None:
                         preparation_ms=benchmark.preparation_ms * ratio,
                         online_ms=benchmark.online_ms * ratio,
                         threshold=conformal_threshold,
+                        provenance=provenance,
                     ))
-
-    output_dir = ROOT / "results"
-    output_dir.mkdir(exist_ok=True)
-    output = output_dir / f"{args.dataset}-filtering.csv"
-    if args.append and output.exists():
-        existing_rows = read_csv(output)
-        replaced_models = set(args.model)
-        output_rows = [
-            row for row in existing_rows if row.get("model") not in replaced_models
-        ] + output_rows
-    with output.open("w", newline="", encoding="utf-8") as destination:
-        writer = csv.DictWriter(
-            destination,
-            fieldnames=sorted({key for row in output_rows for key in row}),
-        )
-        writer.writeheader()
-        writer.writerows(output_rows)
-    print(f"wrote {output}")
+        output_rows.extend(model_rows)
+        write_csv_rows(output, output_rows)
+        print(f"wrote {output} after model={model_name}")
 
 
 if __name__ == "__main__":

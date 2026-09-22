@@ -1,6 +1,7 @@
 # WordNet WSD benchmark checkpoint
 
 Date: 2026-09-21
+Updated: 2026-09-22
 
 ## Decision so far
 
@@ -40,12 +41,16 @@ teacher option because they must process every context/gloss pair online.
   data now records WordNet's sense-number order and gives 57.58% on this
   ambiguous-only set.
 - Corrected `wordnet-sense-embedding` loading. Its published module reference
-  is not resolvable by current `sentence-transformers`, which silently loaded
-  whole-sentence mean pooling. The ranker now retains the custom tokenizer and
-  explicitly restores target-word pooling.
-- Hardened model downloads so a gated repository with configuration but no
-  weights is an explicit error. This exposed `Babelscape/wsl-retriever-e5-base-v2`
-  as unavailable without accepting its non-commercial access terms.
+  is not resolvable by current `sentence-transformers`, and version 5 calls
+  `preprocess()` instead of the helper's `tokenize()`. The ranker now restores
+  the pooling module and binds target-mask preprocessing to the actual encoding
+  path. A real-checkpoint regression test verifies that the mask reaches pooling.
+- Corrected model downloads to include PyTorch `.bin` weights. This made the
+  438 MB `Babelscape/wsl-retriever-e5-base-v2` checkpoint available locally;
+  its CC-BY-NC-SA license still makes it a research reference only.
+- Added exact target-occurrence markers, normalized candidate POS fields,
+  stable synset deduplication, persistent definition-embedding caches,
+  resumable score checkpoints, and result provenance.
 - Built the project-local Python environment on Android/aarch64 and smoke-tested
   every accessible ranker checkpoint.
 
@@ -58,9 +63,9 @@ Full Raganato ALL baselines:
 | MFS / WordNet sense order | 57.58% | 0.7348 | 31,362 examples/s |
 | Lexical overlap | 26.93% | 0.5045 | 946 examples/s |
 
-The neural smoke test used only the first eight examples. Its accuracy is not
-statistically meaningful; it verifies loading, scoring, model size, and rough
-device feasibility:
+The original neural smoke timings below predate exact occurrence markers and
+the repaired target-mask preprocessing. They are retained only as historical
+device-cost estimates and must not be used for model-quality comparison:
 
 | Ranker | Local files | Smoke throughput |
 |---|---:|---:|
@@ -72,16 +77,17 @@ device feasibility:
 | MiniLM-L2 cross-encoder | 63 MB | 2.56 examples/s |
 | MiniLM-L6 cross-encoder | 92 MB | 0.82 examples/s |
 
-These smoke timings include re-encoding definitions. The new filtering
-evaluator times definition encoding separately so a completed bi-encoder run
-will measure the intended precomputed deployment path.
+New smoke runs are written separately from complete results and record their
+sample limit, dataset hash, model revision, dependency versions, and completion
+status. Definition embeddings are deduplicated and cached between runs.
 
 ## Validation status
 
 - `python -m compileall -q wsd/scripts wsd/tests`: passed
-- `python -m unittest discover -s wsd/tests -v`: 11/11 passed
+- `wsd/.venv/bin/python -m unittest discover -s wsd/tests -v`: 15/15 passed
 - `git diff --check`: passed
-- All seven accessible neural rankers: real-checkpoint smoke test passed
+- Specialized WordNet target-mask integration test: passed
+- WSL `.bin` checkpoint download and inference smoke test: passed
 - Full specialized-model run: intentionally stopped after the user reported
   that the execution window had 2% remaining; no partial result was presented
   as a completed benchmark

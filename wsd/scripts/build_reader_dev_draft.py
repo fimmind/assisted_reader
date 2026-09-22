@@ -112,9 +112,12 @@ def main() -> None:
     for filename in ("hitchhikers_guide.txt", "AiW.txt"):
         text = (ROOT / "data" / filename).read_text(encoding="utf-8")
         for sentence in re.findall(r"[^.!?]+[.!?]+", re.sub(r"\s+", " ", text)):
-            if len(sentence.strip()) > MAX_CONTEXT_CHARS:
+            context = sentence.strip()
+            if len(context) > MAX_CONTEXT_CHARS:
                 continue
-            for word in re.findall(r"[a-z]+(?:'[a-z]+)?", sentence.lower()):
+            for match in re.finditer(r"[a-z]+(?:'[a-z]+)?", context, re.IGNORECASE):
+                target = match.group()
+                word = target.lower()
                 lemma = lemma_map.get(word, word)
                 key = (filename, lemma)
                 if lemma not in selected or key in seen:
@@ -122,8 +125,11 @@ def main() -> None:
                 displayed_entry = lookup_exact(word) or entries[lemma]
                 examples.append({
                     "id": f"reader-dev-draft-{len(examples) + 1}", "dataset": "reader-dev-v1-draft",
-                    "source": {"file": f"data/{filename}", "sentence": sentence.strip()},
-                    "context": sentence.strip(), "target": word, "lemma": lemma,
+                    "source": {"file": f"data/{filename}", "sentence": context},
+                    "context": context,
+                    "target": target,
+                    "target_start": match.start(),
+                    "lemma": lemma,
                     "lookup_word": displayed_entry["word"],
                     "pos": CONTEXTUAL_POS.get((filename, word)),
                     "candidates": candidates(displayed_entry), "review_status": "needs_annotation",

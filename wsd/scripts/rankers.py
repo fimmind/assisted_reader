@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
 import re
 import sys
 import time
@@ -8,11 +11,20 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
+# Termux's OpenBLAS build can corrupt its buffer bookkeeping when PyTorch and
+# NumPy initialize competing native thread pools. Keep both native pools
+# single-threaded so performance runs are stable and shutdown is memory-safe.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_ROOT = ROOT / ".cache" / "models"
+EMBEDDING_CACHE_ROOT = ROOT / ".cache" / "definition-embeddings"
 TOKEN_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+TARGET_OPEN = "[TGT]"
+TARGET_CLOSE = "[/TGT]"
 
 
 @dataclass(frozen=True)
@@ -20,6 +32,85 @@ class BenchmarkScores:
     scores: list[list[float]]
     preparation_ms: float
     online_ms: float
+    definition_inputs: int
+    unique_definition_inputs: int
+    definition_cache_hit: bool
+
+
+def target_span(example: dict) -> tuple[int, int]:
+    context = example["context"]
+    target = example["target"]
+    start = example.get("target_start")
+    if start is None:
+        matches = [match.start() for match in re.finditer(re.escape(target), context, re.IGNORECASE)]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Example requires target_start because the target occurrence is ambiguous: "
+                f"id={example.get('id')} target={target!r} matches={matches}"
+            )
+        start = matches[0]
+    if type(start) is not int:
+        raise TypeError(f"target_start must be an integer: id={example.get('id')} value={start!r}")
+    end = start + len(target)
+    if start < 0 or context[start:end] != target:
+        raise ValueError(
+            f"Target span does not match context: id={example.get('id')} "
+            f"target={target!r} start={start} actual={context[start:end]!r}"
+        )
+    return start, end
+
+
+def marked_context(example: dict) -> str:
+    start, end = target_span(example)
+    context = example["context"]
+    return f"{context[:start]}{TARGET_OPEN}{context[start:end]}{TARGET_CLOSE}{context[end:]}"
+
+
+def model_revision(model_name: str) -> str:
+    model_root = MODEL_ROOT / model_name
+    metadata_files = sorted(
+        (model_root / ".cache" / "huggingface" / "download").rglob("*.metadata")
+    )
+    revisions = {
+        line
+        for path in metadata_files
+        if (line := path.read_text(encoding="utf-8").splitlines()[0].strip())
+    }
+    if len(revisions) > 1:
+        raise ValueError(f"Model cache contains mixed revisions: model={model_name} revisions={sorted(revisions)}")
+    if revisions:
+        return next(iter(revisions))
+    if not model_root.is_dir():
+        raise FileNotFoundError(f"Model directory is missing: {model_root}")
+    digest = hashlib.sha256()
+    model_files = sorted(
+        path
+        for path in model_root.rglob("*")
+        if path.is_file() and ".cache" not in path.relative_to(model_root).parts
+    )
+    if not model_files:
+        raise FileNotFoundError(f"Model directory contains no files: {model_root}")
+    for path in model_files:
+        digest.update(str(path.relative_to(model_root)).encode("utf-8"))
+        digest.update(b"\0")
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+    return f"local-{digest.hexdigest()}"
+
+
+def unique_inputs(values: list[str]) -> tuple[list[str], list[int]]:
+    unique: list[str] = []
+    indices: dict[str, int] = {}
+    inverse: list[int] = []
+    for value in values:
+        index = indices.get(value)
+        if index is None:
+            index = len(unique)
+            indices[value] = index
+            unique.append(value)
+        inverse.append(index)
+    return unique, inverse
 
 
 class Ranker(ABC):
@@ -44,7 +135,15 @@ class Ranker(ABC):
         started = time.perf_counter()
         scores = self.score_many(examples)
         online_ms = (time.perf_counter() - started) * 1000
-        return BenchmarkScores(scores=scores, preparation_ms=0.0, online_ms=online_ms)
+        definition_inputs = sum(len(example["candidates"]) for example in examples)
+        return BenchmarkScores(
+            scores=scores,
+            preparation_ms=0.0,
+            online_ms=online_ms,
+            definition_inputs=definition_inputs,
+            unique_definition_inputs=definition_inputs,
+            definition_cache_hit=False,
+        )
 
 
 class MfsRanker(Ranker):
@@ -136,6 +235,54 @@ class LexicalOverlapRanker(Ranker):
 
 
 class EmbeddingRanker(Ranker):
+    model_cache_name: str
+
+    def cached_gloss_embeddings(
+        self,
+        glosses: list[str],
+    ) -> tuple[np.ndarray, float, int, bool]:
+        unique_glosses, inverse = unique_inputs(glosses)
+        revision = model_revision(self.model_cache_name)
+        cache_key = hashlib.sha256(
+            json.dumps(
+                {
+                    "ranker": self.name,
+                    "revision": revision,
+                    "implementation": hashlib.sha256(
+                        Path(__file__).read_bytes()
+                    ).hexdigest(),
+                    "inputs": unique_glosses,
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        cache_dir = EMBEDDING_CACHE_ROOT / self.name
+        cache_path = cache_dir / f"{cache_key}.npy"
+        preparation_started = time.perf_counter()
+        if cache_path.is_file():
+            unique_embeddings = np.load(cache_path, allow_pickle=False)
+            cache_hit = True
+        else:
+            unique_embeddings = np.asarray(self.model.encode(
+                unique_glosses,
+                batch_size=256,
+                normalize_embeddings=True,
+                show_progress_bar=True,
+            ))
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            temporary_path = cache_path.with_suffix(".tmp.npy")
+            np.save(temporary_path, unique_embeddings, allow_pickle=False)
+            temporary_path.replace(cache_path)
+            cache_hit = False
+        if unique_embeddings.ndim != 2 or len(unique_embeddings) != len(unique_glosses):
+            raise ValueError(
+                f"Invalid cached definition embeddings: path={cache_path} "
+                f"shape={unique_embeddings.shape} expected_rows={len(unique_glosses)}"
+            )
+        preparation_ms = (time.perf_counter() - preparation_started) * 1000
+        return unique_embeddings[np.asarray(inverse)], preparation_ms, len(unique_glosses), cache_hit
+
     def score_many(self, examples: list[dict]) -> list[list[float]]:
         contexts = [self.context_input(example) for example in examples]
         glosses = [self.gloss_input(example, candidate) for example in examples for candidate in example["candidates"]]
@@ -156,14 +303,9 @@ class EmbeddingRanker(Ranker):
             for example in examples
             for candidate in example["candidates"]
         ]
-        preparation_started = time.perf_counter()
-        gloss_embeddings = np.asarray(self.model.encode(
-            glosses,
-            batch_size=256,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        ))
-        preparation_ms = (time.perf_counter() - preparation_started) * 1000
+        gloss_embeddings, preparation_ms, unique_count, cache_hit = (
+            self.cached_gloss_embeddings(glosses)
+        )
 
         online_started = time.perf_counter()
         contexts = [self.context_input(example) for example in examples]
@@ -184,11 +326,15 @@ class EmbeddingRanker(Ranker):
             scores=scores,
             preparation_ms=preparation_ms,
             online_ms=online_ms,
+            definition_inputs=len(glosses),
+            unique_definition_inputs=unique_count,
+            definition_cache_hit=cache_hit,
         )
 
 
 class E5SmallRanker(EmbeddingRanker):
     name = "e5-small"
+    model_cache_name = "e5-small"
 
     def __init__(self) -> None:
         from sentence_transformers import SentenceTransformer
@@ -200,7 +346,7 @@ class E5SmallRanker(EmbeddingRanker):
 
     @staticmethod
     def context_input(example: dict) -> str:
-        return f"query: Target word: {example['target']}. Context: {example['context']}"
+        return f"query: Target occurrence: {marked_context(example)}"
 
     @staticmethod
     def gloss_input(example: dict, candidate: dict) -> str:
@@ -222,6 +368,7 @@ class E5DefinitionOnlyRanker(E5SmallRanker):
 
 class MiniLMRanker(EmbeddingRanker):
     name = "minilm"
+    model_cache_name = "minilm"
 
     def __init__(self) -> None:
         from sentence_transformers import SentenceTransformer
@@ -232,7 +379,7 @@ class MiniLMRanker(EmbeddingRanker):
 
     @staticmethod
     def context_input(example: dict) -> str:
-        return f"Target word: {example['target']}. Context: {example['context']}"
+        return f"Target occurrence: {marked_context(example)}"
 
     @staticmethod
     def gloss_input(example: dict, candidate: dict) -> str:
@@ -244,6 +391,7 @@ class MiniLMRanker(EmbeddingRanker):
 
 class ArcticEmbedXsRanker(EmbeddingRanker):
     name = "arctic-embed-xs"
+    model_cache_name = "arctic-embed-xs"
 
     def __init__(self) -> None:
         from sentence_transformers import SentenceTransformer
@@ -260,7 +408,7 @@ class ArcticEmbedXsRanker(EmbeddingRanker):
     def context_input(example: dict) -> str:
         return (
             "Represent this sentence for searching relevant passages: "
-            f"Target word: {example['target']}. Context: {example['context']}"
+            f"Target occurrence: {marked_context(example)}"
         )
 
     @staticmethod
@@ -281,11 +429,12 @@ class CrossEncoderRanker(Ranker):
                 f"{name} is missing. Run: python scripts/download_models.py {model_name}"
             )
         self.name = name
+        self.model_cache_name = model_name
         self.model = CrossEncoder(str(model_path), local_files_only=True)
 
     @staticmethod
     def context_input(example: dict) -> str:
-        return f"Target word: {example['target']}. Context: {example['context']}"
+        return f"Target occurrence: {marked_context(example)}"
 
     @staticmethod
     def gloss_input(example: dict, candidate: dict) -> str:
@@ -315,6 +464,7 @@ class CrossEncoderRanker(Ranker):
 
 class WslRetrieverRanker(E5SmallRanker):
     name = "wsl-retriever"
+    model_cache_name = "wsl-retriever"
 
     def __init__(self) -> None:
         from sentence_transformers import SentenceTransformer
@@ -325,7 +475,7 @@ class WslRetrieverRanker(E5SmallRanker):
 
     @staticmethod
     def context_input(example: dict) -> str:
-        return f"question: {example['context']}"
+        return f"question: {marked_context(example)}"
 
     @staticmethod
     def gloss_input(example: dict, candidate: dict) -> str:
@@ -334,6 +484,7 @@ class WslRetrieverRanker(E5SmallRanker):
 
 class WordNetSenseEmbeddingRanker(EmbeddingRanker):
     name = "wordnet-sense-embedding"
+    model_cache_name = "wordnet-sense-embedding"
 
     def __init__(self) -> None:
         model_path = MODEL_ROOT / "wordnet-sense-embedding"
@@ -352,12 +503,19 @@ class WordNetSenseEmbeddingRanker(EmbeddingRanker):
         self.model._modules["1"] = WordPooling(
             transformer.get_embedding_dimension()
         )
+        # sentence-transformers >=5 calls preprocess() from encode(), while the
+        # published helper only overrides tokenize(). Bind its target-mask
+        # implementation to the actual encoding path.
+        self.model.preprocess = self.model.tokenize
         if not any(isinstance(module, WordPooling) for module in self.model):
             raise TypeError(f"Word-sense model has no target-word pooling module: {model_path}")
+        probe = self.model.preprocess(["'bank': [TGT]bank[/TGT] context"])
+        if "word_mask" not in probe:
+            raise TypeError(f"Word-sense model preprocessing omitted word_mask: {model_path}")
 
     @staticmethod
     def context_input(example: dict) -> str:
-        return f"'{example['target']}': {example['context']}"
+        return f"'{example['target']}': {marked_context(example)}"
 
     @staticmethod
     def gloss_input(example: dict, candidate: dict) -> str:
@@ -386,6 +544,20 @@ class PosFirstWrapper(Ranker):
     def score_with_raw_many(self, examples: list[dict]) -> tuple[list[list[float]], list[list[float]]]:
         raw = self.base.score_many(examples)
         return [apply_pos_first(example, scores) for example, scores in zip(examples, raw)], raw
+
+    def benchmark_score_many(self, examples: list[dict]) -> BenchmarkScores:
+        base = self.base.benchmark_score_many(examples)
+        return BenchmarkScores(
+            scores=[
+                apply_pos_first(example, scores)
+                for example, scores in zip(examples, base.scores)
+            ],
+            preparation_ms=base.preparation_ms,
+            online_ms=base.online_ms,
+            definition_inputs=base.definition_inputs,
+            unique_definition_inputs=base.unique_definition_inputs,
+            definition_cache_hit=base.definition_cache_hit,
+        )
 
 
 class ReciprocalRankFusionRanker(Ranker):
@@ -434,6 +606,9 @@ class ReciprocalRankFusionRanker(Ranker):
             scores=fused,
             preparation_ms=semantic.preparation_ms,
             online_ms=semantic.online_ms,
+            definition_inputs=semantic.definition_inputs,
+            unique_definition_inputs=semantic.unique_definition_inputs,
+            definition_cache_hit=semantic.definition_cache_hit,
         )
 
 

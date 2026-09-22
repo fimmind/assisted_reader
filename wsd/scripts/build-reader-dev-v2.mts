@@ -8,6 +8,7 @@ import {
   splitSentenceSpans,
   tagSentenceTerms,
 } from '../../src/core/nlp';
+import { taggedTermStarts } from './tagged-term-offsets';
 
 const ROOT = path.basename(process.cwd()).toLowerCase() === 'wsd'
   ? path.resolve(process.cwd(), '..')
@@ -121,6 +122,7 @@ async function main() {
       const context = span.text.replace(/\s+/g, ' ').trim();
       if (context.length > MAX_CONTEXT_CHARS) continue;
       const terms = tagSentenceTerms(context, nlp as never);
+      const starts = taggedTermStarts(context, terms);
       const deinflected = contextualDeinflectTaggedTerms(
         terms, lemmaMap, vocabulary, new Set<string>(), false, nlp as never,
       );
@@ -156,6 +158,7 @@ async function main() {
           },
           context,
           target: term.raw,
+          target_start: starts[tokenIndex],
           lookup_word: entry.word,
           lemma,
           pos,
