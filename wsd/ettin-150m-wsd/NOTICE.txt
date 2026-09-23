@@ -1,0 +1,7 @@
+Ettin-150m-WSD by Rylo Sign
+https://huggingface.co/sign/Ettin-150m-WSD
+Revision: 8751b577199d1bb95b74fa2457da7065d57100ae
+
+The original checkpoint is licensed under Apache-2.0. This copy was exported
+to ONNX and dynamically quantized to UINT8 for use in Assisted Reader.
+See LICENSE for the license text.
