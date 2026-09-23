@@ -1,0 +1,42 @@
+{"id":"reader-wordnet-filter-pilot-AiW-1062-4","fits":["think.v.02"],"plausible":["think.v.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-1105-34","fits":["voice.n.02"],"plausible":["voice.n.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-132-9","fits":["ask.v.02"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-140-3","fits":["great.s.03"],"plausible":["great.s.01","great.s.02"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-1446-1","fits":["read.v.03"],"plausible":["read.v.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-1455-11","fits":["piece.n.08"],"plausible":["piece.n.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-151-25","fits":["repeat.v.01","repeat.v.04"],"plausible":["duplicate.v.01","repeat.v.05"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-1554-6","fits":["business.n.04"],"plausible":["business.n.05"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-1631-12","fits":["court.n.01","court.n.06"],"plausible":["court.n.02","court.n.03","court.n.08"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-1653-6","fits":["long.a.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-262-15","fits":["tell.v.03"],"plausible":["state.v.01","tell.v.02"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-264-1","fits":["exist.v.01"],"plausible":["be.v.05"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-30-22","fits":["look.v.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-345-57","fits":["small.a.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-372-11","fits":["put.v.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-533-2","fits":["old.a.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-572-5","fits":["material.n.01"],"plausible":["stuff.n.02"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-672-18","fits":["moment.n.02"],"plausible":["moment.n.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-710-11","fits":["face.n.01"],"plausible":["face.n.07"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-728-4","fits":["batch.n.02"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-AiW-735-8","fits":["right.a.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-1034-17","fits":["white.a.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-1369-9","fits":["fit.v.02","fit.v.07"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-1713-7","fits":["be.v.01"],"plausible":["be.v.02"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-180-10","fits":["ask.v.05"],"plausible":["ask.v.01","ask.v.03"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-190-23","fits":["book.n.01"],"plausible":["book.n.02"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-1924-9","exclude_reason":"Discourse-marker 'you know' has no matching WordNet verb sense."}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-2054-19","fits":["small.a.01"],"plausible":["minor.s.03"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-2060-13","fits":["matter.n.03"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-2463-14","fits":["ascent.n.01"],"plausible":["upgrade.n.04"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-2846-1","exclude_reason":"'Hold tight' uses tight adverbially, but the tagged runtime group is adjective."}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-3071-31","fits":["voice.n.03"],"plausible":["voice.n.01","voice.n.06"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-3140-13","fits":["great.s.02"],"plausible":["great.s.01","great.s.03"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-3145-14","fits":["front.n.01","front.n.04"],"plausible":["front.n.09"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-3194-3","fits":["rugged.s.02"],"plausible":["hard.s.05","baffling.s.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-326-5","fits":["away.r.01"],"plausible":["off.r.02"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-3261-21","fits":["manner.n.01"],"plausible":[],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-4407-4","fits":["spot.n.10"],"plausible":["bit.n.02","snatch.n.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-4607-8","fits":["connection.n.01"],"plausible":["connection.n.02"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-4915-6","exclude_reason":"WordNet has no water-cannon sense; artillery definitions do not fit the context."}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-5165-19","fits":["brainy.s.01"],"plausible":["brilliant.s.01"],"confidence":"medium"}
+{"id":"reader-wordnet-filter-pilot-hitchhikers_guide-719-9","fits":["away.r.10"],"plausible":["away.r.01"],"confidence":"medium"}

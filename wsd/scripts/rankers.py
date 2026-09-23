@@ -462,6 +462,92 @@ class CrossEncoderRanker(Ranker):
         return self.score_many([example])[0]
 
 
+class OnnxNliRanker(Ranker):
+    """Score each context and definition as an NLI premise and hypothesis."""
+
+    def __init__(self, name: str, model_cache_name: str, weight_file: str) -> None:
+        import onnxruntime as ort
+        from transformers import AutoTokenizer
+
+        model_path = MODEL_ROOT / model_cache_name
+        weights = model_path / "onnx" / weight_file
+        if not weights.is_file():
+            raise FileNotFoundError(f"NLI checkpoint is missing: model={name} path={weights}")
+        config = json.loads((model_path / "config.json").read_text(encoding="utf-8"))
+        labels = {label.lower(): int(index) for index, label in config["id2label"].items()}
+        if set(labels) != {"entailment", "neutral", "contradiction"}:
+            raise ValueError(f"Unexpected NLI labels: model={name} labels={labels}")
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 4
+        options.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(str(weights), options, providers=["CPUExecutionProvider"])
+        self.input_names = {item.name for item in self.session.get_inputs()}
+        self.tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
+        self.entailment_index = labels["entailment"]
+        self.contradiction_index = labels["contradiction"]
+        self.name = name
+        self.model_cache_name = model_cache_name
+
+    @staticmethod
+    def hypothesis(example: dict, candidate: dict) -> str:
+        gloss = candidate["gloss"].strip().rstrip(". ")
+        return f"Here, '{example['target']}' means {gloss}."
+
+    def probabilities_many(self, examples: list[dict]) -> np.ndarray:
+        pairs: list[tuple[str, str]] = [
+            (example["context"], self.hypothesis(example, candidate))
+            for example in examples
+            for candidate in example["candidates"]
+        ]
+        probability_batches: list[np.ndarray] = []
+        for start in range(0, len(pairs), 16):
+            batch = pairs[start:start + 16]
+            encoded = self.tokenizer(
+                [premise for premise, _ in batch],
+                [hypothesis for _, hypothesis in batch],
+                padding=True,
+                truncation="only_first",
+                max_length=384,
+                return_tensors="np",
+            )
+            inputs = {key: value for key, value in encoded.items() if key in self.input_names}
+            logits = np.asarray(self.session.run(["logits"], inputs)[0], dtype=np.float64)
+            if logits.shape != (len(batch), 3):
+                raise ValueError(f"Unexpected NLI output: model={self.name} shape={logits.shape}")
+            shifted = logits - logits.max(axis=1, keepdims=True)
+            probabilities = np.exp(shifted) / np.exp(shifted).sum(axis=1, keepdims=True)
+            probability_batches.append(probabilities)
+        return np.concatenate(probability_batches, axis=0) if probability_batches else np.empty((0, 3))
+
+    @staticmethod
+    def group_scores(examples: list[dict], flat_scores: list[float]) -> list[list[float]]:
+        scores: list[list[float]] = []
+        offset = 0
+        for example in examples:
+            count = len(example["candidates"])
+            scores.append(flat_scores[offset:offset + count])
+            offset += count
+        if offset != len(flat_scores):
+            raise ValueError(f"NLI score count mismatch: expected={offset} actual={len(flat_scores)}")
+        return scores
+
+    def score_many(self, examples: list[dict]) -> list[list[float]]:
+        probabilities = self.probabilities_many(examples)
+        return self.group_scores(examples, probabilities[:, self.entailment_index].tolist())
+
+    def score(self, example: dict) -> list[float]:
+        return self.score_many([example])[0]
+
+
+class OnnxNliNonContradictionRanker(OnnxNliRanker):
+    """Rank definitions by their probability of being non-contradictory."""
+
+    def score_many(self, examples: list[dict]) -> list[list[float]]:
+        probabilities = self.probabilities_many(examples)
+        flat_scores = (1.0 - probabilities[:, self.contradiction_index]).tolist()
+        return self.group_scores(examples, flat_scores)
+
+
 class WslRetrieverRanker(E5SmallRanker):
     name = "wsl-retriever"
     model_cache_name = "wsl-retriever"
@@ -525,6 +611,27 @@ class WordNetSenseEmbeddingRanker(EmbeddingRanker):
         inputs = [self.context_input(example)] + [self.gloss_input(example, candidate) for candidate in example["candidates"]]
         embeddings = self.model.encode(inputs, normalize_embeddings=True, show_progress_bar=False)
         return (np.asarray(embeddings[1:]) @ np.asarray(embeddings[0])).tolist()
+
+
+class Int8WordNetSenseEmbeddingRanker(WordNetSenseEmbeddingRanker):
+    name = "wordnet-sense-embedding-int8"
+
+    def __init__(self) -> None:
+        import torch
+        from torch import nn
+
+        super().__init__()
+        self.model = torch.ao.quantization.quantize_dynamic(
+            self.model,
+            {nn.Linear},
+            dtype=torch.qint8,
+        )
+        quantized_layers = sum(
+            isinstance(module, torch.ao.nn.quantized.dynamic.Linear)
+            for module in self.model.modules()
+        )
+        if quantized_layers == 0:
+            raise RuntimeError("WordNet sense model has no INT8 dynamic linear layers")
 
 
 class PosFirstWrapper(Ranker):
@@ -624,6 +731,7 @@ def load_ranker(name: str) -> Ranker:
         "minilm": MiniLMRanker,
         "wsl-retriever": WslRetrieverRanker,
         "wordnet-sense-embedding": WordNetSenseEmbeddingRanker,
+        "wordnet-sense-embedding-int8": Int8WordNetSenseEmbeddingRanker,
     }
     if name == "tinybert-cross-encoder":
         return CrossEncoderRanker(name, name)
@@ -635,6 +743,22 @@ def load_ranker(name: str) -> Ranker:
         return CrossEncoderRanker(name, name)
     if name == "minilm-l6-cross-encoder":
         return CrossEncoderRanker(name, name)
+    if name == "nli-minilm2-int8":
+        return OnnxNliRanker(name, name, "model_quint8_avx2.onnx")
+    if name == "nli-minilm2-int8-noncontradiction":
+        return OnnxNliNonContradictionRanker(name, "nli-minilm2-int8", "model_quint8_avx2.onnx")
+    if name == "distilbert-mnli-int8":
+        return OnnxNliRanker(name, name, "model_int8.onnx")
+    if name == "distilbert-mnli-int8-noncontradiction":
+        return OnnxNliNonContradictionRanker(name, "distilbert-mnli-int8", "model_int8.onnx")
+    if name == "mobilebert-mnli-q4f16":
+        return OnnxNliRanker(name, name, "model_q4f16.onnx")
+    if name == "mobilebert-mnli-q4f16-noncontradiction":
+        return OnnxNliNonContradictionRanker(name, "mobilebert-mnli-q4f16", "model_q4f16.onnx")
+    if name in {"ettin-150m-wsd", "modernbert-large-wsd"}:
+        from ettin_wsd import EttinWsdRanker
+
+        return EttinWsdRanker(name)
     if name == "pos-e5-small":
         return PosFirstWrapper(E5SmallRanker(), name)
     if name == "pos-e5-small-definition-only":

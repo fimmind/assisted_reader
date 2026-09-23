@@ -10,8 +10,9 @@ from pathlib import Path
 from rankers import BenchmarkScores, Ranker, model_revision
 
 
-PACKAGE_NAMES = ("numpy", "sentence-transformers", "torch", "transformers")
+PACKAGE_NAMES = ("numpy", "onnxruntime", "sentence-transformers", "torch", "transformers")
 RANKER_SOURCE = Path(__file__).with_name("rankers.py")
+ETTIN_SOURCE = Path(__file__).with_name("ettin_wsd.py")
 
 
 def files_digest(paths: list[Path]) -> str:
@@ -34,7 +35,7 @@ def runtime_versions() -> str:
 
 
 def ranker_implementation_sha256() -> str:
-    return files_digest([RANKER_SOURCE])
+    return files_digest([RANKER_SOURCE, ETTIN_SOURCE])
 
 
 def native_thread_settings() -> str:

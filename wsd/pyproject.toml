@@ -7,6 +7,7 @@ dependencies = [
   "huggingface-hub>=0.30",
   "nltk>=3.9",
   "numpy>=2.0",
+  "onnxruntime>=1.30,<2",
   "sentence-transformers>=3.4",
   "torch>=2.5",
 ]

@@ -99,6 +99,31 @@ def conformal_margin_threshold(
     return sorted(nonconformity)[quantile_rank - 1]
 
 
+def conformal_all_acceptable_margin_threshold(
+    scored: list[ScoredExample],
+    miscoverage_rate: float,
+) -> float:
+    """Calibrate a margin intended to retain every acceptable definition."""
+    if not scored:
+        raise ValueError("Cannot calibrate an all-acceptable filter without examples")
+    if miscoverage_rate <= 0 or miscoverage_rate >= 1:
+        raise ValueError(f"Miscoverage rate must be between zero and one: {miscoverage_rate}")
+    nonconformity: list[float] = []
+    for item in scored:
+        acceptable_scores = [
+            score
+            for score, candidate in zip(item.scores, item.example["candidates"])
+            if candidate.get("relevance") in ACCEPTABLE_LABELS
+        ]
+        if not acceptable_scores:
+            raise ValueError(f"Example has no acceptable definition: {item.example.get('id')}")
+        nonconformity.append(max(item.scores) - min(acceptable_scores))
+    quantile_rank = ceil((len(scored) + 1) * (1 - miscoverage_rate))
+    if quantile_rank > len(nonconformity):
+        return inf
+    return sorted(nonconformity)[quantile_rank - 1]
+
+
 def filtering_metrics(
     scored: Iterable[ScoredExample],
     selections: Iterable[list[int]],
@@ -113,7 +138,7 @@ def filtering_metrics(
     input_candidates = output_candidates = 0
     acceptable_total = acceptable_retained = 0
     wrong_total = wrong_retained = 0
-    unsafe = all_fits_hidden = perfect = 0
+    unsafe = all_fits_hidden = any_acceptable_hidden = perfect = 0
     output_counts: dict[int, int] = {}
     for item, indices in zip(examples, chosen):
         labels = [candidate.get("relevance") for candidate in item.example["candidates"]]
@@ -139,6 +164,7 @@ def filtering_metrics(
         wrong_total += len(labels) - acceptable_here
         wrong_retained += len(indices) - retained_acceptable_here
         unsafe += retained_acceptable_here == 0
+        any_acceptable_hidden += retained_acceptable_here < acceptable_here
         all_fits_hidden += fits_here > 0 and retained_fits_here == 0
         perfect += all(label in ACCEPTABLE_LABELS for label in retained_labels)
         output_counts[len(indices)] = output_counts.get(len(indices), 0) + 1
@@ -152,6 +178,8 @@ def filtering_metrics(
         "mean_definitions_shown": output_candidates / total if total else 0.0,
         "candidate_reduction": 1 - output_candidates / input_candidates if input_candidates else 0.0,
         "unsafe_exclusions": unsafe,
+        "any_acceptable_hidden": any_acceptable_hidden,
+        "any_acceptable_hidden_rate": any_acceptable_hidden / total if total else 0.0,
         "unsafe_exclusion_rate": unsafe / total if total else 0.0,
         "unsafe_exclusion_rate_ci95_low": unsafe_low,
         "unsafe_exclusion_rate_ci95_high": unsafe_high,

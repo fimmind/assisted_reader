@@ -19,6 +19,7 @@ from benchmarking import (
 from filtering import (
     ScoredExample,
     calibrate_margin_threshold,
+    conformal_all_acceptable_margin_threshold,
     conformal_margin_threshold,
     filtering_metrics,
     fixed_top_k,
@@ -51,6 +52,10 @@ def local_cache_size_mb(name: str) -> float:
         "e5-small-definition-only": "e5-small",
         "pos-e5-small-rrf": "e5-small",
         "pos-wsl-retriever-rrf": "wsl-retriever",
+        "nli-minilm2-int8-noncontradiction": "nli-minilm2-int8",
+        "distilbert-mnli-int8-noncontradiction": "distilbert-mnli-int8",
+        "mobilebert-mnli-q4f16-noncontradiction": "mobilebert-mnli-q4f16",
+        "wordnet-sense-embedding-int8": "wordnet-sense-embedding",
     }.get(name, name)
     directory = ROOT / ".cache" / "models" / name
     if not directory.exists():
@@ -221,6 +226,30 @@ def main() -> None:
                         preparation_ms=benchmark.preparation_ms * ratio,
                         online_ms=benchmark.online_ms * ratio,
                         threshold=conformal_threshold,
+                        provenance=provenance,
+                    ))
+                all_acceptable_threshold = conformal_all_acceptable_margin_threshold(
+                    calibration,
+                    miscoverage_rate,
+                )
+                for slice_name, slice_scored in (
+                    ("calibration", calibration),
+                    ("evaluation", evaluation),
+                ):
+                    ratio = len(slice_scored) / len(scored)
+                    selections = [
+                        within_best_margin_unbounded(item.scores, all_acceptable_threshold)
+                        for item in slice_scored
+                    ]
+                    model_rows.append(evaluate_policy(
+                        model_name=model_name,
+                        policy=f"all-acceptable-conformal-{miscoverage_rate:.2f}",
+                        slice_name=slice_name,
+                        scored=slice_scored,
+                        selections=selections,
+                        preparation_ms=benchmark.preparation_ms * ratio,
+                        online_ms=benchmark.online_ms * ratio,
+                        threshold=all_acceptable_threshold,
                         provenance=provenance,
                     ))
         output_rows.extend(model_rows)

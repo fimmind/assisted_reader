@@ -113,6 +113,7 @@ async function main() {
   const examples: Array<Record<string, unknown>> = [];
   const countByLemma = new Map<string, number>();
   const contextKeysByLemma = new Map<string, Set<string>>();
+  let unmatchedTaggedTerms: number = 0;
   const books = ['hitchhikers_guide.txt', 'AiW.txt'];
   for (const fileName of books) {
     const text = await fs.readFile(path.join(ROOT, 'data', fileName), 'utf8');
@@ -127,6 +128,11 @@ async function main() {
         terms, lemmaMap, vocabulary, new Set<string>(), false, nlp as never,
       );
       for (let tokenIndex = 0; tokenIndex < terms.length; tokenIndex += 1) {
+        const targetStart = starts[tokenIndex];
+        if (targetStart === null) {
+          unmatchedTaggedTerms += 1;
+          continue;
+        }
         const term = terms[tokenIndex];
         const lemma = deinflected.tokens[tokenIndex];
         const pos = deinflected.partsOfSpeech[tokenIndex];
@@ -158,7 +164,7 @@ async function main() {
           },
           context,
           target: term.raw,
-          target_start: starts[tokenIndex],
+          target_start: targetStart,
           lookup_word: entry.word,
           lemma,
           pos,
@@ -196,6 +202,7 @@ async function main() {
   console.log(JSON.stringify({
     output: path.relative(ROOT, OUTPUT),
     examples: selected.length,
+    unmatched_tagged_terms: unmatchedTaggedTerms,
     same_pos: selected.filter((example) => Number(example.number_of_matching_pos_candidates) >= 2).length,
     lemmas: new Set(selected.map((example) => example.lemma)).size,
   }, null, 2));

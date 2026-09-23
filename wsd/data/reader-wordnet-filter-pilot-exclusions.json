@@ -1,0 +1,5 @@
+{
+  "reader-wordnet-filter-pilot-hitchhikers_guide-1924-9": "Discourse-marker 'you know' has no matching WordNet verb sense.",
+  "reader-wordnet-filter-pilot-hitchhikers_guide-2846-1": "'Hold tight' uses tight adverbially, but the tagged runtime group is adjective.",
+  "reader-wordnet-filter-pilot-hitchhikers_guide-4915-6": "WordNet has no water-cannon sense; artillery definitions do not fit the context."
+}

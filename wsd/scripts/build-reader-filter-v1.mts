@@ -161,6 +161,7 @@ async function main(): Promise<void> {
 
   const eligible: DraftExample[] = [];
   const contextKeysByLemma = new Map<string, Set<string>>();
+  let unmatchedTaggedTerms: number = 0;
   for (const fileName of BOOKS) {
     const text = await fs.readFile(path.join(ROOT, 'data', fileName), 'utf8');
     const readable = readableRange(text);
@@ -176,6 +177,11 @@ async function main(): Promise<void> {
         terms, lemmaMap, vocabulary, new Set<string>(), false, nlp as never,
       );
       for (let tokenIndex = 0; tokenIndex < terms.length; tokenIndex += 1) {
+        const targetStart = starts[tokenIndex];
+        if (targetStart === null) {
+          unmatchedTaggedTerms += 1;
+          continue;
+        }
         const term = terms[tokenIndex];
         const lemma = deinflected.tokens[tokenIndex];
         const pos = deinflected.partsOfSpeech[tokenIndex];
@@ -210,7 +216,7 @@ async function main(): Promise<void> {
           source,
           context,
           target: term.raw,
-          target_start: starts[tokenIndex],
+          target_start: targetStart,
           lookup_word: entry.word,
           lemma,
           pos,
@@ -249,6 +255,7 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({
     output: path.relative(ROOT, OUTPUT),
     eligible: eligible.length,
+    unmatched_tagged_terms: unmatchedTaggedTerms,
     selected: selected.length,
     lemmas: new Set(selected.map((example) => example.lemma)).size,
     sources: sourceCounts,

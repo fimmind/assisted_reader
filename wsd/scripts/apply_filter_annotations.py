@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def annotate_example(example: dict, annotation: dict) -> dict:
     ]
     return {
         **example,
-        "dataset": DATASET,
+        "dataset": example["dataset"],
         "candidates": candidates,
         "annotation_confidence": confidence,
         "annotation_method": "Codex provisional review before model scoring",
@@ -63,10 +64,14 @@ def annotate_example(example: dict, annotation: dict) -> dict:
 
 
 def main() -> None:
-    draft_path = ROOT / "data" / f"{DATASET}-draft.jsonl"
-    annotation_path = ROOT / "data" / f"{DATASET}-annotations.jsonl"
-    output_path = ROOT / "data" / "processed" / f"{DATASET}.jsonl"
-    exclusions_path = ROOT / "data" / f"{DATASET}-exclusions.json"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", choices=(DATASET, "reader-wordnet-filter-pilot"), default=DATASET)
+    args = parser.parse_args()
+    dataset: str = args.dataset
+    draft_path = ROOT / "data" / f"{dataset}-draft.jsonl"
+    annotation_path = ROOT / "data" / f"{dataset}-annotations.jsonl"
+    output_path = ROOT / "data" / "processed" / f"{dataset}.jsonl"
+    exclusions_path = ROOT / "data" / f"{dataset}-exclusions.json"
     draft = read_jsonl(draft_path)
     annotation_rows = read_jsonl(annotation_path)
     annotations = {row["id"]: row for row in annotation_rows}
