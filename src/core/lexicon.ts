@@ -488,6 +488,7 @@ export function combineDictionaryEntries(
       ipaUs: pronunciation?.ipaUs,
       ipaUk: pronunciation?.ipaUk,
       definitions: orderedUnique(sense.definitions.map((definition) => definition.gloss)),
+      source: 'wordnet',
     };
   });
   const wordNetPartsOfSpeech = new Set(wordNetSenses.map((sense) => sense.partOfSpeech));

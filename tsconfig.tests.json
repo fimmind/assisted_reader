@@ -25,6 +25,7 @@
     "src/core/study.ts",
     "src/core/study-session.ts",
     "src/core/types.ts",
+    "src/core/wsd-filter.ts",
     "tests/**/*.ts"
   ],
   "exclude": ["node_modules", "dist", "build"]

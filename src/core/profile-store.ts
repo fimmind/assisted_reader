@@ -235,6 +235,10 @@ export function loadReaderSettings(): ReaderSettings {
       deduplicationRadius: sanitizeNumeric(parsed.deduplicationRadius, DEFAULT_READER_SETTINGS.deduplicationRadius, 0, 20),
       knowledgeThreshold: sanitizeKnowledgeThreshold(parsed.knowledgeThreshold),
       englishVariant: sanitizeEnglishVariant(parsed.englishVariant),
+      wordSenseDisambiguationEnabled: parsed.wordSenseDisambiguationEnabled === true,
+      wsdReductionLevel: Math.round(sanitizeNumeric(parsed.wsdReductionLevel, DEFAULT_READER_SETTINGS.wsdReductionLevel, 0, 10)),
+      wsdContextUnit: parsed.wsdContextUnit === 'paragraph' ? 'paragraph' : 'sentence',
+      wsdContextSize: Math.round(sanitizeNumeric(parsed.wsdContextSize, DEFAULT_READER_SETTINGS.wsdContextSize, 1, 3)),
     };
 
     const serialized = JSON.stringify(settings);

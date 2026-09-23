@@ -10,9 +10,12 @@ import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
-import { WordDefinitionCard } from '@/components/WordDefinitionCard';
+import { ContextualDefinitionCard } from '@/components/ContextualDefinitionCard';
 import { StudyFlow } from '@/components/StudyFlow';
 import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
+import { marginForReductionLevel } from '@/core/wsd-filter';
+import type { WsdContext } from '@/core/wsd-filter';
+import { startWsdModel } from '@/core/wsd-runtime';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { WORD_RE } from '@/core/constants';
@@ -93,6 +96,10 @@ interface WordPopupState {
   anchorRect: PopupAnchorRect;
   horizontalAnchorRect: PopupAnchorRect;
   sourceParagraphIndex: number;
+  contextText: string;
+  contextStart: number;
+  contextEnd: number;
+  contextIsBookParagraph: boolean;
 }
 
 type DefinitionLoadStatus = 'loading' | 'ready' | 'error';
@@ -119,6 +126,7 @@ interface ReaderParagraphTextProps {
     anchorRect: PopupAnchorRect,
     lookupCandidates: DefinitionLookupCandidate[],
     sourceParagraphIndex: number,
+    contextText: string,
   ) => void;
 }
 
@@ -129,6 +137,15 @@ interface ParagraphWordClick {
 }
 
 type AnalysisRefreshMode = 'reset' | 'preserve';
+
+function contextForCard(analysis: ParagraphAnalysis, target: DefinitionTarget): WsdContext | null {
+  const key = definitionTargetKey(target);
+  const token = analysis.tokens.find((candidate) =>
+    definitionTargetKey(createDefinitionTarget(candidate.lemma, candidate.partOfSpeech)) === key);
+  return token
+    ? { text: analysis.paragraphText, start: token.start, end: token.end }
+    : null;
+}
 
 type DeferredHandle = {
   kind: 'idle' | 'timeout';
@@ -378,6 +395,7 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
             capturePopupAnchorRect(event.currentTarget.getBoundingClientRect()),
             lookupCandidates,
             sourceParagraphIndex,
+            analysis.paragraphText,
           );
         }}
       >
@@ -424,7 +442,7 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
           click.end,
           target,
         );
-        onOpenWordPopup(click.anchorRect, lookupCandidates, sourceParagraphIndex);
+        onOpenWordPopup(click.anchorRect, lookupCandidates, sourceParagraphIndex, analysis.paragraphText);
       }}
     >
       {nodes.length > 0 ? nodes : analysis.paragraphText}
@@ -1108,6 +1126,12 @@ export default function ReaderPage() {
   }, [settings]);
 
   useEffect(() => {
+    if (settings.wordSenseDisambiguationEnabled) {
+      startWsdModel();
+    }
+  }, [settings.wordSenseDisambiguationEnabled]);
+
+  useEffect(() => {
     assistanceEnabledRef.current = assistanceEnabled;
   }, [assistanceEnabled]);
 
@@ -1322,6 +1346,7 @@ export default function ReaderPage() {
     lookupCandidates: DefinitionLookupCandidate[],
     sourceParagraphIndex: number,
     triggerDefinitionText: string | null,
+    contextText: string,
   ): WordPopupState => {
     const initialCandidate = lookupCandidates[0];
     if (!initialCandidate) {
@@ -1352,6 +1377,10 @@ export default function ReaderPage() {
       anchorRect: anchor,
       horizontalAnchorRect: horizontalAnchor,
       sourceParagraphIndex,
+      contextText,
+      contextStart: initialCandidate.selectionStart,
+      contextEnd: initialCandidate.selectionEnd,
+      contextIsBookParagraph: triggerDefinitionText === null,
     };
   }, []);
 
@@ -1372,6 +1401,7 @@ export default function ReaderPage() {
       lookupCandidates,
       sourceParagraphIndex,
       triggerDefinitionText,
+      triggerDefinitionText,
     );
   }, [createWordPopupFromRects]);
 
@@ -1388,6 +1418,8 @@ export default function ReaderPage() {
             ...popupCandidate,
             target: createDefinitionTarget(resolvedCandidate.target.lemma, resolvedCandidate.target.partOfSpeech),
             lookupWord: normalizeToken(resolvedCandidate.lookupWord),
+            contextStart: resolvedCandidate.selectionStart,
+            contextEnd: resolvedCandidate.selectionEnd,
             triggerSelection: popupCandidate.triggerSelection === null ? null : {
               definitionText: popupCandidate.triggerSelection.definitionText,
               end: resolvedCandidate.selectionEnd,
@@ -1445,12 +1477,13 @@ export default function ReaderPage() {
       top: measuredPositions[index]?.top ?? popup.top,
       left: measuredPositions[index]?.left ?? popup.left,
     })));
-  }, [settings.englishVariant, settings.fontSize, wordPopups]);
+  }, [settings.englishVariant, settings.fontSize, settings.wsdReductionLevel, settings.wsdContextUnit, settings.wsdContextSize, wordPopups]);
 
   const openRootWordPopup = useCallback((
     anchorRect: PopupAnchorRect,
     lookupCandidates: DefinitionLookupCandidate[],
     sourceParagraphIndex: number,
+    contextText: string,
   ) => {
     const popup = createWordPopupFromRects(
       anchorRect,
@@ -1458,6 +1491,7 @@ export default function ReaderPage() {
       lookupCandidates,
       sourceParagraphIndex,
       null,
+      contextText,
     );
     setWordPopups([popup]);
     requestPopupDefinition(popup);
@@ -1804,9 +1838,16 @@ export default function ReaderPage() {
                           : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
                         const observation = observationLabels[target.lemma];
                         return (
-                          <WordDefinitionCard
+                          <ContextualDefinitionCard
                             key={definitionTargetKey(target)}
                             definition={definition}
+                            context={contextForCard(analysis, target)}
+                            contextParagraphs={chapterParagraphs}
+                            contextParagraphIndex={entry.sourceIndex}
+                            wsdEnabled={settings.wordSenseDisambiguationEnabled}
+                            wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
+                            wsdContextUnit={settings.wsdContextUnit}
+                            wsdContextSize={settings.wsdContextSize}
                             activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
                             fontSize={settings.fontSize}
                             definitionStatus={definitionStatus}
@@ -1898,7 +1939,7 @@ export default function ReaderPage() {
         const observation = observationLabels[popup.target.lemma];
         return (
           <div
-            key={`${popup.id}-${popup.top}-${popup.left}`}
+            key={popup.id}
             className="fixed"
             style={{ top: popup.top, left: popup.left, zIndex: 40 + popupIndex }}
             ref={(element) => {
@@ -1907,8 +1948,16 @@ export default function ReaderPage() {
             data-word-popup-index={popupIndex}
             data-testid={popupIndex === 0 ? 'word-definition-popup' : `word-definition-popup-${popupIndex}`}
           >
-            <WordDefinitionCard
+            <ContextualDefinitionCard
               definition={definition}
+              context={{ text: popup.contextText, start: popup.contextStart, end: popup.contextEnd }}
+              contextParagraphs={popup.contextIsBookParagraph ? chapterParagraphs : [popup.contextText]}
+              contextParagraphIndex={popup.contextIsBookParagraph ? popup.sourceParagraphIndex : 0}
+              wsdEnabled={settings.wordSenseDisambiguationEnabled}
+              wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
+              wsdContextUnit={settings.wsdContextUnit}
+              wsdContextSize={settings.wsdContextSize}
+              onWsdSettled={() => setWordPopups((previous) => previous.slice())}
               activeDefinitionSelection={wordPopups[popupIndex + 1]?.triggerSelection ?? undefined}
               fontSize={settings.fontSize}
               definitionStatus={popup.definitionStatus}

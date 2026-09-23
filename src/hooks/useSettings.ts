@@ -12,6 +12,10 @@ function areReaderSettingsEqual(left: ReaderSettings, right: ReaderSettings): bo
     && left.deduplicationRadius === right.deduplicationRadius
     && left.knowledgeThreshold === right.knowledgeThreshold
     && left.englishVariant === right.englishVariant
+    && left.wordSenseDisambiguationEnabled === right.wordSenseDisambiguationEnabled
+    && left.wsdReductionLevel === right.wsdReductionLevel
+    && left.wsdContextUnit === right.wsdContextUnit
+    && left.wsdContextSize === right.wsdContextSize
   );
 }
 

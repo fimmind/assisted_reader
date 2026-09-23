@@ -6,16 +6,28 @@ import { useSettings } from '../hooks/useSettings';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
+import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
 import type { UserProfile } from '@/core/types';
+import { getWsdModelStatus, startWsdModel, subscribeWsdModelStatus } from '@/core/wsd-runtime';
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { settings, updateSetting } = useSettings();
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string>('');
+  const [wsdStatus, setWsdStatus] = useState(getWsdModelStatus);
+
+  useEffect(() => {
+    const unsubscribe = subscribeWsdModelStatus(setWsdStatus);
+    if (settings.wordSenseDisambiguationEnabled) {
+      startWsdModel();
+    }
+    return unsubscribe;
+  }, [settings.wordSenseDisambiguationEnabled]);
 
   const refreshProfiles = () => {
     const state = loadProfileState();
@@ -233,6 +245,89 @@ export default function SettingsPage() {
                 Chooses pronunciation variant in definition cards.
               </p>
             </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="word-sense-disambiguation">Word Sense Disambiguation</Label>
+                <Switch
+                  id="word-sense-disambiguation"
+                  checked={settings.wordSenseDisambiguationEnabled}
+                  onCheckedChange={(enabled) => updateSetting('wordSenseDisambiguationEnabled', enabled)}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Use Ettin 150M to hide WordNet definitions that do not fit the context.
+              </p>
+              {settings.wordSenseDisambiguationEnabled && (
+                <div className="space-y-2" role="status" aria-live="polite">
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>{wsdStatus.phase === 'error' ? `Model error: ${wsdStatus.message}` : wsdStatus.message}</span>
+                    {wsdStatus.totalBytes > 0 && wsdStatus.phase === 'downloading' && (
+                      <span>{Math.round(100 * wsdStatus.downloadedBytes / wsdStatus.totalBytes)}%</span>
+                    )}
+                  </div>
+                  {wsdStatus.phase === 'downloading' && wsdStatus.totalBytes > 0 && (
+                    <Progress value={100 * wsdStatus.downloadedBytes / wsdStatus.totalBytes} />
+                  )}
+                  {wsdStatus.phase === 'error' && (
+                    <Button variant="outline" size="sm" onClick={startWsdModel}>Retry download</Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {settings.wordSenseDisambiguationEnabled && (
+              <div className="space-y-2">
+                <Label>Reduction level</Label>
+                <Slider
+                  value={[settings.wsdReductionLevel]}
+                  min={0}
+                  max={10}
+                  step={1}
+                  onValueChange={([level]) => updateSetting('wsdReductionLevel', level)}
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Retain more</span><span>Hide more</span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Zero retained every correct sense in single-sentence calibration. Higher levels target 1–10% misses; actual misses can differ, especially with more context.
+                </p>
+              </div>
+            )}
+
+            {settings.wordSenseDisambiguationEnabled && (
+              <div className="space-y-3">
+                <Label>Context unit</Label>
+                <div className="flex flex-wrap gap-3">
+                  {(['sentence', 'paragraph'] as const).map((unit) => (
+                    <Button
+                      key={unit}
+                      variant={settings.wsdContextUnit === unit ? 'default' : 'outline'}
+                      onClick={() => updateSetting('wsdContextUnit', unit)}
+                      className="min-w-[100px]"
+                    >
+                      {unit === 'sentence' ? 'Sentences' : 'Paragraphs'}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <Label>Context size</Label>
+                  <span className="text-muted-foreground text-sm font-medium">
+                    {settings.wsdContextSize} {settings.wsdContextUnit}{settings.wsdContextSize === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <Slider
+                  value={[settings.wsdContextSize]}
+                  min={1}
+                  max={3}
+                  step={1}
+                  onValueChange={([size]) => updateSetting('wsdContextSize', size)}
+                />
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Includes the word’s sentence or paragraph and nearby text. More context may help or hurt and can take longer to process.
+                </p>
+              </div>
+            )}
           </div>
         </section>
 

@@ -1,0 +1,29 @@
+{
+  "model": "sign/Ettin-150m-WSD",
+  "revision": "8751b577199d1bb95b74fa2457da7065d57100ae",
+  "license": "Apache-2.0",
+  "quantization": "dynamic-uint8",
+  "size": 150826529,
+  "parts": [
+    {
+      "name": "model.part00",
+      "size": 50000000,
+      "sha256": "6311bade2a07fd3ffb5fa2d85c307eaedd0243c65de98971a1bb80f279295367"
+    },
+    {
+      "name": "model.part01",
+      "size": 50000000,
+      "sha256": "0f01d39ea6ce0bc48691f48f19de128c5b838509eefedb64ac032bcdffcaad93"
+    },
+    {
+      "name": "model.part02",
+      "size": 50000000,
+      "sha256": "f903cdfcd42cb2bbecfedde789202d23d1079125241a74f9daf6dab1109578ff"
+    },
+    {
+      "name": "model.part03",
+      "size": 826529,
+      "sha256": "9d432a77854be16b7bf44ebd60ba7f8bde70bfef97613137cb77b58897c9e458"
+    }
+  ]
+}

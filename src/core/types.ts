@@ -7,6 +7,10 @@ export interface ReaderSettings {
   deduplicationRadius: number;
   knowledgeThreshold: number;
   englishVariant: 'US' | 'UK';
+  wordSenseDisambiguationEnabled: boolean;
+  wsdReductionLevel: number;
+  wsdContextUnit: 'sentence' | 'paragraph';
+  wsdContextSize: number;
 }
 
 export interface BookChapter {
@@ -68,6 +72,7 @@ export interface LexiconSense {
   ipaUs?: string;
   ipaUk?: string;
   definitions: string[];
+  source?: 'wordnet';
 }
 
 export interface LexiconEntry {

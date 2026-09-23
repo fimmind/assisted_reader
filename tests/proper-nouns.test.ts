@@ -1491,6 +1491,10 @@ test('reader analysis retains short tokens without selecting them for cards', ()
     deduplicationRadius: 0,
     knowledgeThreshold: 0.6,
     englishVariant: 'US',
+    wordSenseDisambiguationEnabled: false,
+    wsdReductionLevel: 0,
+    wsdContextUnit: 'sentence',
+    wsdContextSize: 1,
   };
   const model: VocabularyModel = {
     modelKey: 'test',
@@ -1583,6 +1587,10 @@ test('reader analysis keeps separate automatic targets for noun and verb usages'
     deduplicationRadius: 0,
     knowledgeThreshold: 0.6,
     englishVariant: 'US',
+    wordSenseDisambiguationEnabled: false,
+    wsdReductionLevel: 0,
+    wsdContextUnit: 'sentence',
+    wsdContextSize: 1,
   };
 
   const analysis = analyzeChapter({
@@ -1631,6 +1639,10 @@ test('cached chapter analysis preserves output and reuses lexical work across re
     deduplicationRadius: 0,
     knowledgeThreshold: 0.6,
     englishVariant: 'US',
+    wordSenseDisambiguationEnabled: false,
+    wsdReductionLevel: 0,
+    wsdContextUnit: 'sentence',
+    wsdContextSize: 1,
   };
   const paragraphs = ['I record the record.', 'They night the room.'];
   const expected = paragraphs.map(

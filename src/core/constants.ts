@@ -22,6 +22,10 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   deduplicationRadius: 5,
   knowledgeThreshold: 0.5,
   englishVariant: 'US',
+  wordSenseDisambiguationEnabled: false,
+  wsdReductionLevel: 5,
+  wsdContextUnit: 'sentence',
+  wsdContextSize: 1,
 };
 
 export const DEFAULT_PROFILE_NAME = 'Default Reader';

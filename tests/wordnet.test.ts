@@ -10,6 +10,7 @@ import {
 } from '../src/core/lexicon.js';
 import type { WordNetEntry } from '../src/core/lexicon.js';
 import type { LexiconEntry } from '../src/core/types.js';
+import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '../src/core/wsd-filter.js';
 
 function loadWordNetEntry(word: string): WordNetEntry {
   const fileName = resolveLexiconBucketFileName(word);
@@ -53,6 +54,42 @@ test('identical glosses appear once on cards while distinct synsets remain in th
   assert.equal(raw.senses[0].definitions.length, 3);
   assert.deepEqual(combined.senses[0].definitions, ['to a proportionate degree', 'in proportion']);
   assert.deepEqual(raw, original);
+});
+
+test('contextual filtering changes WordNet definitions but preserves Wiktionary-only groups', () => {
+  const wiktionary: LexiconEntry = {
+    word: 'bank',
+    senses: [{ partOfSpeech: 'interjection', ipa: '', definitions: ['A shouted warning.'] }],
+  };
+  const combined = combineDictionaryEntries(wiktionary, loadWordNetEntry('bank'));
+  assert.ok(combined);
+  const glosses = wordNetGlosses(combined);
+  assert.ok(glosses.length > 1);
+  const filtered = filterWordNetEntry(combined, glosses.map((_, index) => index === 0 ? 10 : 0), 0);
+  assert.deepEqual(wordNetGlosses(filtered), [glosses[0]]);
+  assert.deepEqual(filtered.senses.find((sense) => sense.partOfSpeech === 'interjection')?.definitions, ['A shouted warning.']);
+});
+
+test('WSD context windows include nearby sentences or paragraphs and preserve the target span', () => {
+  const paragraphs = [
+    'Ford glanced round at him.',
+    '“What’s that, foregone conclusion then, you reckon, sir?” said the barman. “Arsenal without a chance?”',
+    'Ford shook his head.',
+  ];
+  const start = paragraphs[1].indexOf('conclusion');
+  const context = { text: paragraphs[1], start, end: start + 'conclusion'.length };
+  const sentence = sentenceWindowForWsd(paragraphs, 1, context, 1);
+  const twoSentences = sentenceWindowForWsd(paragraphs, 1, context, 2);
+  const paragraph = paragraphWindowForWsd(paragraphs, 1, context, 1);
+  const threeParagraphs = paragraphWindowForWsd(paragraphs, 1, context, 3);
+  for (const window of [sentence, twoSentences, paragraph, threeParagraphs]) {
+    assert.equal(window.text.slice(window.start, window.end), 'conclusion');
+  }
+  assert.ok(!sentence.text.includes('said the barman'));
+  assert.ok(twoSentences.text.includes('said the barman'));
+  assert.equal(paragraph.text, paragraphs[1]);
+  assert.ok(threeParagraphs.text.includes(paragraphs[0]));
+  assert.ok(threeParagraphs.text.includes(paragraphs[2]));
 });
 
 interface Reply {
