@@ -35,8 +35,14 @@ def main() -> None:
             index += 1
     if not parts:
         raise ValueError(f"Exported model is empty: {MODEL}")
+    current_parts = {part["name"] for part in parts}
+    for stale_part in destination.glob("model.part[0-9][0-9]"):
+        if stale_part.name not in current_parts:
+            stale_part.unlink()
+    metadata = {}
     for name in ("tokenizer.json", "tokenizer_config.json", "answer_letters.json"):
         shutil.copyfile(SOURCE / name, destination / name)
+        metadata[name] = hashlib.sha256((destination / name).read_bytes()).hexdigest()
     (destination / "manifest.json").write_text(json.dumps({
         "model": "sign/Ettin-150m-WSD",
         "revision": REVISION,
@@ -44,6 +50,7 @@ def main() -> None:
         "quantization": "dynamic-uint8",
         "size": MODEL.stat().st_size,
         "parts": parts,
+        "metadata": metadata,
     }, indent=2) + "\n")
     print(f"Packaged {len(parts)} model chunks ({sum(part['size'] for part in parts)} bytes)")
 

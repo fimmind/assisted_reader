@@ -615,14 +615,19 @@ WordNet POS group supplies the definitions when present. Its transcription
 comes from the corresponding Wiktionary POS group. Wiktionary groups absent
 from WordNet remain available, including when contextual POS inference selects
 one. WordNet sense order is retained unless the optional Word Sense
-Disambiguation setting is enabled. That setting downloads a quantized ONNX
-export of `sign/Ettin-150m-WSD` into browser cache and runs it in a worker.
-For each card with multiple WordNet glosses, the worker marks the occurrence
+Disambiguation setting is enabled. That setting caches a quantized ONNX
+export of `sign/Ettin-150m-WSD` and its WASM runtime in the browser and runs
+inference in a worker. Cards near the viewport request filtering, and opened
+popups take priority over queued cards. For each card with multiple WordNet glosses, the worker marks the occurrence
 in the selected context, scores the WordNet options, and retains those within
 the selected score margin of the best WordNet option. Context size selects
 1–3 surrounding sentences or paragraphs, defaulting to one sentence.
 Wiktionary-only POS groups remain unchanged. Cards wait for inference before
-displaying definitions. Reduction levels 0–10 use margins calibrated on 429
+displaying definitions when the model is ready; offscreen cards defer the request
+until they approach the viewport. During model
+download or failure, cards show all dictionary definitions; errors can be
+retried in Settings. Disabling WSD stops the worker and releases its model.
+Reduction levels 0–10 use margins calibrated on 429
 single-sentence SemEval-2007 occurrences for zero observed calibration misses
 and nominal 1–10% miss rates respectively. Calibration used native ONNX
 inference; browser WASM scores and larger context windows may differ.

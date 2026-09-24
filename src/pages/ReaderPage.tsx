@@ -15,7 +15,7 @@ import { StudyFlow } from '@/components/StudyFlow';
 import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
 import { marginForReductionLevel } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
-import { startWsdModel } from '@/core/wsd-runtime';
+import { startWsdModel, stopWsdModel } from '@/core/wsd-runtime';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { WORD_RE } from '@/core/constants';
@@ -1128,6 +1128,8 @@ export default function ReaderPage() {
   useEffect(() => {
     if (settings.wordSenseDisambiguationEnabled) {
       startWsdModel();
+    } else {
+      stopWsdModel();
     }
   }, [settings.wordSenseDisambiguationEnabled]);
 
@@ -1845,6 +1847,7 @@ export default function ReaderPage() {
                             contextParagraphs={chapterParagraphs}
                             contextParagraphIndex={entry.sourceIndex}
                             wsdEnabled={settings.wordSenseDisambiguationEnabled}
+                            wsdPriority="card"
                             wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
                             wsdContextUnit={settings.wsdContextUnit}
                             wsdContextSize={settings.wsdContextSize}
@@ -1954,6 +1957,7 @@ export default function ReaderPage() {
               contextParagraphs={popup.contextIsBookParagraph ? chapterParagraphs : [popup.contextText]}
               contextParagraphIndex={popup.contextIsBookParagraph ? popup.sourceParagraphIndex : 0}
               wsdEnabled={settings.wordSenseDisambiguationEnabled}
+              wsdPriority="popup"
               wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
               wsdContextUnit={settings.wsdContextUnit}
               wsdContextSize={settings.wsdContextSize}

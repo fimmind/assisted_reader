@@ -51,7 +51,6 @@ Thumbs.db
 
 # generated static assets from sync:data
 public/data/
-public/wsd/onnxruntime/
 
 # generated test artifacts
 .tmp-tests/

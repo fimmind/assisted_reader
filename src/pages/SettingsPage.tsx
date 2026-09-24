@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
 import type { UserProfile } from '@/core/types';
-import { getWsdModelStatus, startWsdModel, subscribeWsdModelStatus } from '@/core/wsd-runtime';
+import { getWsdModelStatus, startWsdModel, stopWsdModel, subscribeWsdModelStatus } from '@/core/wsd-runtime';
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -25,6 +25,8 @@ export default function SettingsPage() {
     const unsubscribe = subscribeWsdModelStatus(setWsdStatus);
     if (settings.wordSenseDisambiguationEnabled) {
       startWsdModel();
+    } else {
+      stopWsdModel();
     }
     return unsubscribe;
   }, [settings.wordSenseDisambiguationEnabled]);

@@ -26,6 +26,8 @@ export interface DefinitionTextSelection {
 
 interface WordDefinitionCardProps {
   definition: LexiconEntry;
+  cardRef?: (element: HTMLDivElement | null) => void;
+  statusMessage?: string;
   activeDefinitionSelection?: DefinitionTextSelection;
   fontSize: number;
   onDefinitionWordClick: (click: DefinitionWordClick) => void;
@@ -341,6 +343,8 @@ function renderExpandedDefinitions(
 
 export function WordDefinitionCard({
   definition,
+  cardRef,
+  statusMessage,
   activeDefinitionSelection,
   fontSize,
   onDefinitionWordClick,
@@ -356,6 +360,7 @@ export function WordDefinitionCard({
   if (compact) {
     return (
       <div
+        ref={cardRef}
         data-definition-card="true"
         className="inline-flex flex-col bg-popover border border-vocabulary-card-border rounded-md shadow-sm dark:shadow-md px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] max-h-[70vh] overflow-y-auto align-middle"
         style={{ fontSize: `${cardFontSize}px` }}
@@ -396,12 +401,14 @@ export function WordDefinitionCard({
             })}
           </div>
         )}
+        {statusMessage && <p className="mt-2 text-xs text-muted-foreground">{statusMessage}</p>}
       </div>
     );
   }
 
   return (
     <div
+      ref={cardRef}
       data-definition-card="true"
       className="bg-popover border border-vocabulary-card-border rounded-lg shadow-sm dark:shadow-md p-5 w-[300px]"
       style={{ fontSize: `${cardFontSize}px` }}
@@ -442,6 +449,7 @@ export function WordDefinitionCard({
           })}
         </div>
       )}
+      {statusMessage && <p className="mt-3 text-xs text-muted-foreground">{statusMessage}</p>}
     </div>
   );
 }

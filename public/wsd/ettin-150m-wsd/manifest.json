@@ -25,5 +25,10 @@
       "size": 826529,
       "sha256": "9d432a77854be16b7bf44ebd60ba7f8bde70bfef97613137cb77b58897c9e458"
     }
-  ]
+  ],
+  "metadata": {
+    "tokenizer.json": "c4d6854a74370769dcf674360468feb68f80d5c14ab4e9ebe388914f1e646a34",
+    "tokenizer_config.json": "c4c3ee656394b5d77dac4d41a582ae91ffd1f0f829edd8991d18a63ef5100d4b",
+    "answer_letters.json": "02915f504301a324efb024fafe468944c652d684ea4092655abfb37f112c8650"
+  }
 }
