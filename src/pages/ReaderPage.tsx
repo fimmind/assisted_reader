@@ -172,6 +172,7 @@ const ANALYSIS_TIME_SLICE_MS = 8;
 const ANALYSIS_PUBLISH_INTERVAL_MS = 1000;
 const ANALYSIS_SCROLL_SETTLE_MS = 150;
 const ANALYSIS_SCROLL_POLL_MS = 16;
+const SCROLL_KEYS: ReadonlySet<string> = new Set(['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' ']);
 
 function clearDeferredHandle(handle: DeferredHandle | null): void {
   if (!handle) {
@@ -1264,8 +1265,16 @@ export default function ReaderPage() {
     const recordScrollActivity = () => {
       lastScrollActivityAtRef.current = performance.now();
     };
+    const recordKeyboardScrollActivity = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
+        return;
+      }
+      if (SCROLL_KEYS.has(event.key)) {
+        recordScrollActivity();
+      }
+    };
     const handleScroll = () => {
-      recordScrollActivity();
       const y = window.scrollY;
       if (y > lastScrollY.current && y > 100) setHeaderVisible(false);
       else if (y < lastScrollY.current) setHeaderVisible(true);
@@ -1277,10 +1286,12 @@ export default function ReaderPage() {
     };
     window.addEventListener('wheel', recordScrollActivity, { passive: true });
     window.addEventListener('touchmove', recordScrollActivity, { passive: true });
+    window.addEventListener('keydown', recordKeyboardScrollActivity);
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
       window.removeEventListener('wheel', recordScrollActivity);
       window.removeEventListener('touchmove', recordScrollActivity);
+      window.removeEventListener('keydown', recordKeyboardScrollActivity);
       window.removeEventListener('scroll', handleScroll);
     };
   }, [scheduleChapterProgressPersist]);
@@ -1479,7 +1490,7 @@ export default function ReaderPage() {
       top: measuredPositions[index]?.top ?? popup.top,
       left: measuredPositions[index]?.left ?? popup.left,
     })));
-  }, [settings.englishVariant, settings.fontSize, settings.wsdReductionLevel, settings.wsdContextUnit, settings.wsdContextSize, wordPopups]);
+  }, [settings.englishVariant, settings.fontSize, settings.wordSenseDisambiguationEnabled, settings.wsdReductionLevel, settings.wsdContextUnit, settings.wsdContextSize, wordPopups]);
 
   const openRootWordPopup = useCallback((
     anchorRect: PopupAnchorRect,
@@ -1604,7 +1615,7 @@ export default function ReaderPage() {
       closeAllWordPopups();
     };
 
-    const handleViewportScroll = (event: Event) => {
+    const handleUserScroll = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('[data-word-popup-index]')) {
         return;
@@ -1612,16 +1623,30 @@ export default function ReaderPage() {
       closeAllWordPopups();
     };
 
+    const handleScrollKey = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('[data-word-popup-index]')) {
+        return;
+      }
+      if (SCROLL_KEYS.has(event.key)) {
+        closeAllWordPopups();
+      }
+    };
+
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleEscape);
+    document.addEventListener('keydown', handleScrollKey);
+    window.addEventListener('wheel', handleUserScroll, { passive: true });
+    window.addEventListener('touchmove', handleUserScroll, { passive: true });
     window.addEventListener('resize', handleViewportResize);
-    window.addEventListener('scroll', handleViewportScroll, true);
 
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener('keydown', handleScrollKey);
+      window.removeEventListener('wheel', handleUserScroll);
+      window.removeEventListener('touchmove', handleUserScroll);
       window.removeEventListener('resize', handleViewportResize);
-      window.removeEventListener('scroll', handleViewportScroll, true);
     };
   }, [closeAllWordPopups, wordPopups.length]);
 
@@ -1911,30 +1936,31 @@ export default function ReaderPage() {
         </div>
       )}
       {wordPopups.map((popup, popupIndex) => {
+        const indicatorPosition = calculateWordLookupIndicatorPosition(
+          popup.anchorRect,
+          window.innerWidth,
+          window.innerHeight,
+        );
+        const pendingIndicator = (
+          <div
+            key={popup.id}
+            className="pointer-events-none fixed text-muted-foreground"
+            style={{
+              top: indicatorPosition.top,
+              left: indicatorPosition.left,
+              zIndex: 40 + popupIndex,
+            }}
+          >
+            <ReaderActivityIndicator
+              ariaLabel={`Looking up definition for ${popup.lookupWord || popup.target.lemma}`}
+              testId={popupIndex === 0
+                ? 'reader-definition-lookup-indicator'
+                : `reader-definition-lookup-indicator-${popupIndex}`}
+            />
+          </div>
+        );
         if (popup.definitionStatus === 'loading') {
-          const indicatorPosition = calculateWordLookupIndicatorPosition(
-            popup.anchorRect,
-            window.innerWidth,
-            window.innerHeight,
-          );
-          return (
-            <div
-              key={popup.id}
-              className="pointer-events-none fixed text-muted-foreground"
-              style={{
-                top: indicatorPosition.top,
-                left: indicatorPosition.left,
-                zIndex: 40 + popupIndex,
-              }}
-            >
-              <ReaderActivityIndicator
-                ariaLabel={`Looking up definition for ${popup.lookupWord || popup.target.lemma}`}
-                testId={popupIndex === 0
-                  ? 'reader-definition-lookup-indicator'
-                  : `reader-definition-lookup-indicator-${popupIndex}`}
-              />
-            </div>
-          );
+          return pendingIndicator;
         }
         const rawDefinition = popup.definition
           ?? createFallbackLexiconEntry(popup.lookupWord || popup.target.lemma);
@@ -1961,6 +1987,7 @@ export default function ReaderPage() {
               wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
               wsdContextUnit={settings.wsdContextUnit}
               wsdContextSize={settings.wsdContextSize}
+              pendingIndicator={pendingIndicator}
               onWsdSettled={() => setWordPopups((previous) => previous.slice())}
               activeDefinitionSelection={wordPopups[popupIndex + 1]?.triggerSelection ?? undefined}
               fontSize={settings.fontSize}

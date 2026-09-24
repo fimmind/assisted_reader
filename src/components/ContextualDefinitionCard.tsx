@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ComponentProps } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
 import { getWsdModelStatus, scoreWordSenses, subscribeWsdModelStatus } from '@/core/wsd-runtime';
@@ -16,6 +16,7 @@ interface ContextualDefinitionCardProps extends ComponentProps<typeof WordDefini
   wsdContextUnit: ReaderSettings['wsdContextUnit'];
   wsdContextSize: number;
   wsdPriority: WsdRequestPriority;
+  pendingIndicator?: ReactNode;
   onWsdSettled?: () => void;
 }
 
@@ -45,14 +46,13 @@ export function ContextualDefinitionCard({
   wsdContextUnit,
   wsdContextSize,
   wsdPriority,
+  pendingIndicator,
   onWsdSettled,
   definition,
   definitionStatus,
   ...cardProps
 }: ContextualDefinitionCardProps) {
   const [modelPhase, setModelPhase] = useState(() => getWsdModelStatus().phase);
-  const [cardElement, setCardElement] = useState<HTMLDivElement | null>(null);
-  const [nearViewport, setNearViewport] = useState(wsdPriority === 'popup');
   const [scored, setScored] = useState<ScoredDefinition | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
@@ -60,27 +60,16 @@ export function ContextualDefinitionCard({
     setModelPhase((previous) => previous === status.phase ? previous : status.phase);
   }), []);
   useEffect(() => {
-    if (wsdPriority === 'popup') {
-      setNearViewport(true);
-      return;
+    if (wsdEnabled && modelPhase === 'error') {
+      onWsdSettled?.();
     }
-    if (!cardElement) {
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => setNearViewport(entries.some((entry) => entry.isIntersecting)),
-      { rootMargin: '300px' },
-    );
-    observer.observe(cardElement);
-    return () => observer.disconnect();
-  }, [cardElement, wsdPriority]);
+  }, [modelPhase, wsdEnabled]);
 
   const glosses = wordNetGlosses(definition);
   const hasWordNetChoices = wsdEnabled && definitionStatus === 'ready' && glosses.length > 1;
-  const shouldScore = hasWordNetChoices && modelPhase === 'ready' && nearViewport;
   let scoringContext: WsdContext | null = null;
   let contextError: string | null = null;
-  if (shouldScore) {
+  if (hasWordNetChoices && modelPhase === 'ready') {
     if (!context) {
       contextError = `Missing WSD context for ${definition.word}`;
     } else {
@@ -95,6 +84,8 @@ export function ContextualDefinitionCard({
     }
   }
   const requestKey = scoringContext ? JSON.stringify([scoringContext, glosses]) : '';
+  const readyScores = hasWordNetChoices && modelPhase === 'ready' && scored?.key === requestKey ? scored.scores : null;
+  const shouldScore = hasWordNetChoices && modelPhase === 'ready' && !readyScores && !contextError;
 
   useEffect(() => {
     if (!shouldScore || !scoringContext) {
@@ -121,12 +112,13 @@ export function ContextualDefinitionCard({
   }, [requestKey, modelPhase, shouldScore, wsdPriority]);
 
   const currentError = error?.key === requestKey ? error : null;
-  const readyScores = shouldScore && scored?.key === requestKey ? scored.scores : null;
+  const waitingForWsd = hasWordNetChoices && !readyScores && !currentError && !contextError && modelPhase !== 'error';
+  if (wsdEnabled && (definitionStatus === 'loading' || waitingForWsd)) {
+    return waitingForWsd ? pendingIndicator ?? null : null;
+  }
   const visibleDefinition = readyScores
     ? filterWordNetEntry(definition, readyScores, wsdMargin)
     : definition;
-  const visibleStatus = hasWordNetChoices && modelPhase === 'ready' && !readyScores && !currentError && !contextError
-    ? 'loading' : definitionStatus;
   const statusMessage = hasWordNetChoices && modelPhase === 'error'
     ? 'WSD unavailable. Showing all definitions; retry in Settings.'
     : currentError || contextError
@@ -136,9 +128,8 @@ export function ContextualDefinitionCard({
   return (
     <WordDefinitionCard
       {...cardProps}
-      cardRef={setCardElement}
       definition={visibleDefinition}
-      definitionStatus={visibleStatus}
+      definitionStatus={definitionStatus}
       statusMessage={statusMessage}
     />
   );

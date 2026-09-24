@@ -617,16 +617,19 @@ from WordNet remain available, including when contextual POS inference selects
 one. WordNet sense order is retained unless the optional Word Sense
 Disambiguation setting is enabled. That setting caches a quantized ONNX
 export of `sign/Ettin-150m-WSD` and its WASM runtime in the browser and runs
-inference in a worker. Cards near the viewport request filtering, and opened
-popups take priority over queued cards. For each card with multiple WordNet glosses, the worker marks the occurrence
+inference in a worker. Cards request filtering as soon as their WordNet definitions
+and the model are ready. Opened popups take priority over queued cards. For each
+card with multiple WordNet glosses, the worker marks the occurrence
 in the selected context, scores the WordNet options, and retains those within
 the selected score margin of the best WordNet option. Context size selects
 1–3 surrounding sentences or paragraphs, defaulting to one sentence.
-Wiktionary-only POS groups remain unchanged. Cards wait for inference before
-displaying definitions when the model is ready; offscreen cards defer the request
-until they approach the viewport. During model
-download or failure, cards show all dictionary definitions; errors can be
+Wiktionary-only POS groups remain unchanged. With WSD enabled, cards with
+multiple WordNet definitions appear after inference finishes. During model
+download, those cards remain hidden. If the model or a request fails, cards
+show all dictionary definitions with an error message; errors can be
 retried in Settings. Disabling WSD stops the worker and releases its model.
+Opened word popups keep their activity indicator visible through dictionary
+lookup and WSD inference.
 Reduction levels 0–10 use margins calibrated on 429
 single-sentence SemEval-2007 occurrences for zero observed calibration misses
 and nominal 1–10% miss rates respectively. Calibration used native ONNX
