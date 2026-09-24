@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ComponentProps, ReactNode } from 'react';
 import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
-import { getWsdModelStatus, scoreWordSenses, subscribeWsdModelStatus } from '@/core/wsd-runtime';
-import type { WsdRequestPriority } from '@/core/wsd-runtime';
+import { getWsdModelStatus, promoteWsdWordSenses, scoreWordSenses, subscribeWsdModelStatus } from '@/core/wsd-runtime';
 import type { ReaderSettings } from '@/core/types';
 import { WordDefinitionCard } from './WordDefinitionCard';
 
@@ -15,7 +14,9 @@ interface ContextualDefinitionCardProps extends ComponentProps<typeof WordDefini
   wsdMargin: number;
   wsdContextUnit: ReaderSettings['wsdContextUnit'];
   wsdContextSize: number;
-  wsdPriority: WsdRequestPriority;
+  wsdPriority: 'card' | 'popup';
+  getPriorityTarget?: (index: number) => HTMLElement | null;
+  priorityTargetIndex?: number;
   pendingIndicator?: ReactNode;
   onWsdSettled?: () => void;
 }
@@ -46,6 +47,8 @@ export function ContextualDefinitionCard({
   wsdContextUnit,
   wsdContextSize,
   wsdPriority,
+  getPriorityTarget,
+  priorityTargetIndex,
   pendingIndicator,
   onWsdSettled,
   definition,
@@ -53,6 +56,7 @@ export function ContextualDefinitionCard({
   ...cardProps
 }: ContextualDefinitionCardProps) {
   const [modelPhase, setModelPhase] = useState(() => getWsdModelStatus().phase);
+  const [nearViewport, setNearViewport] = useState(false);
   const [scored, setScored] = useState<ScoredDefinition | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
@@ -64,7 +68,6 @@ export function ContextualDefinitionCard({
       onWsdSettled?.();
     }
   }, [modelPhase, wsdEnabled]);
-
   const glosses = wordNetGlosses(definition);
   const hasWordNetChoices = wsdEnabled && definitionStatus === 'ready' && glosses.length > 1;
   let scoringContext: WsdContext | null = null;
@@ -86,6 +89,30 @@ export function ContextualDefinitionCard({
   const requestKey = scoringContext ? JSON.stringify([scoringContext, glosses]) : '';
   const readyScores = hasWordNetChoices && modelPhase === 'ready' && scored?.key === requestKey ? scored.scores : null;
   const shouldScore = hasWordNetChoices && modelPhase === 'ready' && !readyScores && !contextError;
+  useEffect(() => {
+    if (!wsdEnabled) {
+      setNearViewport(false);
+      return;
+    }
+    if (!hasWordNetChoices || readyScores || wsdPriority !== 'card' || !getPriorityTarget || priorityTargetIndex === undefined) {
+      return;
+    }
+    const target = getPriorityTarget(priorityTargetIndex);
+    if (!target) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => setNearViewport(entries.some((entry) => entry.isIntersecting)),
+      { rootMargin: '500px' },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [getPriorityTarget, hasWordNetChoices, priorityTargetIndex, readyScores, wsdEnabled, wsdPriority]);
+  useEffect(() => {
+    if (nearViewport && scoringContext) {
+      promoteWsdWordSenses(scoringContext, glosses);
+    }
+  }, [nearViewport, requestKey]);
 
   useEffect(() => {
     if (!shouldScore || !scoringContext) {
@@ -93,7 +120,7 @@ export function ContextualDefinitionCard({
     }
     const controller = new AbortController();
     setError(null);
-    void scoreWordSenses(scoringContext, glosses, wsdPriority, controller.signal)
+    void scoreWordSenses(scoringContext, glosses, wsdPriority === 'popup' ? 'popup' : nearViewport ? 'visible-card' : 'card', controller.signal)
       .then((scores) => {
         if (!controller.signal.aborted) {
           setScored({ key: requestKey, scores });

@@ -7,7 +7,7 @@ export interface WsdModelStatus {
   message: string;
 }
 
-export type WsdRequestPriority = 'card' | 'popup';
+export type WsdRequestPriority = 'card' | 'visible-card' | 'popup';
 
 interface ScoreSubscriber {
   resolve: (scores: number[]) => void;
@@ -112,7 +112,8 @@ function dispatchNextJob(): void {
     return;
   }
   const popupIndex = queuedJobs.findIndex((job) => job.priority === 'popup');
-  const index = popupIndex >= 0 ? popupIndex : 0;
+  const visibleIndex = queuedJobs.findIndex((job) => job.priority === 'visible-card');
+  const index = popupIndex >= 0 ? popupIndex : visibleIndex >= 0 ? visibleIndex : 0;
   const [job] = queuedJobs.splice(index, 1);
   if (!job || !worker) {
     failWorker(new Error('WSD worker is missing while a score request is queued.'));
@@ -120,7 +121,7 @@ function dispatchNextJob(): void {
   }
   activeJob = job;
   try {
-    worker.postMessage({ type: 'score', id: job.id, context: job.context, glosses: job.glosses, priority: job.priority });
+    worker.postMessage({ type: 'score', id: job.id, context: job.context, glosses: job.glosses, priority: job.priority === 'popup' ? 'popup' : 'card' });
   } catch (error) {
     failWorker(new Error(`WSD score request could not be sent: id=${job.id} error=${error instanceof Error ? error.message : String(error)}`));
   }
@@ -267,6 +268,14 @@ export function stopWsdModel(): void {
   publishStatus({ phase: 'idle', downloadedBytes: 0, totalBytes: 0, message: 'Model not loaded' });
 }
 
+export function promoteWsdWordSenses(context: WsdContext, glosses: string[]): void {
+  const key = JSON.stringify([context, glosses]);
+  const job = jobsByKey.get(key);
+  if (job && job.priority === 'card') {
+    job.priority = 'visible-card';
+  }
+}
+
 export function scoreWordSenses(
   context: WsdContext,
   glosses: string[],
@@ -291,8 +300,8 @@ export function scoreWordSenses(
     job = { id: ++requestId, key, context, glosses, priority, subscribers: new Set<ScoreSubscriber>() };
     jobsByKey.set(key, job);
     queuedJobs.push(job);
-  } else if (priority === 'popup') {
-    job.priority = 'popup';
+  } else if (priority === 'popup' || (priority === 'visible-card' && job.priority === 'card')) {
+    job.priority = priority;
   }
   const active = job;
   const result = new Promise<number[]>((resolve, reject) => {

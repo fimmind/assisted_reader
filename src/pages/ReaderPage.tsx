@@ -758,6 +758,9 @@ export default function ReaderPage() {
   const setParagraphElement = useCallback((visibleParagraphIndex: number, element: HTMLParagraphElement | null) => {
     paraRefs.current[visibleParagraphIndex] = element;
   }, []);
+  const getParagraphElement = useCallback((visibleParagraphIndex: number): HTMLParagraphElement | null => (
+    paraRefs.current[visibleParagraphIndex] ?? null
+  ), []);
 
   const resolveAnalysisAnchorIndex = useCallback((paragraphCount: number, chapterProgress: number) => {
     if (paragraphCount <= 0) {
@@ -1873,6 +1876,8 @@ export default function ReaderPage() {
                             contextParagraphIndex={entry.sourceIndex}
                             wsdEnabled={settings.wordSenseDisambiguationEnabled}
                             wsdPriority="card"
+                            getPriorityTarget={getParagraphElement}
+                            priorityTargetIndex={entry.visibleIndex}
                             wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
                             wsdContextUnit={settings.wsdContextUnit}
                             wsdContextSize={settings.wsdContextSize}

@@ -617,8 +617,10 @@ from WordNet remain available, including when contextual POS inference selects
 one. WordNet sense order is retained unless the optional Word Sense
 Disambiguation setting is enabled. That setting caches a quantized ONNX
 export of `sign/Ettin-150m-WSD` and its WASM runtime in the browser and runs
-inference in a worker. Cards request filtering as soon as their WordNet definitions
-and the model are ready. Opened popups take priority over queued cards. For each
+inference in a worker. Model parts, metadata, and the WASM runtime load concurrently.
+Cards request filtering as soon as their WordNet definitions and the model are
+ready. Opened popups take priority over queued cards, followed by cards near the
+viewport. For each
 card with multiple WordNet glosses, the worker marks the occurrence
 in the selected context, scores the WordNet options, and retains those within
 the selected score margin of the best WordNet option. Context size selects

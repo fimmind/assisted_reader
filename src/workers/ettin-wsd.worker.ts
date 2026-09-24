@@ -37,6 +37,7 @@ const DOWNLOAD_TIMEOUT_MS = 120_000;
 const MANIFEST_TIMEOUT_MS = 20_000;
 const METADATA_TIMEOUT_MS = 60_000;
 const WASM_TIMEOUT_MS = 90_000;
+const MAX_PARALLEL_MODEL_PARTS = 2;
 
 let session: ort.InferenceSession | null = null;
 let tokenizer: Tokenizer | null = null;
@@ -215,7 +216,7 @@ async function downloadMetadata(cache: Cache, name: string, expectedHash: string
   return value;
 }
 
-async function downloadPartOnce(part: ModelPart, downloadedBytes: number, totalBytes: number): Promise<ArrayBuffer> {
+async function downloadPartOnce(part: ModelPart, onProgress: (bytes: number) => void): Promise<ArrayBuffer> {
   const url = `${MODEL_BASE}${part.name}?sha256=${part.sha256}`;
   const controller = new AbortController();
   let timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
@@ -244,7 +245,7 @@ async function downloadPartOnce(part: ModelPart, downloadedBytes: number, totalB
       bytes.set(result.value, offset);
       offset += result.value.length;
       if (offset - reportedOffset >= 1_000_000 || offset === part.size) {
-        reportStatus('downloading', downloadedBytes + offset, totalBytes, 'Downloading model');
+        onProgress(offset);
         reportedOffset = offset;
       }
     }
@@ -261,7 +262,7 @@ async function downloadPartOnce(part: ModelPart, downloadedBytes: number, totalB
   }
 }
 
-async function downloadPart(cache: Cache, part: ModelPart, downloadedBytes: number, totalBytes: number): Promise<ArrayBuffer> {
+async function downloadPart(cache: Cache, part: ModelPart, onProgress: (bytes: number) => void): Promise<ArrayBuffer> {
   const url = `${MODEL_BASE}${part.name}?sha256=${part.sha256}`;
   const cached = await validatedCachedBytes(cache, url, part.sha256)
     ?? await migrateLegacyBytes(cache, url, part.sha256);
@@ -269,15 +270,16 @@ async function downloadPart(cache: Cache, part: ModelPart, downloadedBytes: numb
     if (cached.byteLength !== part.size) {
       await cache.delete(url);
     } else {
-      reportStatus('downloading', downloadedBytes + part.size, totalBytes, 'Using downloaded model');
+      onProgress(part.size);
       return cached;
     }
   }
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    onProgress(0);
     let bytes: ArrayBuffer;
     try {
-      bytes = await downloadPartOnce(part, downloadedBytes, totalBytes);
+      bytes = await downloadPartOnce(part, onProgress);
     } catch (error) {
       lastError = new Error(`WSD model part download failed: url=${url} attempt=${attempt} error=${errorMessage(error)}`);
       console.warn('wsd-download-retry', { url, attempt, error: lastError });
@@ -287,9 +289,35 @@ async function downloadPart(cache: Cache, part: ModelPart, downloadedBytes: numb
       continue;
     }
     await cache.put(url, new Response(bytes));
+    onProgress(part.size);
     return bytes;
   }
   throw lastError ?? new Error(`WSD model part download failed without an error: url=${url}`);
+}
+
+async function loadModelParts(cache: Cache, manifest: ModelManifest): Promise<Uint8Array> {
+  const modelBytes = new Uint8Array(manifest.size);
+  const progress: number[] = manifest.parts.map(() => 0);
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const part of manifest.parts) {
+    offsets.push(offset);
+    offset += part.size;
+  }
+  let nextIndex = 0;
+  const loadNextPart = async (): Promise<void> => {
+    while (nextIndex < manifest.parts.length) {
+      const index = nextIndex++;
+      const part = manifest.parts[index];
+      const bytes = await downloadPart(cache, part, (loadedBytes) => {
+        progress[index] = loadedBytes;
+        reportStatus('downloading', progress.reduce((sum, value) => sum + value, 0), manifest.size, 'Downloading model');
+      });
+      modelBytes.set(new Uint8Array(bytes), offsets[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_MODEL_PARTS, manifest.parts.length) }, () => loadNextPart()));
+  return modelBytes;
 }
 
 async function loadWasmBinary(cache: Cache): Promise<ArrayBuffer> {
@@ -341,21 +369,15 @@ async function loadModel(): Promise<void> {
   reportStatus('loading', 0, 0, 'Checking model files');
   const cache = await caches.open(CACHE_NAME);
   const manifest = await loadManifest(cache);
-  const modelBytes = new Uint8Array(manifest.size);
-  let downloadedBytes = 0;
   reportStatus('downloading', 0, manifest.size, 'Downloading model');
-  for (const part of manifest.parts) {
-    const bytes = await downloadPart(cache, part, downloadedBytes, manifest.size);
-    modelBytes.set(new Uint8Array(bytes), downloadedBytes);
-    downloadedBytes += part.size;
-  }
-  reportStatus('loading', manifest.size, manifest.size, 'Preparing model');
-  const [tokenizerJson, tokenizerConfig, answerLetters, wasmBinary] = await Promise.all([
+  const [modelBytes, tokenizerJson, tokenizerConfig, answerLetters, wasmBinary] = await Promise.all([
+    loadModelParts(cache, manifest),
     downloadMetadata(cache, 'tokenizer.json', manifest.metadata['tokenizer.json']),
     downloadMetadata(cache, 'tokenizer_config.json', manifest.metadata['tokenizer_config.json']),
     downloadMetadata(cache, 'answer_letters.json', manifest.metadata['answer_letters.json']),
     loadWasmBinary(cache),
   ]);
+  reportStatus('loading', manifest.size, manifest.size, 'Preparing model');
   if (!answerLetters || typeof answerLetters !== 'object'
     || !Array.isArray((answerLetters as Record<string, unknown>).letters)
     || (answerLetters as { letters: unknown[] }).letters.length !== 128
