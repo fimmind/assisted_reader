@@ -112,7 +112,20 @@ const AUTOMATIC_CARD_EXCLUDED_PARTS_OF_SPEECH = new Set<PartOfSpeech>([
 ]);
 
 const AUTOMATIC_CARD_EXCLUDED_LEMMAS = new Set<string>([
+  'a', 'an', 'the',
+  'i', 'me', 'my', 'mine', 'myself', 'we', 'us', 'our', 'ours', 'ourselves',
+  'you', 'your', 'yours', 'yourself', 'yourselves',
+  'he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself',
+  'it', 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
+  'this', 'that', 'these', 'those', 'each', 'every', 'either', 'neither', 'any', 'some',
+  'about', 'above', 'across', 'after', 'against', 'among', 'at', 'before',
+  'behind', 'below', 'beneath', 'beside', 'between', 'beyond', 'by',
+  'despite', 'during', 'except',
   'for',
+  'from', 'in', 'inside', 'into', 'of', 'on', 'onto', 'over',
+  'through', 'throughout', 'to', 'toward', 'towards',
+  'under', 'underneath', 'until', 'upon', 'via', 'with', 'within', 'without',
+  'and', 'or', 'but', 'nor', 'because', 'although', 'though', 'if', 'unless',
   'how', 'when', 'where', 'why', 'whether', 'whenever', 'wherever', 'however',
   'who', 'whom', 'whose', 'what', 'which', 'whoever', 'whatever', 'whichever',
 ]);
@@ -354,6 +367,7 @@ export function rankParagraphCardTargets(tokens: ParagraphToken[], threshold: nu
   tokens.forEach((token, index) => {
     if (!token.unknown
       || AUTOMATIC_CARD_EXCLUDED_LEMMAS.has(token.lemma)
+      || AUTOMATIC_CARD_EXCLUDED_LEMMAS.has(normalizeToken(token.raw))
       || (token.partOfSpeech !== null && AUTOMATIC_CARD_EXCLUDED_PARTS_OF_SPEECH.has(token.partOfSpeech))) {
       return;
     }

@@ -1613,7 +1613,7 @@ test('reader analysis keeps separate automatic targets for noun and verb usages'
 });
 
 test('automatic card candidates exclude function words and leave unknown tokens available', () => {
-  const words = ['they', 'wander', 'around', 'when', 'rain'];
+  const words = ['they', 'wander', 'around', 'and', 'about', 'the', 'garden', 'because', 'of', 'rain'];
   const model: VocabularyModel = {
     modelKey: 'function-word-test',
     modelName: 'function-word-test',
@@ -1645,30 +1645,42 @@ test('automatic card candidates exclude function words and leave unknown tokens 
     wsdContextSize: 1,
   };
   const taggedNlp = createStubNlpWithTaggedTerms([
-    { text: 'They', tags: ['Pronoun'] },
+    { text: 'They', tags: ['Noun'] },
     { text: 'wander', tags: ['Verb'] },
     { text: 'around', tags: ['Preposition'] },
-    { text: 'when', tags: ['Adverb'] },
+    { text: 'and', tags: ['Noun'] },
+    { text: 'about', tags: ['Noun'] },
+    { text: 'the', tags: ['Noun'] },
+    { text: 'garden', tags: ['Noun'] },
+    { text: 'because', tags: ['Noun'] },
+    { text: 'of', tags: ['Noun'] },
     { text: 'rain', tags: ['Noun'] },
   ]);
 
   const analysis = analyzeChapter({
-    chapter: { title: 'Function words', paragraphs: ['They wander around when rain.'] },
+    chapter: { title: 'Function words', paragraphs: ['They wander around and about the garden because of rain.'] },
     settings,
     model,
     profile,
     lemmaDict: {},
     nlp: taggedNlp as NonNullable<Parameters<typeof analyzeChapter>[0]['nlp']>,
-    maxCardsPerParagraph: 2,
+    maxCardsPerParagraph: 3,
   })[0];
 
   assert.deepEqual(analysis.cardTargets, [
     { lemma: 'wander', partOfSpeech: 'verb' },
+    { lemma: 'garden', partOfSpeech: 'noun' },
     { lemma: 'rain', partOfSpeech: 'noun' },
   ]);
   assert.deepEqual(
-    analysis.tokens.filter((token) => ['they', 'around', 'when'].includes(token.lemma)).map((token) => token.unknown),
-    [true, true, true],
+    analysis.tokens.filter((token) => ['they', 'around', 'and', 'about', 'the', 'because'].includes(token.lemma)).map((token) => token.unknown),
+    [true, true, true, true, true, true],
+  );
+  const mistaggedArticle = analysis.tokens.find((token) => token.raw === 'the');
+  assert.ok(mistaggedArticle);
+  assert.deepEqual(
+    rankParagraphCardTargets([{ ...mistaggedArticle, lemma: 'garden' }], settings.knowledgeThreshold),
+    [],
   );
 });
 
