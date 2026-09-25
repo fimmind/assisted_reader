@@ -93,6 +93,24 @@ interface ResolvedStudyWsdItem {
   error: string;
 }
 
+function studyWsdCacheKey(
+  item: StudyCardItem,
+  sessionId: string,
+  settings: ReaderSettings,
+): string {
+  return JSON.stringify([
+    sessionId,
+    item.lexicalItemId,
+    item.example.paragraphIndex,
+    item.example.sentenceIndex,
+    item.example.sentence,
+    item.example.targetSpans,
+    settings.wsdReductionLevel,
+    settings.wsdContextUnit,
+    settings.wsdContextSize,
+  ]);
+}
+
 interface StudyFlowProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -513,6 +531,7 @@ export function StudyFlow({
   const [wsdAttempt, setWsdAttempt] = useState(0);
   const preparationRunIdRef = useRef(0);
   const exportControllerRef = useRef<AbortController | null>(null);
+  const wsdItemsRef = useRef<Map<string, StudyCardItem>>(new Map());
 
   useEffect(() => () => exportControllerRef.current?.abort(), []);
 
@@ -717,21 +736,18 @@ export function StudyFlow({
     : null;
   const currentItemId = currentBatch?.cardSession.orderedItemIds[currentBatch.cardSession.currentPosition];
   const currentItem = currentBatch?.items.find((candidate) => candidate.lexicalItemId === currentItemId);
-  const currentWsdKey = currentItem && currentSession && currentBatch && settings.wordSenseDisambiguationEnabled
-    ? JSON.stringify([
-      currentSession.id,
-      currentBatch.id,
-      currentItem.lexicalItemId,
-      currentItem.example.occurrenceKey,
-      settings.wsdReductionLevel,
-      settings.wsdContextUnit,
-      settings.wsdContextSize,
-      wsdAttempt,
-    ])
+  const currentCacheKey = currentItem && currentSession && settings.wordSenseDisambiguationEnabled
+    ? studyWsdCacheKey(currentItem, currentSession.id, settings)
     : null;
+  const currentWsdKey = currentCacheKey === null ? null : JSON.stringify([currentCacheKey, wsdAttempt]);
 
   useEffect(() => {
-    if (!open || view !== "cards" || !currentItem || !currentSession || !currentWsdKey) {
+    if (!open || view !== "cards" || !currentItem || !currentSession || !currentCacheKey || !currentWsdKey) {
+      return;
+    }
+    const cached = wsdItemsRef.current.get(currentCacheKey);
+    if (cached) {
+      setResolvedWsdItem({ key: currentWsdKey, item: cached, error: "" });
       return;
     }
     const controller = new AbortController();
@@ -739,6 +755,7 @@ export function StudyFlow({
     void resolveStudyWsdItem(currentItem, currentSession.textScope, settings, lexicon, controller.signal)
       .then((resolved) => {
         if (!controller.signal.aborted) {
+          wsdItemsRef.current.set(currentCacheKey, resolved);
           setResolvedWsdItem({ key: currentWsdKey, item: resolved, error: "" });
         }
       })
@@ -1434,8 +1451,21 @@ export function StudyFlow({
                 const controller = new AbortController();
                 exportControllerRef.current = controller;
                 try {
-                  const resolvedItems = await Promise.all(items.map((item) =>
-                    resolveStudyWsdItem(item, currentSession.textScope, settings, lexicon, controller.signal)));
+                  const resolvedItems = await Promise.all(items.map(async (item): Promise<StudyCardItem> => {
+                    if (!settings.wordSenseDisambiguationEnabled) {
+                      return item;
+                    }
+                    const cacheKey = studyWsdCacheKey(item, currentSession.id, settings);
+                    const cached = wsdItemsRef.current.get(cacheKey);
+                    if (cached) {
+                      return cached;
+                    }
+                    const resolved = await resolveStudyWsdItem(item, currentSession.textScope, settings, lexicon, controller.signal);
+                    if (!controller.signal.aborted) {
+                      wsdItemsRef.current.set(cacheKey, resolved);
+                    }
+                    return resolved;
+                  }));
                   if (controller.signal.aborted) {
                     return;
                   }
