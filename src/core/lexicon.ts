@@ -84,18 +84,14 @@ export function resolveLexiconPronunciations(
   sense: LexiconSense,
   variant: 'US' | 'UK',
 ): ResolvedPronunciations {
-  const variantPreferred = variant === 'UK' ? sense.ipaUk : sense.ipaUs;
-  const otherVariant = variant === 'UK' ? sense.ipaUs : sense.ipaUk;
-  const preferred =
-    variantPreferred?.trim() || sense.ipa.trim() || otherVariant?.trim() || '';
-  const alternatives = orderedUnique(
-    [
-      sense.ipaUs?.trim() ?? '',
-      sense.ipaUk?.trim() ?? '',
-      sense.ipa.trim(),
-    ].filter((value) => value.length > 0 && value !== preferred),
-  );
-  return { preferred, alternatives };
+  const selected = variant === 'UK' ? sense.ipaUk?.trim() : sense.ipaUs?.trim();
+  const other = variant === 'UK' ? sense.ipaUs?.trim() : sense.ipaUk?.trim();
+  const generic = sense.ipa.trim();
+  const preferred = selected || (generic !== other ? generic : '');
+  return {
+    preferred,
+    alternatives: orderedUnique([selected ?? '', generic].filter((ipa) => ipa.length > 0 && ipa !== preferred && ipa !== other)),
+  };
 }
 
 const LEXICON_BUCKET_ALGORITHM = 'fnv1a-32';
@@ -471,12 +467,32 @@ export function loadWordNet(): LazyWordNet {
   return wordNetLexicon;
 }
 
+function withSharedPronunciation(entry: LexiconEntry): LexiconEntry {
+  const pronounced = entry.senses.filter((sense) =>
+    sense.ipa.length > 0 || Boolean(sense.ipaUs) || Boolean(sense.ipaUk),
+  );
+  const shared = pronounced[0];
+  if (!shared || pronounced.some((sense) =>
+    sense.ipa !== shared.ipa || sense.ipaUs !== shared.ipaUs || sense.ipaUk !== shared.ipaUk,
+  )) {
+    return entry;
+  }
+  return {
+    ...entry,
+    senses: entry.senses.map((sense) =>
+      sense.ipa.length > 0 || sense.ipaUs || sense.ipaUk
+        ? sense
+        : { ...sense, ipa: shared.ipa, ipaUs: shared.ipaUs, ipaUk: shared.ipaUk },
+    ),
+  };
+}
+
 export function combineDictionaryEntries(
   wiktionaryEntry: LexiconEntry | null,
   wordNetEntry: WordNetEntry | null,
 ): LexiconEntry | null {
   if (!wordNetEntry) {
-    return wiktionaryEntry;
+    return wiktionaryEntry ? withSharedPronunciation(wiktionaryEntry) : null;
   }
   const wordNetSenses: LexiconSense[] = wordNetEntry.senses.map((sense) => {
     const pronunciation = wiktionaryEntry?.senses.find(
@@ -495,10 +511,10 @@ export function combineDictionaryEntries(
   const wiktionaryOnlySenses = wiktionaryEntry?.senses.filter(
     (sense) => !wordNetPartsOfSpeech.has(sense.partOfSpeech),
   ) ?? [];
-  return {
+  return withSharedPronunciation({
     word: wiktionaryEntry?.word ?? wordNetEntry.word,
     senses: [...wordNetSenses, ...wiktionaryOnlySenses],
-  };
+  });
 }
 
 export function loadLexicon(): LazyLexicon {

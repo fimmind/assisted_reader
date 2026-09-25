@@ -431,6 +431,8 @@ test("Study resolves every available definition for the contextual lemma and POS
     "to capture sound",
   ]);
   assert.equal(resolved?.definition, "to preserve information");
+  assert.equal(resolved?.preferredTranscription, "/rɪˈkɔːd/");
+  assert.deepEqual(resolved?.alternativeTranscriptions, []);
 });
 
 test("Study WSD uses the selected example and its context settings", () => {

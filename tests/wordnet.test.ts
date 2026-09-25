@@ -22,6 +22,16 @@ function loadWordNetEntry(word: string): WordNetEntry {
   return entry;
 }
 
+function loadWiktionaryEntry(word: string): LexiconEntry {
+  const fileName = resolveLexiconBucketFileName(word);
+  const entries = JSON.parse(readFileSync(`data/lexicon/${fileName}`, 'utf8')) as LexiconEntry[];
+  const entry = entries.find((candidate) => candidate.word === word);
+  if (!entry) {
+    throw new Error(`Missing generated Wiktionary entry: word=${word} bucket=${fileName}`);
+  }
+  return entry;
+}
+
 test('WordNet definitions use Wiktionary transcription for a matching POS', () => {
   const wiktionary: LexiconEntry = {
     word: 'bank',
@@ -33,6 +43,69 @@ test('WordNet definitions use Wiktionary transcription for a matching POS', () =
   assert.equal(selected.senses[0]?.ipa, '/bæŋk/');
   assert.equal(selected.senses[0]?.definitions[0], 'sloping land (especially the slope beside a body of water)');
   assert.ok(!selected.senses[0]?.definitions.includes('Wiktionary definition'));
+});
+
+test('pronunciations preserve unlabelled IPA and exclude the opposite regional variant', () => {
+  const ukOnly = {
+    partOfSpeech: 'noun' as const,
+    ipa: '/ˈbrɪ.tɪʃ/',
+    ipaUk: '/ˈbrɪ.tɪʃ/',
+    definitions: ['example'],
+  };
+  assert.deepEqual(resolveLexiconPronunciations(ukOnly, 'US'), { preferred: '', alternatives: [] });
+  assert.deepEqual(resolveLexiconPronunciations(ukOnly, 'UK'), { preferred: '/ˈbrɪ.tɪʃ/', alternatives: [] });
+
+  const usOnly = { ...ukOnly, ipa: '/ˈæ.mə.rɪ.kən/', ipaUs: '/ˈæ.mə.rɪ.kən/', ipaUk: undefined };
+  assert.deepEqual(resolveLexiconPronunciations(usOnly, 'UK'), { preferred: '', alternatives: [] });
+  assert.deepEqual(resolveLexiconPronunciations(usOnly, 'US'), { preferred: '/ˈæ.mə.rɪ.kən/', alternatives: [] });
+
+  const genericOnly = { ...ukOnly, ipaUk: undefined };
+  assert.deepEqual(resolveLexiconPronunciations(genericOnly, 'US'), { preferred: '/ˈbrɪ.tɪʃ/', alternatives: [] });
+  assert.deepEqual(resolveLexiconPronunciations(genericOnly, 'UK'), { preferred: '/ˈbrɪ.tɪʃ/', alternatives: [] });
+
+  const genericAndUk = { ...ukOnly, ipa: '/neutral/' };
+  assert.deepEqual(resolveLexiconPronunciations(genericAndUk, 'US'), { preferred: '/neutral/', alternatives: [] });
+  assert.deepEqual(resolveLexiconPronunciations(genericAndUk, 'UK'), { preferred: '/ˈbrɪ.tɪʃ/', alternatives: ['/neutral/'] });
+});
+
+test('the reported words distinguish UK-only from unlabelled IPA', () => {
+  const seamanship = loadWiktionaryEntry('seamanship').senses[0];
+  const gash = loadWiktionaryEntry('gash').senses.find((sense) => sense.partOfSpeech === 'noun');
+  const sylphlike = loadWiktionaryEntry('sylphlike').senses[0];
+  assert.ok(seamanship);
+  assert.ok(gash);
+  assert.ok(sylphlike);
+  assert.equal(resolveLexiconPronunciations(seamanship, 'US').preferred, '');
+  assert.equal(resolveLexiconPronunciations(seamanship, 'UK').preferred, '/ˈsiː.mənˌʃɪp/');
+  assert.equal(resolveLexiconPronunciations(gash, 'US').preferred, '/ɡæʃ/');
+  assert.equal(resolveLexiconPronunciations(gash, 'UK').preferred, '/ɡæʃ/');
+  assert.equal(resolveLexiconPronunciations(sylphlike, 'US').preferred, '');
+  assert.equal(resolveLexiconPronunciations(sylphlike, 'UK').preferred, '');
+});
+
+test('imperial keeps its shared pronunciation when its proper-noun sense is selected', () => {
+  const wiktionary = loadWiktionaryEntry('imperial');
+  const combined = combineDictionaryEntries(wiktionary, loadWordNetEntry('imperial'));
+  assert.ok(combined);
+  const selected = resolveLexiconEntry(combined, { lemma: 'imperial', partOfSpeech: 'proper-noun' });
+  assert.equal(selected.senses.length, 1);
+  const sense = selected.senses[0];
+  assert.ok(sense);
+  assert.equal(resolveLexiconPronunciations(sense, 'US').preferred, '/ɪmˈpɪɹ.i.əl/');
+  assert.equal(resolveLexiconPronunciations(sense, 'UK').preferred, '/ɪmˈpɪə.ɹi.əl/');
+});
+
+test('different pronunciations across senses are not copied to a sense without IPA', () => {
+  const entry: LexiconEntry = {
+    word: 'example',
+    senses: [
+      { partOfSpeech: 'noun', ipa: '/noun/', definitions: ['noun'] },
+      { partOfSpeech: 'verb', ipa: '/verb/', definitions: ['verb'] },
+      { partOfSpeech: 'proper-noun', ipa: '', definitions: ['name'] },
+    ],
+  };
+  const combined = combineDictionaryEntries(entry, null);
+  assert.equal(combined?.senses[2]?.ipa, '');
 });
 
 test('Wiktionary supplies POS groups missing from WordNet', () => {
