@@ -262,7 +262,12 @@ async function downloadPartOnce(part: ModelPart, onProgress: (bytes: number) => 
   }
 }
 
-async function downloadPart(cache: Cache, part: ModelPart, onProgress: (bytes: number) => void): Promise<ArrayBuffer> {
+async function downloadPart(
+  cache: Cache,
+  part: ModelPart,
+  onCached: () => void,
+  onProgress: (bytes: number) => void,
+): Promise<ArrayBuffer> {
   const url = `${MODEL_BASE}${part.name}?sha256=${part.sha256}`;
   const cached = await validatedCachedBytes(cache, url, part.sha256)
     ?? await migrateLegacyBytes(cache, url, part.sha256);
@@ -270,7 +275,7 @@ async function downloadPart(cache: Cache, part: ModelPart, onProgress: (bytes: n
     if (cached.byteLength !== part.size) {
       await cache.delete(url);
     } else {
-      onProgress(part.size);
+      onCached();
       return cached;
     }
   }
@@ -298,6 +303,7 @@ async function downloadPart(cache: Cache, part: ModelPart, onProgress: (bytes: n
 async function loadModelParts(cache: Cache, manifest: ModelManifest): Promise<Uint8Array> {
   const modelBytes = new Uint8Array(manifest.size);
   const progress: number[] = manifest.parts.map(() => 0);
+  let downloadStarted = false;
   const offsets: number[] = [];
   let offset = 0;
   for (const part of manifest.parts) {
@@ -309,10 +315,21 @@ async function loadModelParts(cache: Cache, manifest: ModelManifest): Promise<Ui
     while (nextIndex < manifest.parts.length) {
       const index = nextIndex++;
       const part = manifest.parts[index];
-      const bytes = await downloadPart(cache, part, (loadedBytes) => {
-        progress[index] = loadedBytes;
-        reportStatus('downloading', progress.reduce((sum, value) => sum + value, 0), manifest.size, 'Downloading model');
-      });
+      const bytes = await downloadPart(
+        cache,
+        part,
+        () => {
+          progress[index] = part.size;
+          if (downloadStarted) {
+            reportStatus('downloading', progress.reduce((sum, value) => sum + value, 0), manifest.size, 'Downloading model');
+          }
+        },
+        (loadedBytes) => {
+          downloadStarted = true;
+          progress[index] = loadedBytes;
+          reportStatus('downloading', progress.reduce((sum, value) => sum + value, 0), manifest.size, 'Downloading model');
+        },
+      );
       modelBytes.set(new Uint8Array(bytes), offsets[index]);
     }
   };
@@ -369,7 +386,6 @@ async function loadModel(): Promise<void> {
   reportStatus('loading', 0, 0, 'Checking model files');
   const cache = await caches.open(CACHE_NAME);
   const manifest = await loadManifest(cache);
-  reportStatus('downloading', 0, manifest.size, 'Downloading model');
   const [modelBytes, tokenizerJson, tokenizerConfig, answerLetters, wasmBinary] = await Promise.all([
     loadModelParts(cache, manifest),
     downloadMetadata(cache, 'tokenizer.json', manifest.metadata['tokenizer.json']),
