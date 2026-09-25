@@ -35,12 +35,9 @@ function BookCardComponent({ book, stats, isAnalyzing, analysisProgressPercent }
 
   return (
     <Link href={`/reader/${book.id}`} className="group flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg">
-      <div className="aspect-[3/4] rounded-lg overflow-hidden border border-border bg-muted shadow-sm transition-all duration-300 group-hover:shadow-md group-hover:-translate-y-1 relative">
+      <div className="aspect-[3/4] rounded-lg overflow-hidden border border-border bg-muted shadow-sm transition-all duration-300 group-hover:shadow-md group-hover:-translate-y-1">
         <div className="w-full h-full bg-gradient-to-br from-primary/25 via-primary/10 to-background flex items-end p-2.5 sm:p-3 md:p-3 lg:p-4">
           <span className="font-serif text-sm sm:text-base md:text-base lg:text-lg text-foreground/90 line-clamp-3">{book.title}</span>
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-2.5 sm:p-3 md:p-3 lg:p-4">
-          <span className="text-white text-sm font-medium">Continue reading</span>
         </div>
       </div>
       
