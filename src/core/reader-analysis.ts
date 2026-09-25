@@ -747,6 +747,9 @@ export async function buildResumableBookLemmaHistogramAsync(
   hooks.onWorkUnitProcessed(0, totalWorkUnits);
 
   for (let chapterIndex = 0; chapterIndex < book.chapters.length; chapterIndex += 1) {
+    if (!hooks.shouldContinue()) {
+      return null;
+    }
     const chapter = book.chapters[chapterIndex];
     const countSegments = savedSegments
       .filter((segment): segment is Extract<BookLemmaHistogramSegment, { kind: 'counts' }> =>
@@ -754,6 +757,9 @@ export async function buildResumableBookLemmaHistogramAsync(
       .sort((left, right) => left.startParagraphIndex - right.startParagraphIndex);
     let countedParagraphs = 0;
     for (const segment of countSegments) {
+      if (!hooks.shouldContinue()) {
+        return null;
+      }
       if (segment.startParagraphIndex !== countedParagraphs || segment.endParagraphIndex > chapter.paragraphs.length) {
         throw new RangeError(`Invalid book histogram count checkpoint: chapter=${chapterIndex} start=${segment.startParagraphIndex} expected=${countedParagraphs}`);
       }
@@ -778,6 +784,9 @@ export async function buildResumableBookLemmaHistogramAsync(
       .sort((left, right) => left.startParagraphIndex - right.startParagraphIndex);
     const taggedByParagraph: TaggedSentence[][] = [];
     for (const segment of tagSegments) {
+      if (!hooks.shouldContinue()) {
+        return null;
+      }
       if (segment.startParagraphIndex !== taggedByParagraph.length || segment.endParagraphIndex > chapter.paragraphs.length
         || segment.taggedByParagraph.length !== segment.endParagraphIndex - segment.startParagraphIndex) {
         throw new RangeError(`Invalid book histogram tag checkpoint: chapter=${chapterIndex} start=${segment.startParagraphIndex} expected=${taggedByParagraph.length}`);
@@ -816,6 +825,10 @@ export async function buildResumableBookLemmaHistogramAsync(
         if (endParagraphIndex % HISTOGRAM_YIELD_PARAGRAPHS === 0) {
           await hooks.onYield();
         }
+      }
+      await hooks.onYield();
+      if (!hooks.shouldContinue()) {
+        return null;
       }
       properLexicon = buildHighConfidenceProperNounLexicon(taggedByParagraph.flat());
       await hooks.saveSegment({ kind: 'lexicon', chapterIndex, properLexicon: [...properLexicon] });
@@ -871,6 +884,9 @@ export async function buildResumableBookLemmaHistogramAsync(
     await hooks.clearTaggedChapter(chapterIndex);
   }
 
+  if (!hooks.shouldContinue()) {
+    return null;
+  }
   return {
     totalTokenCount,
     nonProperLemmaCounts: Object.fromEntries(aggregateLemmaCounts),

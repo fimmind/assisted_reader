@@ -187,6 +187,14 @@ export default function LibraryPage() {
   const seedHandleRef = useRef<DeferredHandle | null>(null);
   const hasLoadedOnceRef = useRef(false);
 
+  const stopBackgroundAnalysis = (): void => {
+    refreshRunIdRef.current += 1;
+    clearDeferredHandle(fastStatsHandleRef.current);
+    fastStatsHandleRef.current = null;
+    clearDeferredHandle(seedHandleRef.current);
+    seedHandleRef.current = null;
+  };
+
   const fallbackStats: BookStats = useMemo(() => ({
     unknownTokenCount: 0,
     unknownTokenPercent: 0,
@@ -499,10 +507,7 @@ export default function LibraryPage() {
   }, []);
 
   useEffect(() => () => {
-    clearDeferredHandle(fastStatsHandleRef.current);
-    fastStatsHandleRef.current = null;
-    clearDeferredHandle(seedHandleRef.current);
-    seedHandleRef.current = null;
+    stopBackgroundAnalysis();
   }, []);
 
   const triggerImport = () => {
@@ -599,6 +604,7 @@ export default function LibraryPage() {
                 stats={statsByBookId[book.id] ?? fallbackStats}
                 isAnalyzing={analyzingBookProgressById[book.id] !== undefined}
                 analysisProgressPercent={analyzingBookProgressById[book.id] ?? 0}
+                onOpen={stopBackgroundAnalysis}
               />
             ))}
           </div>

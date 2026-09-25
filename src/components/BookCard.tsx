@@ -9,9 +9,10 @@ interface BookCardProps {
   stats: BookStats;
   isAnalyzing: boolean;
   analysisProgressPercent: number;
+  onOpen: () => void;
 }
 
-function BookCardComponent({ book, stats, isAnalyzing, analysisProgressPercent }: BookCardProps) {
+function BookCardComponent({ book, stats, isAnalyzing, analysisProgressPercent, onOpen }: BookCardProps) {
   const chapterCount = book.chapters.length;
   const safeChapter = (() => {
     if (chapterCount <= 0) {
@@ -34,7 +35,7 @@ function BookCardComponent({ book, stats, isAnalyzing, analysisProgressPercent }
     : (chapterCount === 0 ? 0 : (safeChapter / chapterCount) * 100);
 
   return (
-    <Link href={`/reader/${book.id}`} className="group flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg">
+    <Link href={`/reader/${book.id}`} onClickCapture={onOpen} className="group flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg">
       <div className="aspect-[3/4] rounded-lg overflow-hidden border border-border bg-muted shadow-sm transition-all duration-300 group-hover:shadow-md group-hover:-translate-y-1">
         <div className="w-full h-full bg-gradient-to-br from-primary/25 via-primary/10 to-background flex items-end p-2.5 sm:p-3 md:p-3 lg:p-4">
           <span className="font-serif text-sm sm:text-base md:text-base lg:text-lg text-foreground/90 line-clamp-3">{book.title}</span>

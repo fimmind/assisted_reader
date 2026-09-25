@@ -1889,7 +1889,7 @@ test('book histogram resumes from saved tagging and counting batches', async () 
   assert.ok(expected);
 
   let segments: BookLemmaHistogramSegment[] = [];
-  let stopAfter: 'tags' | 'counts' | 'never' = 'tags';
+  let stopAfter: 'tags' | 'finalTags' | 'counts' | 'never' = 'tags';
   let shouldContinue = true;
   let reportedUnits: number[] = [];
   const run = () => buildResumableBookLemmaHistogramAsync(
@@ -1907,6 +1907,9 @@ test('book histogram resumes from saved tagging and counting batches', async () 
         if (stopAfter === 'tags' && segments.some((segment) => segment.kind === 'tags' && segment.endParagraphIndex === 32)) {
           shouldContinue = false;
         }
+        if (stopAfter === 'finalTags' && segments.some((segment) => segment.kind === 'tags' && segment.endParagraphIndex === 40)) {
+          shouldContinue = false;
+        }
         if (stopAfter === 'counts' && segments.some((segment) => segment.kind === 'counts' && segment.endParagraphIndex === 32)) {
           shouldContinue = false;
         }
@@ -1922,11 +1925,16 @@ test('book histogram resumes from saved tagging and counting batches', async () 
 
   assert.equal(await run(), null);
   assert.equal(segments.filter((segment) => segment.kind === 'tags').length, 1);
+  stopAfter = 'finalTags';
+  shouldContinue = true;
+  assert.equal(await run(), null);
+  assert.equal(segments.filter((segment) => segment.kind === 'tags').length, 2);
+  assert.equal(segments.some((segment) => segment.kind === 'lexicon'), false);
   stopAfter = 'counts';
   shouldContinue = true;
   reportedUnits = [];
   assert.equal(await run(), null);
-  assert.ok(reportedUnits.includes(32));
+  assert.ok(reportedUnits.includes(40));
   assert.equal(segments.filter((segment) => segment.kind === 'counts').length, 1);
   stopAfter = 'never';
   shouldContinue = true;
