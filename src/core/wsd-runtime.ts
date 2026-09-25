@@ -248,6 +248,41 @@ export function subscribeWsdModelStatus(listener: (status: WsdModelStatus) => vo
   return () => listeners.delete(listener);
 }
 
+export function waitForWsdModelReady(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException('WSD request was canceled.', 'AbortError'));
+  }
+  if (status.phase === 'ready') {
+    return Promise.resolve();
+  }
+  if (status.phase === 'error') {
+    return Promise.reject(new Error(`WSD model failed to load: ${status.message}`));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      unsubscribe();
+      signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(new DOMException('WSD request was canceled.', 'AbortError'));
+    };
+    const unsubscribe = subscribeWsdModelStatus((next) => {
+      if (next.phase === 'ready') {
+        cleanup();
+        resolve();
+      } else if (next.phase === 'error') {
+        cleanup();
+        reject(new Error(`WSD model failed to load: ${next.message}`));
+      }
+    });
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (status.phase === 'idle') {
+      startWsdModel();
+    }
+  });
+}
+
 export function startWsdModel(): void {
   if (status.phase === 'ready' || status.phase === 'downloading' || status.phase === 'loading') {
     return;

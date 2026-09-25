@@ -1,5 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DEFAULT_READER_SETTINGS } from "../src/core/constants.js";
+import {
+  studyItemWithWsdScores,
+  studyWsdContext,
+} from "../src/core/study-wsd.js";
 import {
   answerCurrentCard,
   correctCurrentCardResponse,
@@ -426,6 +431,46 @@ test("Study resolves every available definition for the contextual lemma and POS
     "to capture sound",
   ]);
   assert.equal(resolved?.definition, "to preserve information");
+});
+
+test("Study WSD uses the selected example and its context settings", () => {
+  const item: StudyCardItem = {
+    ...createCardItem("record", "verb"),
+    example: {
+      sentence: "They record a record.",
+      paragraphIndex: 7,
+      sentenceIndex: 1,
+      targetSpans: [{ start: 5, end: 11 }],
+      occurrenceKey: "7:1",
+    },
+  };
+  const textScope = { ...scope, paragraphOffset: 7, paragraphs: ["He waited. They record a record."] };
+  assert.deepEqual(studyWsdContext(item, textScope, {
+    ...DEFAULT_READER_SETTINGS,
+    wsdContextUnit: "sentence",
+    wsdContextSize: 1,
+  }), { text: "They record a record.", start: 5, end: 11 });
+  assert.deepEqual(studyWsdContext(item, textScope, {
+    ...DEFAULT_READER_SETTINGS,
+    wsdContextUnit: "paragraph",
+    wsdContextSize: 1,
+  }), { text: "He waited. They record a record.", start: 16, end: 22 });
+});
+
+test("Study WSD filtered definitions reach the card and Anki field", () => {
+  const item = createCardItem("record", "verb");
+  const filtered = studyItemWithWsdScores(item, {
+    word: "record",
+    senses: [{
+      partOfSpeech: "verb",
+      ipa: "",
+      source: "wordnet",
+      definitions: ["capture audio", "preserve information"],
+    }],
+  }, [0, 5], 1);
+  assert.deepEqual(filtered.definitions, ["preserve information"]);
+  assert.equal(filtered.definition, "preserve information");
+  assert.equal(createAnkiStudyText([filtered], "separate").split("\n")[2].split("\t")[4], "preserve information");
 });
 
 test("coverage treats selected item tokens as known", () => {

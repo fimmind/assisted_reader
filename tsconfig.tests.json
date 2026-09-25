@@ -23,9 +23,11 @@
     "src/core/reader-analysis.ts",
     "src/core/card-session.ts",
     "src/core/study.ts",
+    "src/core/study-wsd.ts",
     "src/core/study-session.ts",
     "src/core/types.ts",
     "src/core/wsd-filter.ts",
+    "src/core/wsd-runtime.ts",
     "tests/**/*.ts"
   ],
   "exclude": ["node_modules", "dist", "build"]

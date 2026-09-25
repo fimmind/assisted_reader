@@ -18,6 +18,7 @@ interface CardSessionScreenProps {
   interaction: CardItemInteraction;
   frontContent: ReactNode;
   revealContent: ReactNode;
+  canRespond: boolean;
   canUndo: boolean;
   errorMessage: string;
   onExit: () => void;
@@ -41,6 +42,7 @@ export function CardSessionScreen({
   interaction,
   frontContent,
   revealContent,
+  canRespond,
   canUndo,
   errorMessage,
   onExit,
@@ -69,6 +71,9 @@ export function CardSessionScreen({
         }
         return;
       }
+      if (!canRespond) {
+        return;
+      }
       const respond = (response: CardResponse): void => {
         event.preventDefault();
         onRespond(response);
@@ -84,7 +89,7 @@ export function CardSessionScreen({
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [interaction.revealed, onRespond, onReveal]);
+  }, [canRespond, interaction.revealed, onRespond, onReveal]);
 
   return (
     <Dialog
@@ -170,6 +175,7 @@ export function CardSessionScreen({
                     variant="ghost"
                     className="h-14 rounded-none border-0 text-muted-foreground"
                     aria-keyshortcuts="D ArrowLeft"
+                    disabled={!canRespond}
                     onClick={() => onRespond('unknown')}
                   >
                     Didn’t recognize
@@ -179,6 +185,7 @@ export function CardSessionScreen({
                     variant="ghost"
                     className="h-14 rounded-none border-0 border-l border-border text-foreground"
                     aria-keyshortcuts="K ArrowRight"
+                    disabled={!canRespond}
                     onClick={() => onRespond('known')}
                   >
                     Recognized

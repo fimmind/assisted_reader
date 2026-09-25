@@ -76,6 +76,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CardSessionScreen } from "@/components/CardSessionScreen";
+import { resolveStudyWsdItem } from "@/core/study-wsd";
+import { startWsdModel } from "@/core/wsd-runtime";
 import { yieldToBrowser } from "@/lib/browser";
 
 interface PreparedStudy {
@@ -83,6 +85,12 @@ interface PreparedStudy {
   coverageItems: StudyCoverageItem[];
   selectedItems: StudyCardItem[];
   coverage: StudyCoverageEstimate;
+}
+
+interface ResolvedStudyWsdItem {
+  key: string;
+  item: StudyCardItem | null;
+  error: string;
 }
 
 interface StudyFlowProps {
@@ -247,7 +255,7 @@ interface StudyExportDialogProps {
   onExport: (
     items: StudyCardItem[],
     transcriptionLayout: AnkiTranscriptionLayout,
-  ) => void;
+  ) => Promise<void>;
 }
 
 function StudyExportDialog({
@@ -263,6 +271,7 @@ function StudyExportDialog({
     Set<string>
   >(new Set());
   const [exportErrorMessage, setExportErrorMessage] = useState("");
+  const [exporting, setExporting] = useState(false);
   const allItems = [...wordsToLearn, ...alreadyKnew];
 
   const openDialog = (): void => {
@@ -285,12 +294,14 @@ function StudyExportDialog({
     });
   };
 
-  const exportSelectedItems = (): void => {
+  const exportSelectedItems = async (): Promise<void> => {
     const selectedItems = allItems.filter((item) =>
       selectedLexicalItemIds.has(item.lexicalItemId),
     );
+    setExporting(true);
+    setExportErrorMessage("");
     try {
-      onExport(selectedItems, transcriptionLayout);
+      await onExport(selectedItems, transcriptionLayout);
       setOpen(false);
     } catch (error) {
       setExportErrorMessage(
@@ -298,6 +309,8 @@ function StudyExportDialog({
           ? error.message
           : "Unable to export the selected words.",
       );
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -319,6 +332,9 @@ function StudyExportDialog({
       <Dialog
         open={open}
         onOpenChange={(nextOpen) => {
+          if (exporting) {
+            return;
+          }
           setOpen(nextOpen);
           if (!nextOpen) {
             setExportErrorMessage("");
@@ -439,16 +455,17 @@ function StudyExportDialog({
             <Button
               type="button"
               variant="ghost"
+              disabled={exporting}
               onClick={() => setOpen(false)}
             >
               Cancel
             </Button>
             <Button
               type="button"
-              disabled={selectedLexicalItemIds.size === 0}
-              onClick={exportSelectedItems}
+              disabled={exporting || selectedLexicalItemIds.size === 0}
+              onClick={() => void exportSelectedItems()}
             >
-              Export selected
+              {exporting ? "Preparing export..." : "Export selected"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -492,7 +509,12 @@ export function StudyFlow({
   const [noticeMessage, setNoticeMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [noMoreWords, setNoMoreWords] = useState(false);
+  const [resolvedWsdItem, setResolvedWsdItem] = useState<ResolvedStudyWsdItem | null>(null);
+  const [wsdAttempt, setWsdAttempt] = useState(0);
   const preparationRunIdRef = useRef(0);
+  const exportControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => exportControllerRef.current?.abort(), []);
 
   useEffect(() => {
     if (!open) {
@@ -693,6 +715,44 @@ export function StudyFlow({
   const currentBatch = currentSession
     ? getActiveStudyBatch(currentSession)
     : null;
+  const currentItemId = currentBatch?.cardSession.orderedItemIds[currentBatch.cardSession.currentPosition];
+  const currentItem = currentBatch?.items.find((candidate) => candidate.lexicalItemId === currentItemId);
+  const currentWsdKey = currentItem && currentSession && currentBatch && settings.wordSenseDisambiguationEnabled
+    ? JSON.stringify([
+      currentSession.id,
+      currentBatch.id,
+      currentItem.lexicalItemId,
+      currentItem.example.occurrenceKey,
+      settings.wsdReductionLevel,
+      settings.wsdContextUnit,
+      settings.wsdContextSize,
+      wsdAttempt,
+    ])
+    : null;
+
+  useEffect(() => {
+    if (!open || view !== "cards" || !currentItem || !currentSession || !currentWsdKey) {
+      return;
+    }
+    const controller = new AbortController();
+    setResolvedWsdItem({ key: currentWsdKey, item: null, error: "" });
+    void resolveStudyWsdItem(currentItem, currentSession.textScope, settings, lexicon, controller.signal)
+      .then((resolved) => {
+        if (!controller.signal.aborted) {
+          setResolvedWsdItem({ key: currentWsdKey, item: resolved, error: "" });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setResolvedWsdItem({
+            key: currentWsdKey,
+            item: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [currentWsdKey, lexicon, open, view]);
 
   const revealCard = (): void => {
     if (!studyState || !currentSession || !currentBatch) {
@@ -1123,7 +1183,12 @@ export function StudyFlow({
     if (!item || !interaction) {
       return null;
     }
-    const definitions = item.definitions ?? [item.definition];
+    const wsdReady = !settings.wordSenseDisambiguationEnabled
+      || (resolvedWsdItem?.key === currentWsdKey && resolvedWsdItem.item !== null);
+    const visibleItem = settings.wordSenseDisambiguationEnabled && resolvedWsdItem?.key === currentWsdKey
+      ? resolvedWsdItem.item
+      : settings.wordSenseDisambiguationEnabled ? null : item;
+    const definitions = visibleItem?.definitions ?? (visibleItem ? [visibleItem.definition] : []);
     const pronunciation = formatStudyPronunciations([
       item.preferredTranscription,
       ...item.alternativeTranscriptions,
@@ -1134,6 +1199,7 @@ export function StudyFlow({
         position={currentBatch.cardSession.currentPosition}
         total={currentBatch.items.length}
         interaction={interaction}
+        canRespond={wsdReady}
         frontContent={
           <div className="space-y-6 text-center">
             <div>
@@ -1157,8 +1223,20 @@ export function StudyFlow({
               </div>
             )}
             <div className="mx-auto w-full max-w-prose text-center">
-              {definitions.length === 1 ? (
-                <p className="leading-relaxed">{item.definition}</p>
+              {visibleItem === null ? (
+                resolvedWsdItem?.key === currentWsdKey && resolvedWsdItem.error ? (
+                  <div className="space-y-2 text-sm">
+                    <p role="alert">WSD could not prepare this card: {resolvedWsdItem.error}</p>
+                    <Button type="button" variant="outline" onClick={() => {
+                      startWsdModel();
+                      setWsdAttempt((attempt) => attempt + 1);
+                    }}>Retry WSD</Button>
+                  </div>
+                ) : (
+                  <p role="status" className="text-sm text-muted-foreground">Disambiguating definitions...</p>
+                )
+              ) : definitions.length === 1 ? (
+                <p className="leading-relaxed">{visibleItem.definition}</p>
               ) : (
                 <ol className="list-inside list-decimal space-y-2 leading-relaxed">
                   {definitions.map((definition) => (
@@ -1352,14 +1430,28 @@ export function StudyFlow({
                   ),
                 )
               }
-              onExport={(items, transcriptionLayout) =>
-                downloadStudyExport(
-                  bookTitle,
-                  scope.chapterIndex,
-                  items,
-                  transcriptionLayout,
-                )
-              }
+              onExport={async (items, transcriptionLayout) => {
+                const controller = new AbortController();
+                exportControllerRef.current = controller;
+                try {
+                  const resolvedItems = await Promise.all(items.map((item) =>
+                    resolveStudyWsdItem(item, currentSession.textScope, settings, lexicon, controller.signal)));
+                  if (controller.signal.aborted) {
+                    return;
+                  }
+                  downloadStudyExport(
+                    bookTitle,
+                    scope.chapterIndex,
+                    resolvedItems,
+                    transcriptionLayout,
+                  );
+                } finally {
+                  controller.abort();
+                  if (exportControllerRef.current === controller) {
+                    exportControllerRef.current = null;
+                  }
+                }
+              }}
             />
           </div>
         </main>
