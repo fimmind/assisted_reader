@@ -69,6 +69,22 @@ export interface BookLemmaHistogram {
   nonProperLemmaCounts: Record<string, number>;
 }
 
+const AUTOMATIC_CARD_EXCLUDED_PARTS_OF_SPEECH = new Set<PartOfSpeech>([
+  'article',
+  'determiner',
+  'pronoun',
+  'preposition',
+  'postposition',
+  'conjunction',
+  'particle',
+]);
+
+const AUTOMATIC_CARD_EXCLUDED_LEMMAS = new Set<string>([
+  'for',
+  'how', 'when', 'where', 'why', 'whether', 'whenever', 'wherever', 'however',
+  'who', 'whom', 'whose', 'what', 'which', 'whoever', 'whatever', 'whichever',
+]);
+
 function flattenTaggedSentences(paragraphs: string[], nlp: ChapterAnalysisInput['nlp']): TaggedSentence[] {
   const output: TaggedSentence[] = [];
   for (const paragraph of paragraphs) {
@@ -296,7 +312,7 @@ function collectParagraphLemmaHistogram(
   return { totalTokenCount, nonProperLemmaCounts };
 }
 
-function scoreCardTargets(tokens: ParagraphToken[], threshold: number): DefinitionTarget[] {
+export function rankParagraphCardTargets(tokens: ParagraphToken[], threshold: number): DefinitionTarget[] {
   const frequencies = new Map<string, {
     target: DefinitionTarget;
     count: number;
@@ -304,7 +320,9 @@ function scoreCardTargets(tokens: ParagraphToken[], threshold: number): Definiti
     firstIndex: number;
   }>();
   tokens.forEach((token, index) => {
-    if (!token.unknown) {
+    if (!token.unknown
+      || AUTOMATIC_CARD_EXCLUDED_LEMMAS.has(token.lemma)
+      || (token.partOfSpeech !== null && AUTOMATIC_CARD_EXCLUDED_PARTS_OF_SPEECH.has(token.partOfSpeech))) {
       return;
     }
 
@@ -422,7 +440,7 @@ function analyzeChapterWithContext(
 
   const selectedCardTargetsByParagraph: DefinitionTarget[][] = [];
   if (includeCards) {
-    const rankedCardTargetsByParagraph = paragraphTokens.map((tokens) => scoreCardTargets(tokens, threshold));
+    const rankedCardTargetsByParagraph = paragraphTokens.map((tokens) => rankParagraphCardTargets(tokens, threshold));
     for (let paragraphIndex = 0; paragraphIndex < rankedCardTargetsByParagraph.length; paragraphIndex += 1) {
       const rankedTargets = rankedCardTargetsByParagraph[paragraphIndex];
       const nearbyShownTargetKeys = new Set<string>();

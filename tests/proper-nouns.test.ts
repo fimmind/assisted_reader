@@ -13,6 +13,7 @@ import {
   buildBookLemmaHistogramAsync,
   createCachedChapterAnalyzer,
   createLexicalAnalysisCache,
+  rankParagraphCardTargets,
 } from '../src/core/reader-analysis.js';
 import {
   resolveLexiconBucketFileName,
@@ -1607,6 +1608,133 @@ test('reader analysis keeps separate automatic targets for noun and verb usages'
     { lemma: 'record', partOfSpeech: 'verb' },
     { lemma: 'record', partOfSpeech: 'noun' },
   ]);
+});
+
+test('automatic card candidates exclude function words and leave unknown tokens available', () => {
+  const words = ['they', 'wander', 'around', 'when', 'rain'];
+  const model: VocabularyModel = {
+    modelKey: 'function-word-test',
+    modelName: 'function-word-test',
+    words,
+    accuracy: words.map(() => 0.4),
+    difficulties: words.map(() => 0),
+    wordToIdx: new Map<string, number>(words.map((word, index) => [word, index])),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+  const profile: UserProfile = {
+    id: 'function-word-profile',
+    name: 'Test',
+    observations: {},
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  const settings: ReaderSettings = {
+    fontSize: 18,
+    lineSpacing: 'Normal',
+    fontChoice: 'Serif',
+    pageWidth: 'Normal',
+    maxWordsPerParagraph: 2,
+    deduplicationRadius: 0,
+    knowledgeThreshold: 0.6,
+    englishVariant: 'US',
+    wordSenseDisambiguationEnabled: false,
+    wsdReductionLevel: 0,
+    wsdContextUnit: 'sentence',
+    wsdContextSize: 1,
+  };
+  const taggedNlp = createStubNlpWithTaggedTerms([
+    { text: 'They', tags: ['Pronoun'] },
+    { text: 'wander', tags: ['Verb'] },
+    { text: 'around', tags: ['Preposition'] },
+    { text: 'when', tags: ['Adverb'] },
+    { text: 'rain', tags: ['Noun'] },
+  ]);
+
+  const analysis = analyzeChapter({
+    chapter: { title: 'Function words', paragraphs: ['They wander around when rain.'] },
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp: taggedNlp as NonNullable<Parameters<typeof analyzeChapter>[0]['nlp']>,
+    maxCardsPerParagraph: 2,
+  })[0];
+
+  assert.deepEqual(analysis.cardTargets, [
+    { lemma: 'wander', partOfSpeech: 'verb' },
+    { lemma: 'rain', partOfSpeech: 'noun' },
+  ]);
+  assert.deepEqual(
+    analysis.tokens.filter((token) => ['they', 'around', 'when'].includes(token.lemma)).map((token) => token.unknown),
+    [true, true, true],
+  );
+});
+
+test('reader ranking excludes for in the reported passage', () => {
+  const paragraph = 'The planet beneath them was almost perfectly oblivious of their presence, which was just how they wanted it for the moment. The huge yellow something went unnoticed at Goon-hilly, they passed over Cape Canaveral without a blip, Woomera and Jodrell Bank looked straight through them, which was a pity because it was exactly the sort of thing they’d been looking for all these years.';
+  const words = ['for', 'planet', 'presence', 'moment'];
+  const model: VocabularyModel = {
+    modelKey: 'reported-passage-test',
+    modelName: 'reported-passage-test',
+    words,
+    accuracy: words.map(() => 0.4),
+    difficulties: words.map(() => 0),
+    wordToIdx: new Map<string, number>(words.map((word, index) => [word, index])),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+  const profile: UserProfile = {
+    id: 'reported-passage-profile',
+    name: 'Test',
+    observations: {},
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  const settings: ReaderSettings = {
+    fontSize: 18,
+    lineSpacing: 'Normal',
+    fontChoice: 'Serif',
+    pageWidth: 'Normal',
+    maxWordsPerParagraph: 2,
+    deduplicationRadius: 0,
+    knowledgeThreshold: 0.6,
+    englishVariant: 'US',
+    wordSenseDisambiguationEnabled: false,
+    wsdReductionLevel: 0,
+    wsdContextUnit: 'sentence',
+    wsdContextSize: 1,
+  };
+  const analysis = analyzeChapter({
+    chapter: { title: 'Reported passage', paragraphs: [paragraph] },
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp,
+    maxCardsPerParagraph: 2,
+    includeCards: false,
+  })[0];
+
+  assert.ok(analysis.tokens.some((token) => token.lemma === 'for' && token.unknown));
+  assert.ok(analysis.tokens.filter((token) => token.lemma === 'for').every((token) => token.partOfSpeech === 'preposition'));
+  assert.deepEqual(rankParagraphCardTargets(analysis.tokens, settings.knowledgeThreshold), [
+    { lemma: 'planet', partOfSpeech: 'noun' },
+    { lemma: 'presence', partOfSpeech: 'noun' },
+    { lemma: 'moment', partOfSpeech: 'noun' },
+  ]);
+
+  const untaggedAnalysis = analyzeChapter({
+    chapter: { title: 'Reported passage', paragraphs: [paragraph] },
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp: null,
+    maxCardsPerParagraph: 2,
+    includeCards: false,
+  })[0];
+  assert.ok(untaggedAnalysis.tokens.some((token) => token.lemma === 'for' && token.unknown));
+  assert.ok(rankParagraphCardTargets(untaggedAnalysis.tokens, settings.knowledgeThreshold)
+    .every((target) => target.lemma !== 'for'));
 });
 
 test('cached chapter analysis preserves output and reuses lexical work across refreshes', () => {

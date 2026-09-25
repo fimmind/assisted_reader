@@ -31,7 +31,7 @@ import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
-import { analyzeChapter, createCachedChapterAnalyzer, createLexicalAnalysisCache } from '@/core/reader-analysis';
+import { analyzeChapter, createCachedChapterAnalyzer, createLexicalAnalysisCache, rankParagraphCardTargets } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
 import type { LazyLexicon } from '@/core/lexicon';
 import type { DefinitionLookupCandidate } from '@/core/definition-target';
@@ -590,53 +590,6 @@ function resolveDeduplicationRadius(value: number): number {
     return 20;
   }
   return integer;
-}
-
-function rankParagraphCardTargets(tokens: ParagraphAnalysis['tokens'], threshold: number): DefinitionTarget[] {
-  const frequencies = new Map<string, {
-    target: DefinitionTarget;
-    count: number;
-    pKnown: number;
-    firstIndex: number;
-  }>();
-  tokens.forEach((token, index) => {
-    if (!token.unknown) {
-      return;
-    }
-
-    const target = createDefinitionTarget(token.lemma, token.partOfSpeech);
-    const key = definitionTargetKey(target);
-    const current = frequencies.get(key);
-    if (!current) {
-      frequencies.set(key, { target, count: 1, pKnown: token.pKnown, firstIndex: index });
-      return;
-    }
-
-    current.count += 1;
-    if (token.pKnown < current.pKnown) {
-      current.pKnown = token.pKnown;
-    }
-  });
-
-  const denominator = 1 - threshold;
-  const scored = Array.from(frequencies.values()).map((value) => {
-    const uncertaintyScore = denominator <= 0 ? 1 : (1 - value.pKnown) / denominator;
-    const importance = (0.7 * value.count) + (0.3 * uncertaintyScore);
-    return {
-      target: value.target,
-      importance,
-      firstIndex: value.firstIndex,
-    };
-  });
-
-  scored.sort((left, right) => {
-    if (right.importance !== left.importance) {
-      return right.importance - left.importance;
-    }
-    return left.firstIndex - right.firstIndex;
-  });
-
-  return scored.map((entry) => entry.target);
 }
 
 function selectDeduplicatedCardTargets(
