@@ -69,6 +69,38 @@ export interface BookLemmaHistogram {
   nonProperLemmaCounts: Record<string, number>;
 }
 
+export type BookLemmaHistogramSegment =
+  | {
+    kind: 'tags';
+    chapterIndex: number;
+    startParagraphIndex: number;
+    endParagraphIndex: number;
+    taggedByParagraph: TaggedSentence[][];
+  }
+  | {
+    kind: 'lexicon';
+    chapterIndex: number;
+    properLexicon: string[];
+  }
+  | {
+    kind: 'counts';
+    chapterIndex: number;
+    startParagraphIndex: number;
+    endParagraphIndex: number;
+    histogram: BookLemmaHistogram;
+  };
+
+export interface BookLemmaHistogramCheckpointHooks {
+  shouldContinue: () => boolean;
+  onWorkUnitProcessed: (processedUnits: number, totalUnits: number) => void;
+  onYield: () => Promise<void>;
+  saveSegment: (segment: BookLemmaHistogramSegment) => Promise<void>;
+  clearTaggedChapter: (chapterIndex: number) => Promise<void>;
+}
+
+const HISTOGRAM_CHECKPOINT_PARAGRAPHS = 32;
+const HISTOGRAM_YIELD_PARAGRAPHS = 8;
+
 const AUTOMATIC_CARD_EXCLUDED_PARTS_OF_SPEECH = new Set<PartOfSpeech>([
   'article',
   'determiner',
@@ -694,6 +726,154 @@ export async function buildBookLemmaHistogramAsync(
   return {
     totalTokenCount,
     nonProperLemmaCounts: Object.fromEntries(aggregateLemmaCounts.entries()),
+  };
+}
+
+/** Replays durable paragraph batches before continuing chapter tagging and lemma counting. */
+export async function buildResumableBookLemmaHistogramAsync(
+  book: { chapters: BookChapter[] },
+  model: VocabularyModel,
+  lemmaDict: Record<string, string>,
+  nlp: ChapterAnalysisInput['nlp'],
+  savedSegments: BookLemmaHistogramSegment[],
+  hooks: BookLemmaHistogramCheckpointHooks,
+): Promise<BookLemmaHistogram | null> {
+  const totalParagraphs = book.chapters.reduce((total, chapter) => total + chapter.paragraphs.length, 0);
+  const totalWorkUnits = totalParagraphs * 2;
+  const aggregateLemmaCounts = new Map<string, number>();
+  const lemmaCandidateCache = new Map<string, string[]>();
+  let totalTokenCount = 0;
+  let processedWorkUnits = 0;
+  hooks.onWorkUnitProcessed(0, totalWorkUnits);
+
+  for (let chapterIndex = 0; chapterIndex < book.chapters.length; chapterIndex += 1) {
+    const chapter = book.chapters[chapterIndex];
+    const countSegments = savedSegments
+      .filter((segment): segment is Extract<BookLemmaHistogramSegment, { kind: 'counts' }> =>
+        segment.kind === 'counts' && segment.chapterIndex === chapterIndex)
+      .sort((left, right) => left.startParagraphIndex - right.startParagraphIndex);
+    let countedParagraphs = 0;
+    for (const segment of countSegments) {
+      if (segment.startParagraphIndex !== countedParagraphs || segment.endParagraphIndex > chapter.paragraphs.length) {
+        throw new RangeError(`Invalid book histogram count checkpoint: chapter=${chapterIndex} start=${segment.startParagraphIndex} expected=${countedParagraphs}`);
+      }
+      countedParagraphs = segment.endParagraphIndex;
+      totalTokenCount += segment.histogram.totalTokenCount;
+      for (const [lemma, count] of Object.entries(segment.histogram.nonProperLemmaCounts)) {
+        aggregateLemmaCounts.set(lemma, (aggregateLemmaCounts.get(lemma) ?? 0) + count);
+      }
+    }
+    if (countedParagraphs === chapter.paragraphs.length) {
+      processedWorkUnits += countedParagraphs * 2;
+      hooks.onWorkUnitProcessed(processedWorkUnits, totalWorkUnits);
+      continue;
+    }
+    if (!hooks.shouldContinue()) {
+      return null;
+    }
+
+    const tagSegments = savedSegments
+      .filter((segment): segment is Extract<BookLemmaHistogramSegment, { kind: 'tags' }> =>
+        segment.kind === 'tags' && segment.chapterIndex === chapterIndex)
+      .sort((left, right) => left.startParagraphIndex - right.startParagraphIndex);
+    const taggedByParagraph: TaggedSentence[][] = [];
+    for (const segment of tagSegments) {
+      if (segment.startParagraphIndex !== taggedByParagraph.length || segment.endParagraphIndex > chapter.paragraphs.length
+        || segment.taggedByParagraph.length !== segment.endParagraphIndex - segment.startParagraphIndex) {
+        throw new RangeError(`Invalid book histogram tag checkpoint: chapter=${chapterIndex} start=${segment.startParagraphIndex} expected=${taggedByParagraph.length}`);
+      }
+      taggedByParagraph.push(...segment.taggedByParagraph);
+    }
+
+    const savedLexicon = savedSegments.find((segment): segment is Extract<BookLemmaHistogramSegment, { kind: 'lexicon' }> =>
+      segment.kind === 'lexicon' && segment.chapterIndex === chapterIndex);
+    processedWorkUnits += (savedLexicon ? chapter.paragraphs.length : taggedByParagraph.length) + countedParagraphs;
+    hooks.onWorkUnitProcessed(processedWorkUnits, totalWorkUnits);
+    let properLexicon: Set<string>;
+    if (savedLexicon) {
+      properLexicon = new Set(savedLexicon.properLexicon);
+    } else {
+      let tagBatchStart = taggedByParagraph.length;
+      for (let paragraphIndex = tagBatchStart; paragraphIndex < chapter.paragraphs.length; paragraphIndex += 1) {
+        if (!hooks.shouldContinue()) {
+          return null;
+        }
+        taggedByParagraph.push(buildTaggedSentences(chapter.paragraphs[paragraphIndex], nlp));
+        processedWorkUnits += 1;
+        hooks.onWorkUnitProcessed(processedWorkUnits, totalWorkUnits);
+        const endParagraphIndex = paragraphIndex + 1;
+        if (endParagraphIndex - tagBatchStart === HISTOGRAM_CHECKPOINT_PARAGRAPHS
+          || endParagraphIndex === chapter.paragraphs.length) {
+          await hooks.saveSegment({
+            kind: 'tags',
+            chapterIndex,
+            startParagraphIndex: tagBatchStart,
+            endParagraphIndex,
+            taggedByParagraph: taggedByParagraph.slice(tagBatchStart, endParagraphIndex),
+          });
+          tagBatchStart = endParagraphIndex;
+        }
+        if (endParagraphIndex % HISTOGRAM_YIELD_PARAGRAPHS === 0) {
+          await hooks.onYield();
+        }
+      }
+      properLexicon = buildHighConfidenceProperNounLexicon(taggedByParagraph.flat());
+      await hooks.saveSegment({ kind: 'lexicon', chapterIndex, properLexicon: [...properLexicon] });
+    }
+
+    let countBatchStart = countedParagraphs;
+    let batchTokenCount = 0;
+    let batchLemmaCounts = new Map<string, number>();
+    for (let paragraphIndex = countedParagraphs; paragraphIndex < chapter.paragraphs.length; paragraphIndex += 1) {
+      if (!hooks.shouldContinue()) {
+        return null;
+      }
+      const taggedSentences = taggedByParagraph[paragraphIndex]
+        ?? buildTaggedSentences(chapter.paragraphs[paragraphIndex], nlp);
+      const histogram = collectParagraphLemmaHistogram(
+        chapter.paragraphs[paragraphIndex],
+        taggedSentences,
+        properLexicon,
+        model,
+        lemmaDict,
+        nlp,
+        lemmaCandidateCache,
+      );
+      batchTokenCount += histogram.totalTokenCount;
+      totalTokenCount += histogram.totalTokenCount;
+      for (const [lemma, count] of histogram.nonProperLemmaCounts) {
+        batchLemmaCounts.set(lemma, (batchLemmaCounts.get(lemma) ?? 0) + count);
+        aggregateLemmaCounts.set(lemma, (aggregateLemmaCounts.get(lemma) ?? 0) + count);
+      }
+      const endParagraphIndex = paragraphIndex + 1;
+      if (endParagraphIndex - countBatchStart === HISTOGRAM_CHECKPOINT_PARAGRAPHS
+        || endParagraphIndex === chapter.paragraphs.length) {
+        await hooks.saveSegment({
+          kind: 'counts',
+          chapterIndex,
+          startParagraphIndex: countBatchStart,
+          endParagraphIndex,
+          histogram: {
+            totalTokenCount: batchTokenCount,
+            nonProperLemmaCounts: Object.fromEntries(batchLemmaCounts),
+          },
+        });
+        countBatchStart = endParagraphIndex;
+        batchTokenCount = 0;
+        batchLemmaCounts = new Map<string, number>();
+      }
+      processedWorkUnits += 1;
+      hooks.onWorkUnitProcessed(processedWorkUnits, totalWorkUnits);
+      if (endParagraphIndex % HISTOGRAM_YIELD_PARAGRAPHS === 0) {
+        await hooks.onYield();
+      }
+    }
+    await hooks.clearTaggedChapter(chapterIndex);
+  }
+
+  return {
+    totalTokenCount,
+    nonProperLemmaCounts: Object.fromEntries(aggregateLemmaCounts),
   };
 }
 

@@ -9,12 +9,19 @@ import { QuizModal } from '../components/QuizModal';
 import { importBookFromFile } from '@/core/book-parser';
 import { deleteBookById, listBooks, seedBooksIfEmpty, upsertBook } from '@/core/books-store';
 import { createSeedBook } from '@/core/seed-book';
-import { buildBookLemmaHistogramAsync, calculateBookStatsFromLemmaHistogram } from '@/core/reader-analysis';
+import { buildResumableBookLemmaHistogramAsync, calculateBookStatsFromLemmaHistogram } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
-import { getCachedBookLemmaHistogram, saveCachedBookLemmaHistogram } from '@/core/book-lemma-histogram-cache';
+import { getCachedBookLemmaHistogram } from '@/core/book-lemma-histogram-cache';
+import {
+  clearTaggedBookChapterCheckpoints,
+  completeBookLemmaHistogram,
+  loadBookLemmaHistogramCheckpoints,
+  loadCompletedBookLemmaHistogram,
+  saveBookLemmaHistogramCheckpoint,
+} from '@/core/book-lemma-histogram-checkpoint';
 import { loadBundledBookLemmaHistogram } from '@/core/bundled-book-lemma-histogram';
 import type { BookStats, ImportedBook } from '@/core/types';
 
@@ -205,7 +212,8 @@ export default function LibraryPage() {
       };
     }
     try {
-      const cachedHistogram = getCachedBookLemmaHistogram(book.id, book.updatedAt, model.modelKey);
+      const cachedHistogram = getCachedBookLemmaHistogram(book.id, book.createdAt, book.updatedAt, model.modelKey)
+        ?? await loadCompletedBookLemmaHistogram(book.id, book.createdAt, model.modelKey);
       if (cachedHistogram) {
         onProgress(100);
         const cachedStats = calculateBookStatsFromLemmaHistogram(cachedHistogram, settings, model, activeProfile);
@@ -217,7 +225,7 @@ export default function LibraryPage() {
 
       const bundledHistogram = await loadBundledBookLemmaHistogram(book.id);
       if (bundledHistogram) {
-        saveCachedBookLemmaHistogram(book.id, book.updatedAt, model.modelKey, bundledHistogram);
+        await completeBookLemmaHistogram(book.id, book.createdAt, model.modelKey, bundledHistogram);
         onProgress(100);
         const bundledStats = calculateBookStatsFromLemmaHistogram(bundledHistogram, settings, model, activeProfile);
         return {
@@ -228,31 +236,34 @@ export default function LibraryPage() {
 
       let lastReportedPercent = -1;
       onProgress(0);
-      const histogram = await buildBookLemmaHistogramAsync(
+      const savedSegments = await loadBookLemmaHistogramCheckpoints(book.id, book.createdAt, model.modelKey);
+      const histogram = await buildResumableBookLemmaHistogramAsync(
         book,
         model,
         lemmaDict,
         nlp,
+        savedSegments,
         {
           shouldContinue: () => refreshRunIdRef.current === runId,
-          onParagraphProcessed: (processedParagraphs, totalParagraphs) => {
-            if (totalParagraphs <= 0) {
+          onWorkUnitProcessed: (processedUnits, totalUnits) => {
+            if (totalUnits <= 0) {
               return;
             }
-            const percent = Math.round((processedParagraphs / totalParagraphs) * 100);
+            const percent = Math.round((processedUnits / totalUnits) * 100);
             if (percent !== lastReportedPercent) {
               onProgress(percent);
               lastReportedPercent = percent;
             }
           },
           onYield: yieldToEventLoop,
-          yieldEveryParagraphs: 8,
+          saveSegment: (segment) => saveBookLemmaHistogramCheckpoint(book.id, book.createdAt, model.modelKey, segment),
+          clearTaggedChapter: (chapterIndex) => clearTaggedBookChapterCheckpoints(book.id, chapterIndex),
         },
       );
       if (histogram === null) {
         return null;
       }
-      saveCachedBookLemmaHistogram(book.id, book.updatedAt, model.modelKey, histogram);
+      await completeBookLemmaHistogram(book.id, book.createdAt, model.modelKey, histogram);
       const stats = calculateBookStatsFromLemmaHistogram(histogram, settings, model, activeProfile);
       return {
         ...stats,

@@ -2,11 +2,17 @@ import type { BookLemmaHistogram } from './reader-analysis';
 
 interface CachedBookLemmaHistogramEntry {
   histogram: BookLemmaHistogram;
+  bookContentKey: string;
+  modelKey: string;
+}
+
+interface LegacyCachedBookLemmaHistogramEntry {
+  histogram: BookLemmaHistogram;
   bookUpdatedAt: string;
   modelKey: string;
 }
 
-type CachedBookLemmaHistogramMap = Record<string, CachedBookLemmaHistogramEntry>;
+type CachedBookLemmaHistogramMap = Record<string, CachedBookLemmaHistogramEntry | LegacyCachedBookLemmaHistogramEntry>;
 
 const BOOK_LEMMA_HISTOGRAM_CACHE_KEY = 'easeword-book-lemma-histogram-cache-v1';
 
@@ -39,8 +45,8 @@ function isValidCacheMap(value: unknown): value is CachedBookLemmaHistogramMap {
     if (!entry || typeof entry !== 'object') {
       return false;
     }
-    const typed = entry as Partial<CachedBookLemmaHistogramEntry>;
-    if (typeof typed.bookUpdatedAt !== 'string') {
+    const typed = entry as Partial<CachedBookLemmaHistogramEntry & LegacyCachedBookLemmaHistogramEntry>;
+    if (typeof typed.bookContentKey !== 'string' && typeof typed.bookUpdatedAt !== 'string') {
       return false;
     }
     if (typeof typed.modelKey !== 'string') {
@@ -76,6 +82,7 @@ function saveCacheMap(cacheMap: CachedBookLemmaHistogramMap): void {
 
 export function getCachedBookLemmaHistogram(
   bookId: string,
+  bookContentKey: string,
   bookUpdatedAt: string,
   modelKey: string,
 ): BookLemmaHistogram | null {
@@ -84,25 +91,29 @@ export function getCachedBookLemmaHistogram(
   if (!entry) {
     return null;
   }
-  if (entry.bookUpdatedAt !== bookUpdatedAt) {
-    return null;
-  }
   if (entry.modelKey !== modelKey) {
     return null;
   }
+  if ('bookContentKey' in entry) {
+    return entry.bookContentKey === bookContentKey ? entry.histogram : null;
+  }
+  if (entry.bookUpdatedAt !== bookUpdatedAt) {
+    return null;
+  }
+  saveCachedBookLemmaHistogram(bookId, bookContentKey, modelKey, entry.histogram);
   return entry.histogram;
 }
 
 export function saveCachedBookLemmaHistogram(
   bookId: string,
-  bookUpdatedAt: string,
+  bookContentKey: string,
   modelKey: string,
   histogram: BookLemmaHistogram,
 ): void {
   const cacheMap = loadCacheMap();
   cacheMap[bookId] = {
     histogram,
-    bookUpdatedAt,
+    bookContentKey,
     modelKey,
   };
   saveCacheMap(cacheMap);

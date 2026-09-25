@@ -11,6 +11,7 @@ import {
 import {
   analyzeChapter,
   buildBookLemmaHistogramAsync,
+  buildResumableBookLemmaHistogramAsync,
   createCachedChapterAnalyzer,
   createLexicalAnalysisCache,
   rankParagraphCardTargets,
@@ -34,6 +35,7 @@ import type {
   UserProfile,
   VocabularyModel,
 } from '../src/core/types.js';
+import type { BookLemmaHistogramSegment } from '../src/core/reader-analysis.js';
 
 function createStubNlpWithTaggedTerms(
   terms: Array<{ text: string; tags: Record<string, boolean> | string[] }>,
@@ -1867,6 +1869,72 @@ test('async book analysis yields while tagging a single large chapter', async ()
 
   assert.equal(histogram, null);
   assert.equal(nlpCallCount, 1);
+});
+
+test('book histogram resumes from saved tagging and counting batches', async () => {
+  const paragraphs = Array.from({ length: 40 }, () => 'Arthur reads the book.');
+  const book = { chapters: [{ title: 'Long chapter', paragraphs }], currentChapter: 1 };
+  const words = ['arthur', 'read', 'book'];
+  const model: VocabularyModel = {
+    modelKey: 'resumable-histogram-test',
+    modelName: 'resumable-histogram-test',
+    words,
+    accuracy: words.map(() => 0.5),
+    difficulties: words.map(() => 0),
+    wordToIdx: new Map<string, number>(words.map((word, index) => [word, index])),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+  const expected = await buildBookLemmaHistogramAsync(book, model, { reads: 'read' }, nlp);
+  assert.ok(expected);
+
+  let segments: BookLemmaHistogramSegment[] = [];
+  let stopAfter: 'tags' | 'counts' | 'never' = 'tags';
+  let shouldContinue = true;
+  let reportedUnits: number[] = [];
+  const run = () => buildResumableBookLemmaHistogramAsync(
+    book,
+    model,
+    { reads: 'read' },
+    nlp,
+    [...segments],
+    {
+      shouldContinue: () => shouldContinue,
+      onWorkUnitProcessed: (processedUnits) => {
+        reportedUnits.push(processedUnits);
+      },
+      onYield: async () => {
+        if (stopAfter === 'tags' && segments.some((segment) => segment.kind === 'tags' && segment.endParagraphIndex === 32)) {
+          shouldContinue = false;
+        }
+        if (stopAfter === 'counts' && segments.some((segment) => segment.kind === 'counts' && segment.endParagraphIndex === 32)) {
+          shouldContinue = false;
+        }
+      },
+      saveSegment: async (segment) => {
+        segments.push(segment);
+      },
+      clearTaggedChapter: async (chapterIndex) => {
+        segments = segments.filter((segment) => segment.chapterIndex !== chapterIndex || segment.kind === 'counts');
+      },
+    },
+  );
+
+  assert.equal(await run(), null);
+  assert.equal(segments.filter((segment) => segment.kind === 'tags').length, 1);
+  stopAfter = 'counts';
+  shouldContinue = true;
+  reportedUnits = [];
+  assert.equal(await run(), null);
+  assert.ok(reportedUnits.includes(32));
+  assert.equal(segments.filter((segment) => segment.kind === 'counts').length, 1);
+  stopAfter = 'never';
+  shouldContinue = true;
+  reportedUnits = [];
+  assert.deepEqual(await run(), expected);
+  assert.ok(reportedUnits.includes(72));
+  assert.equal(segments.filter((segment) => segment.kind === 'counts').length, 2);
+  assert.ok(segments.every((segment) => segment.kind === 'counts'));
 });
 
 test('lexicon resolution selects matching POS and otherwise exposes every group', () => {
