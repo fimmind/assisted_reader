@@ -759,6 +759,14 @@ def load_ranker(name: str) -> Ranker:
         from ettin_wsd import EttinWsdRanker
 
         return EttinWsdRanker(name)
+    if name == "sayedshaun-wsd":
+        from sayedshaun_wsd import SayedShaunWsdRanker
+
+        return SayedShaunWsdRanker()
+    if name == "glite-lens":
+        from glite_lens import GliteLensRanker
+
+        return GliteLensRanker()
     if name == "pos-e5-small":
         return PosFirstWrapper(E5SmallRanker(), name)
     if name == "pos-e5-small-definition-only":

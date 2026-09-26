@@ -20,6 +20,8 @@ MODELS = {
     "mobilebert-mnli-q4f16": "Xenova/mobilebert-uncased-mnli",
     "ettin-150m-wsd": "sign/Ettin-150m-WSD",
     "modernbert-large-wsd": "sign/ModernBERT-Large-Instruct-WSD",
+    "sayedshaun-wsd": "SayedShaun/word-sense-disambiguation",
+    "sayedshaun-distilbert-base": "distilbert/distilbert-base-uncased",
     "tinybert-cross-encoder": "cross-encoder/ms-marco-TinyBERT-L2-v2",
     "wsl-retriever": "Babelscape/wsl-retriever-e5-base-v2",
 }
@@ -45,6 +47,8 @@ MODEL_REVISIONS = {
     "mobilebert-mnli-q4f16": "8b0ea66ab7b190bba77418ba03b67d69cfc9a1ee",
     "ettin-150m-wsd": "8751b577199d1bb95b74fa2457da7065d57100ae",
     "modernbert-large-wsd": "e26867fb25a86e7491b9f08a0216e93dcff3dec0",
+    "sayedshaun-wsd": "54e41c09c61ae8bd60c62e40bf483141c49ce0d3",
+    "sayedshaun-distilbert-base": "12040accade4e8a0f71eabdb258fecc2e7e948be",
 }
 ONNX_METADATA_FILES = [
     "config.json",
@@ -61,6 +65,8 @@ MODEL_FILE_OVERRIDES = {
     "mobilebert-mnli-q4f16": ONNX_METADATA_FILES + ["onnx/model_q4f16.onnx"],
     "ettin-150m-wsd": ONNX_METADATA_FILES + ["answer_letters.json", "model.safetensors"],
     "modernbert-large-wsd": ONNX_METADATA_FILES + ["answer_letters.json", "model.safetensors"],
+    "sayedshaun-wsd": ["cosine/step-12000-f1-0.8066.pt"],
+    "sayedshaun-distilbert-base": ["config.json", "tokenizer.json", "tokenizer_config.json", "vocab.txt", "special_tokens_map.json"],
 }
 
 
@@ -73,8 +79,17 @@ def download_model(repository: str, target: Path, revision: str | None, patterns
                 *target.glob("*.safetensors"),
                 *target.glob("*.bin"),
                 *target.glob("onnx/*.onnx"),
+                *target.glob("cosine/*.pt"),
             ]
-            if not weight_files:
+            if repository == "distilbert/distilbert-base-uncased":
+                required = [target / "config.json", target / "tokenizer.json"]
+                missing = [str(path) for path in required if not path.is_file()]
+                if missing:
+                    raise FileNotFoundError(
+                        f"Downloaded base tokenizer is incomplete: repository={repository!r}, "
+                        f"missing={missing}"
+                    )
+            elif not weight_files:
                 raise FileNotFoundError(
                     f"Downloaded model has no weight file: repository={repository!r}, "
                     f"target={str(target)!r}; the repository may require access approval"

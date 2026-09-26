@@ -22,6 +22,8 @@ from benchmarking import (
     runtime_versions,
 )
 from rankers import EmbeddingRanker, Ranker, load_ranker
+from sayedshaun_wsd import SayedShaunWsdRanker, marked_context as sayedshaun_marked_context
+from glite_lens import GliteLensRanker, context_input as glite_context_input, load_document_contexts, structured_gloss
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +52,34 @@ def prepare_scorer(
     ranker: Ranker,
     example: dict,
 ) -> tuple[Callable[[], list[float]], float, int, bool]:
+    if isinstance(ranker, GliteLensRanker):
+        dataset = str(example["dataset"])
+        documents = load_document_contexts(dataset) if dataset.startswith("raganato-") else None
+        context = glite_context_input(example, documents)
+        glosses = [structured_gloss(example, candidate) for candidate in example["candidates"]]
+        started = time.perf_counter()
+        gloss_embeddings = ranker.encode_glosses(glosses)
+        preparation_ms = (time.perf_counter() - started) * 1000
+
+        def score() -> list[float]:
+            context_embedding = ranker.encode_contexts([context])[0]
+            return (gloss_embeddings @ context_embedding).tolist()
+
+        return score, preparation_ms, len(set(glosses)), False
+
+    if isinstance(ranker, SayedShaunWsdRanker):
+        started = time.perf_counter()
+        glosses = [candidate["gloss"] for candidate in example["candidates"]]
+        gloss_embeddings = ranker.encode(glosses)
+        preparation_ms = (time.perf_counter() - started) * 1000
+        context_input = sayedshaun_marked_context(example)
+
+        def score() -> list[float]:
+            context = ranker.encode([context_input])[0]
+            return (gloss_embeddings @ context).tolist()
+
+        return score, preparation_ms, len(set(glosses)), False
+
     if isinstance(ranker, EmbeddingRanker):
         glosses = [
             ranker.gloss_input(example, candidate)
