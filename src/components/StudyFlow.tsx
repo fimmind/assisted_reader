@@ -76,6 +76,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CardSessionScreen } from "@/components/CardSessionScreen";
+import { StudyDefinitionText } from "@/components/StudyDefinitionText";
 import { resolveStudyWsdItem } from "@/core/study-wsd";
 import { startWsdModel } from "@/core/wsd-runtime";
 import { yieldToBrowser } from "@/lib/browser";
@@ -122,6 +123,7 @@ interface StudyFlowProps {
   lemmaDict: Record<string, string>;
   lexicon: LazyLexicon;
   nlp: ChapterAnalysisInput["nlp"];
+  onMarkWord: (lemma: string, known: boolean) => void;
 }
 
 type StudyView = "setup" | "cards" | "completion";
@@ -503,6 +505,7 @@ export function StudyFlow({
   lemmaDict,
   lexicon,
   nlp,
+  onMarkWord,
 }: StudyFlowProps) {
   const context = useMemo<StudyContextIdentity>(
     () => ({
@@ -1252,14 +1255,17 @@ export function StudyFlow({
                 ) : (
                   <p role="status" className="text-sm text-muted-foreground">Disambiguating definitions...</p>
                 )
-              ) : definitions.length === 1 ? (
-                <p className="leading-relaxed">{visibleItem.definition}</p>
               ) : (
-                <ol className="list-inside list-decimal space-y-2 leading-relaxed">
-                  {definitions.map((definition) => (
-                    <li key={definition}>{definition}</li>
-                  ))}
-                </ol>
+                <StudyDefinitionText
+                  key={`${currentBatch.id}-${item.lexicalItemId}-${currentBatch.cardSession.currentPosition}`}
+                  definitions={definitions}
+                  settings={settings}
+                  model={model}
+                  lemmaDict={lemmaDict}
+                  lexicon={lexicon}
+                  nlp={nlp}
+                  onMarkWord={onMarkWord}
+                />
               )}
             </div>
           </div>

@@ -231,7 +231,7 @@ function isValidDefinitionSelection(
     && selection.end <= definitionText.length;
 }
 
-function renderClickableDefinition(
+export function renderClickableDefinition(
   definitionText: string,
   activeDefinitionSelection: DefinitionTextSelection | undefined,
   onDefinitionWordClick: (click: DefinitionWordClick) => void,

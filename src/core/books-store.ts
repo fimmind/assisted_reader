@@ -1,6 +1,8 @@
 import { BOOKS_DB_NAME, BOOKS_DB_VERSION, BOOKS_FALLBACK_STORAGE_KEY, BOOKS_STORE_NAME } from './constants';
 import type { ImportedBook } from './types';
 
+const DISMISSED_SEED_BOOK_KEY = 'easeword-dismissed-seed-book-v1';
+
 function isIndexedDbAvailable(): boolean {
   return typeof window !== 'undefined' && 'indexedDB' in window;
 }
@@ -213,6 +215,9 @@ export async function deleteBookById(id: string): Promise<void> {
     const books = loadFallbackBooks();
     const next = books.filter((item) => item.id !== id);
     saveFallbackBooks(sortBooks(next));
+    if (id === 'seed-hitchhiker') {
+      localStorage.setItem(DISMISSED_SEED_BOOK_KEY, 'true');
+    }
     return;
   }
 
@@ -227,9 +232,15 @@ export async function deleteBookById(id: string): Promise<void> {
     const next = books.filter((item) => item.id !== id);
     saveFallbackBooks(sortBooks(next));
   }
+  if (id === 'seed-hitchhiker') {
+    localStorage.setItem(DISMISSED_SEED_BOOK_KEY, 'true');
+  }
 }
 
 export async function seedBooksIfEmpty(seedBooks: ImportedBook[]): Promise<void> {
+  if (localStorage.getItem(DISMISSED_SEED_BOOK_KEY) === 'true') {
+    return;
+  }
   const existing = await listBooks();
   if (existing.length > 0) {
     return;

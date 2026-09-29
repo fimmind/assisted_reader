@@ -1981,6 +1981,7 @@ export default function ReaderPage() {
           lemmaDict={resourcesRef.current.lemmaDict}
           lexicon={resourcesRef.current.lexicon}
           nlp={resourcesRef.current.nlp}
+          onMarkWord={markLemma}
         />
       )}
     </div>

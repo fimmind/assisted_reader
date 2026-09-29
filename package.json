@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "sync:data": "mkdir -p public/data && rm -rf public/data/* && cp -R data/. public/data/",
+    "preinstall": "node scripts/check-pnpm.mjs",
+    "sync:data": "node scripts/sync-data.mjs",
     "build:lexicon:wiktextract": "node scripts/build-lexicon-from-wiktextract.mjs",
     "ensure:lexicon": "node scripts/ensure-lexicon-generated.mjs",
     "predev": "pnpm run ensure:lexicon && pnpm run verify:wordnet && pnpm run sync:data",
