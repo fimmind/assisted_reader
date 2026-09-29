@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link } from 'wouter';
-import { Moon, Sun, Settings, Upload, GraduationCap, Trash2 } from 'lucide-react';
+import { Moon, Sun, Settings, Upload, GraduationCap } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { Button } from '../components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { BookCard } from '../components/BookCard';
 import { QuizModal } from '../components/QuizModal';
 import { importBookFromFile } from '@/core/book-parser';
@@ -177,8 +176,6 @@ function saveCachedBookStatsMap(cacheMap: CachedBookStatsMap): void {
 export default function LibraryPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const [quizOpen, setQuizOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [books, setBooks] = useState<ImportedBook[]>([]);
   const [statsByBookId, setStatsByBookId] = useState<Record<string, BookStats>>({});
@@ -518,17 +515,14 @@ export default function LibraryPage() {
     fileInputRef.current?.click();
   };
 
-  const deleteSelectedBook = async () => {
-    const selectedBook = books.find((book) => book.id === selectedBookId);
-    if (!selectedBook) {
+  const deleteBook = async (book: ImportedBook): Promise<void> => {
+    if (!window.confirm(`Delete "${book.title}" from your library?`)) {
       return;
     }
     setIsDeleting(true);
     stopBackgroundAnalysis();
     try {
-      await deleteBookById(selectedBook.id);
-      setDeleteDialogOpen(false);
-      setSelectedBookId(null);
+      await deleteBookById(book.id);
       await refreshBooksAndStats();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to delete book.';
@@ -568,18 +562,6 @@ export default function LibraryPage() {
           <div className="font-serif text-xl lg:text-2xl font-bold tracking-tight text-primary">Easeword</div>
 
           <div className="flex items-center gap-1.5 md:gap-2.5 lg:gap-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="flex gap-2 text-muted-foreground hover:text-foreground"
-              onClick={() => setDeleteDialogOpen(true)}
-              disabled={isLoading || books.length === 0}
-              aria-label="Delete book"
-            >
-              <Trash2 size={18} />
-              <span className="hidden sm:inline">Delete Book</span>
-            </Button>
-
             <Button
               variant="ghost"
               size="sm"
@@ -641,57 +623,14 @@ export default function LibraryPage() {
                 isAnalyzing={analyzingBookProgressById[book.id] !== undefined}
                 analysisProgressPercent={analyzingBookProgressById[book.id] ?? 0}
                 onOpen={stopBackgroundAnalysis}
+                onDelete={() => { void deleteBook(book); }}
+                isDeleting={isDeleting}
               />
             ))}
           </div>
         )}
       </main>
 
-      <Dialog open={deleteDialogOpen} onOpenChange={(open) => {
-        if (isDeleting) {
-          return;
-        }
-        setDeleteDialogOpen(open);
-        if (!open) {
-          setSelectedBookId(null);
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete book</DialogTitle>
-            <DialogDescription>Select a book to permanently remove it from your library.</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-64 overflow-y-auto space-y-1" role="radiogroup" aria-label="Books">
-            {books.map((book) => (
-              <label
-                key={book.id}
-                className={`block w-full cursor-pointer rounded-md border px-3 py-2 text-left text-sm hover:bg-accent focus-within:ring-2 focus-within:ring-ring ${selectedBookId === book.id ? 'border-primary bg-accent' : 'border-border'}`}
-              >
-                <input
-                  type="radio"
-                  name="book-to-delete"
-                  value={book.id}
-                  checked={selectedBookId === book.id}
-                  onChange={() => setSelectedBookId(book.id)}
-                  disabled={isDeleting}
-                  className="sr-only"
-                />
-                <span className="block truncate font-medium">{book.title}</span>
-                <span className="block truncate text-xs text-muted-foreground">{book.author}</span>
-              </label>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setDeleteDialogOpen(false);
-              setSelectedBookId(null);
-            }} disabled={isDeleting}>Cancel</Button>
-            <Button variant="destructive" onClick={() => { void deleteSelectedBook(); }} disabled={!selectedBookId || isDeleting}>
-              {isDeleting ? 'Deleting...' : 'Delete Book'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <QuizModal open={quizOpen} onOpenChange={setQuizOpen} />
     </div>
   );
