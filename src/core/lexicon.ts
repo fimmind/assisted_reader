@@ -498,12 +498,14 @@ export function combineDictionaryEntries(
     const pronunciation = wiktionaryEntry?.senses.find(
       (candidate) => candidate.partOfSpeech === sense.partOfSpeech,
     );
+    const uniqueDefinitions = Array.from(new Map(sense.definitions.map((definition) => [definition.gloss, definition.id])).entries());
     return {
       partOfSpeech: sense.partOfSpeech,
       ipa: pronunciation?.ipa ?? '',
       ipaUs: pronunciation?.ipaUs,
       ipaUk: pronunciation?.ipaUk,
-      definitions: orderedUnique(sense.definitions.map((definition) => definition.gloss)),
+      definitions: uniqueDefinitions.map(([gloss]) => gloss),
+      definitionIds: uniqueDefinitions.map(([, id]) => id),
       source: 'wordnet',
     };
   });

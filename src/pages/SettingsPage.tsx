@@ -6,7 +6,6 @@ import { useSettings } from '../hooks/useSettings';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
@@ -23,13 +22,13 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const unsubscribe = subscribeWsdModelStatus(setWsdStatus);
-    if (settings.wordSenseDisambiguationEnabled) {
-      startWsdModel();
+    if (settings.wsdMode !== 'none') {
+      startWsdModel(settings.wsdMode);
     } else {
       stopWsdModel();
     }
     return unsubscribe;
-  }, [settings.wordSenseDisambiguationEnabled]);
+  }, [settings.wsdMode]);
 
   const refreshProfiles = () => {
     const state = loadProfileState();
@@ -249,18 +248,24 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="word-sense-disambiguation">Word Sense Disambiguation</Label>
-                <Switch
-                  id="word-sense-disambiguation"
-                  checked={settings.wordSenseDisambiguationEnabled}
-                  onCheckedChange={(enabled) => updateSetting('wordSenseDisambiguationEnabled', enabled)}
-                />
+              <Label>Word Sense Disambiguation</Label>
+              <div className="flex flex-wrap gap-3" role="group" aria-label="Word Sense Disambiguation">
+                {(['none', 'sayedshaun', 'glite-lens', 'ettin'] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    variant={settings.wsdMode === mode ? 'default' : 'outline'}
+                    aria-pressed={settings.wsdMode === mode}
+                    onClick={() => updateSetting('wsdMode', mode)}
+                    className="min-w-[100px]"
+                  >
+                    {mode === 'none' ? 'None' : mode === 'sayedshaun' ? 'SayedShaun' : mode === 'glite-lens' ? 'Glite LENS' : 'Ettin'}
+                  </Button>
+                ))}
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Use Ettin 150M to hide WordNet definitions that do not fit the context.
+                Hide WordNet definitions that may not fit the context. Glite LENS uses precomputed definition embeddings.
               </p>
-              {settings.wordSenseDisambiguationEnabled && (
+              {settings.wsdMode !== 'none' && (
                 <div className="space-y-2" role="status" aria-live="polite">
                   <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                     <span>{wsdStatus.phase === 'error' ? `Model error: ${wsdStatus.message}` : wsdStatus.message}</span>
@@ -272,13 +277,17 @@ export default function SettingsPage() {
                     <Progress value={100 * wsdStatus.downloadedBytes / wsdStatus.totalBytes} />
                   )}
                   {wsdStatus.phase === 'error' && (
-                    <Button variant="outline" size="sm" onClick={startWsdModel}>Retry download</Button>
+                    <Button variant="outline" size="sm" onClick={() => {
+                      if (settings.wsdMode !== 'none') {
+                        startWsdModel(settings.wsdMode);
+                      }
+                    }}>Retry download</Button>
                   )}
                 </div>
               )}
             </div>
 
-            {settings.wordSenseDisambiguationEnabled && (
+            {settings.wsdMode !== 'none' && (
               <div className="space-y-2">
                 <Label>Reduction level</Label>
                 <Slider
@@ -292,12 +301,12 @@ export default function SettingsPage() {
                   <span>Retain more</span><span>Hide more</span>
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Zero retained every correct sense in single-sentence calibration. Higher levels target 1–10% misses; actual misses can differ, especially with more context.
+                  Each model has its own single-sentence calibration. Zero retained every correct calibration sense; higher levels target 1–10% misses. Actual misses can differ, especially with more context.
                 </p>
               </div>
             )}
 
-            {settings.wordSenseDisambiguationEnabled && (
+            {settings.wsdMode !== 'none' && (
               <div className="space-y-3">
                 <Label>Context unit</Label>
                 <div className="flex flex-wrap gap-3">

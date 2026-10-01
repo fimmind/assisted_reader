@@ -225,7 +225,10 @@ export function loadReaderSettings(): ReaderSettings {
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<ReaderSettings>;
+    const parsed = JSON.parse(raw) as Omit<Partial<ReaderSettings>, 'wsdMode'> & {
+      wsdMode?: ReaderSettings['wsdMode'] | 'lighter' | 'heavier';
+      wordSenseDisambiguationEnabled?: boolean;
+    };
     const settings: ReaderSettings = {
       fontSize: sanitizeNumeric(parsed.fontSize, DEFAULT_READER_SETTINGS.fontSize, 12, 32),
       lineSpacing: parsed.lineSpacing ?? DEFAULT_READER_SETTINGS.lineSpacing,
@@ -235,7 +238,11 @@ export function loadReaderSettings(): ReaderSettings {
       deduplicationRadius: sanitizeNumeric(parsed.deduplicationRadius, DEFAULT_READER_SETTINGS.deduplicationRadius, 0, 20),
       knowledgeThreshold: sanitizeKnowledgeThreshold(parsed.knowledgeThreshold),
       englishVariant: sanitizeEnglishVariant(parsed.englishVariant),
-      wordSenseDisambiguationEnabled: parsed.wordSenseDisambiguationEnabled === true,
+      wsdMode: parsed.wsdMode === 'none' ? 'none'
+        : parsed.wsdMode === 'sayedshaun' || parsed.wsdMode === 'lighter' ? 'sayedshaun'
+        : parsed.wsdMode === 'glite-lens' ? 'glite-lens'
+        : parsed.wsdMode === 'ettin' || parsed.wsdMode === 'heavier' || parsed.wordSenseDisambiguationEnabled === true ? 'ettin'
+        : 'none',
       wsdReductionLevel: Math.round(sanitizeNumeric(parsed.wsdReductionLevel, DEFAULT_READER_SETTINGS.wsdReductionLevel, 0, 10)),
       wsdContextUnit: parsed.wsdContextUnit === 'paragraph' ? 'paragraph' : 'sentence',
       wsdContextSize: Math.round(sanitizeNumeric(parsed.wsdContextSize, DEFAULT_READER_SETTINGS.wsdContextSize, 1, 3)),

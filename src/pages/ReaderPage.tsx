@@ -1083,12 +1083,12 @@ export default function ReaderPage() {
   }, [settings]);
 
   useEffect(() => {
-    if (settings.wordSenseDisambiguationEnabled) {
-      startWsdModel();
+    if (settings.wsdMode !== 'none') {
+      startWsdModel(settings.wsdMode);
     } else {
       stopWsdModel();
     }
-  }, [settings.wordSenseDisambiguationEnabled]);
+  }, [settings.wsdMode]);
 
   useEffect(() => {
     assistanceEnabledRef.current = assistanceEnabled;
@@ -1446,7 +1446,7 @@ export default function ReaderPage() {
       top: measuredPositions[index]?.top ?? popup.top,
       left: measuredPositions[index]?.left ?? popup.left,
     })));
-  }, [settings.englishVariant, settings.fontSize, settings.wordSenseDisambiguationEnabled, settings.wsdReductionLevel, settings.wsdContextUnit, settings.wsdContextSize, wordPopups]);
+  }, [settings.englishVariant, settings.fontSize, settings.wsdMode, settings.wsdReductionLevel, settings.wsdContextUnit, settings.wsdContextSize, wordPopups]);
 
   const openRootWordPopup = useCallback((
     anchorRect: PopupAnchorRect,
@@ -1827,11 +1827,11 @@ export default function ReaderPage() {
                             context={contextForCard(analysis, target)}
                             contextParagraphs={chapterParagraphs}
                             contextParagraphIndex={entry.sourceIndex}
-                            wsdEnabled={settings.wordSenseDisambiguationEnabled}
+                            wsdMode={settings.wsdMode}
                             wsdPriority="card"
                             getPriorityTarget={getParagraphElement}
                             priorityTargetIndex={entry.visibleIndex}
-                            wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
+                            wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
                             wsdContextUnit={settings.wsdContextUnit}
                             wsdContextSize={settings.wsdContextSize}
                             activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
@@ -1940,9 +1940,9 @@ export default function ReaderPage() {
               context={{ text: popup.contextText, start: popup.contextStart, end: popup.contextEnd }}
               contextParagraphs={popup.contextIsBookParagraph ? chapterParagraphs : [popup.contextText]}
               contextParagraphIndex={popup.contextIsBookParagraph ? popup.sourceParagraphIndex : 0}
-              wsdEnabled={settings.wordSenseDisambiguationEnabled}
+              wsdMode={settings.wsdMode}
               wsdPriority="popup"
-              wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
+              wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
               wsdContextUnit={settings.wsdContextUnit}
               wsdContextSize={settings.wsdContextSize}
               pendingIndicator={pendingIndicator}

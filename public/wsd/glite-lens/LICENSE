@@ -1,0 +1,10 @@
+Glite LENS checkpoint weights
+Copyright 2026 Glite Tech Ltd
+
+Licensed under Creative Commons Attribution-NonCommercial 4.0 International
+(CC BY-NC 4.0). The full license is at:
+https://creativecommons.org/licenses/by-nc/4.0/legalcode
+
+Original Glite code is Apache License 2.0. ModernBERT-base, from
+answerdotai, is Apache License 2.0. WordNet data has its own license in
+data/wordnet/LICENSE.

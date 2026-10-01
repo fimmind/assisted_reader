@@ -1,3 +1,5 @@
+export type WsdMode = 'none' | 'sayedshaun' | 'glite-lens' | 'ettin';
+
 export interface ReaderSettings {
   fontSize: number;
   lineSpacing: 'Compact' | 'Normal' | 'Relaxed';
@@ -7,7 +9,7 @@ export interface ReaderSettings {
   deduplicationRadius: number;
   knowledgeThreshold: number;
   englishVariant: 'US' | 'UK';
-  wordSenseDisambiguationEnabled: boolean;
+  wsdMode: WsdMode;
   wsdReductionLevel: number;
   wsdContextUnit: 'sentence' | 'paragraph';
   wsdContextSize: number;
@@ -72,6 +74,7 @@ export interface LexiconSense {
   ipaUs?: string;
   ipaUk?: string;
   definitions: string[];
+  definitionIds?: string[];
   source?: 'wordnet';
 }
 

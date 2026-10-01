@@ -24,6 +24,9 @@ const requiredFiles = [
   'wsd/ettin-150m-wsd/manifest.json',
   'wsd/ettin-150m-wsd/LICENSE',
   'wsd/ettin-150m-wsd/NOTICE.txt',
+  'wsd/sayedshaun-wsd/manifest.json',
+  'wsd/sayedshaun-wsd/LICENSE',
+  'wsd/sayedshaun-wsd/NOTICE.txt',
 ];
 
 async function assertFileExists(relativePath) {
@@ -144,8 +147,7 @@ async function hashFile(filePath) {
   return { sha256: digest.digest('hex'), size };
 }
 
-async function verifyWsdAssets() {
-  const relativeRoot = 'wsd/ettin-150m-wsd';
+async function verifyWsdAssets(relativeRoot, revision, metadataFiles) {
   const sourceRoot = path.resolve('public', relativeRoot);
   const deployedRoot = path.join(DIST_DIR, relativeRoot);
   const [sourceManifest, deployedManifest] = await Promise.all([
@@ -156,7 +158,7 @@ async function verifyWsdAssets() {
     throw new Error('Deployed WSD manifest differs from source.');
   }
   const manifest = JSON.parse(deployedManifest.toString('utf8'));
-  if (manifest.revision !== '8751b577199d1bb95b74fa2457da7065d57100ae'
+  if (manifest.revision !== revision
     || !Number.isSafeInteger(manifest.size) || manifest.size <= 0
     || !Array.isArray(manifest.parts) || manifest.parts.length === 0 || manifest.parts.length > 20
     || !manifest.metadata || typeof manifest.metadata !== 'object') {
@@ -170,7 +172,7 @@ async function verifyWsdAssets() {
   }
   const assets = [
     ...manifest.parts.map((part) => ({ name: part.name, sha256: part.sha256, size: part.size })),
-    ...['tokenizer.json', 'tokenizer_config.json', 'answer_letters.json'].map((name) => ({
+    ...metadataFiles.map((name) => ({
       name, sha256: manifest.metadata[name], size: null,
     })),
     ...['LICENSE', 'NOTICE.txt'].map((name) => ({ name, sha256: null, size: null })),
@@ -197,6 +199,60 @@ async function verifyWsdAssets() {
   if (totalModelBytes !== manifest.size) {
     throw new Error(`Invalid deployed WSD model size: expected=${manifest.size} actual=${totalModelBytes}`);
   }
+}
+
+async function verifySenseVectors(relativeRoot) {
+  const manifest = JSON.parse(await readFile(path.resolve('public', relativeRoot, 'manifest.json'), 'utf8'));
+  const vectors = manifest.vectors;
+  if (vectors?.format !== 'float16-le' || vectors.dimensions !== 768 || !Number.isSafeInteger(vectors.count)
+    || !vectors.buckets || Object.keys(vectors.buckets).length !== LEXICON_BUCKET_COUNT) {
+    throw new Error(`Invalid WSD vector manifest: root=${relativeRoot}`);
+  }
+  let total = 0;
+  for (let bucketId = 0; bucketId < LEXICON_BUCKET_COUNT; bucketId += 1) {
+    const name = String(bucketId).padStart(4, '0');
+    const bucket = vectors.buckets[name];
+    if (!bucket || !Number.isSafeInteger(bucket.count) || bucket.count < 0
+      || bucket.bytes !== bucket.count * 768 * 2) {
+      throw new Error(`Invalid WSD vector bucket declaration: root=${relativeRoot} name=${name}`);
+    }
+    for (const [suffix, expectedHash, expectedSize] of [
+      ['json', bucket.metadataSha256, null],
+      ['bin', bucket.vectorsSha256, bucket.bytes],
+    ]) {
+      const relativePath = `${relativeRoot}/vectors/${name}.${suffix}`;
+      const [source, deployed] = await Promise.all([
+        hashFile(path.resolve('public', relativePath)),
+        hashFile(path.join(DIST_DIR, relativePath)),
+      ]);
+      if (source.sha256 !== deployed.sha256 || source.size !== deployed.size
+        || deployed.sha256 !== expectedHash || (expectedSize !== null && deployed.size !== expectedSize)) {
+        throw new Error(`Invalid deployed WSD vector asset: path=${relativePath}`);
+      }
+    }
+    const wordNetEntries = JSON.parse(await readFile(path.resolve('data/wordnet', `${name}.json`), 'utf8'));
+    const expectedIndex = {};
+    let expectedOffset = 0;
+    for (const entry of wordNetEntries) {
+      const definitions = entry.senses.flatMap((sense) => sense.definitions);
+      if (definitions.length < 2) {
+        continue;
+      }
+      expectedIndex[entry.word] = [expectedOffset, definitions.map((definition) => definition.id)];
+      expectedOffset += definitions.length;
+    }
+    const actualIndex = JSON.parse(await readFile(path.resolve('public', relativeRoot, 'vectors', `${name}.json`), 'utf8'));
+    if (expectedOffset !== bucket.count || JSON.stringify(actualIndex) !== JSON.stringify(expectedIndex)) {
+      throw new Error(`WSD vector index differs from WordNet: root=${relativeRoot} bucket=${name}`);
+    }
+    total += bucket.count;
+  }
+  if (total !== vectors.count) {
+    throw new Error(`WSD vector count mismatch: root=${relativeRoot} expected=${vectors.count} actual=${total}`);
+  }
+}
+
+async function verifyWsdRuntime() {
   const wasmFiles = (await readdir(path.join(DIST_DIR, 'assets')))
     .filter((name) => /^ort-wasm-simd-threaded-[\w-]+\.wasm$/.test(name));
   if (wasmFiles.length !== 1) {
@@ -209,14 +265,20 @@ async function verifyWsdAssets() {
   if (installedWasm.sha256 !== deployedWasm.sha256) {
     throw new Error('Deployed WSD runtime binary differs from installed ONNX Runtime.');
   }
-  const workers = (await readdir(path.join(DIST_DIR, 'assets')))
-    .filter((name) => /^ettin-wsd\.worker-[\w-]+\.js$/.test(name));
-  if (workers.length !== 1) {
-    throw new Error(`Expected one deployed WSD worker: found=${workers.length}`);
-  }
-  const worker = await readFile(path.join(DIST_DIR, 'assets', workers[0]), 'utf8');
-  if (!worker.includes('wsd/ettin-150m-wsd/') || !worker.includes(wasmFiles[0])) {
-    throw new Error('Deployed WSD worker does not reference the model and runtime assets.');
+  for (const [name, model] of [
+    ['ettin-wsd', 'ettin-150m-wsd'],
+    ['sayedshaun-wsd', 'sayedshaun-wsd'],
+    ['glite-lens', 'glite-lens'],
+  ]) {
+    const workers = (await readdir(path.join(DIST_DIR, 'assets')))
+      .filter((file) => new RegExp(`^${name}\\.worker-[\\w-]+\\.js$`).test(file));
+    if (workers.length !== 1) {
+      throw new Error(`Expected one deployed ${name} worker: found=${workers.length}`);
+    }
+    const worker = await readFile(path.join(DIST_DIR, 'assets', workers[0]), 'utf8');
+    if (!worker.includes(`wsd/${model}/`) || !worker.includes(wasmFiles[0])) {
+      throw new Error(`Deployed ${name} worker does not reference the model and runtime assets.`);
+    }
   }
 }
 
@@ -227,7 +289,12 @@ async function main() {
   await verifyLexiconChunks();
   await verifyWordNetAssets(path.join(DIST_DIR, 'data/wordnet'));
   await verifyDictionaryCopies();
-  await verifyWsdAssets();
+  await verifyWsdAssets('wsd/ettin-150m-wsd', '8751b577199d1bb95b74fa2457da7065d57100ae', ['tokenizer.json', 'tokenizer_config.json', 'answer_letters.json']);
+  await verifyWsdAssets('wsd/sayedshaun-wsd', '54e41c09c61ae8bd60c62e40bf483141c49ce0d3', ['tokenizer.json', 'tokenizer_config.json']);
+  await verifyWsdAssets('wsd/glite-lens', 'glite-lens-seed42-context-int8-v1', ['tokenizer.json', 'tokenizer_config.json']);
+  await verifySenseVectors('wsd/sayedshaun-wsd');
+  await verifySenseVectors('wsd/glite-lens');
+  await verifyWsdRuntime();
   console.log('Deploy asset verification passed.');
 }
 

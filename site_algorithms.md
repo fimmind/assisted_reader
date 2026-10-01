@@ -614,28 +614,34 @@ Each definition lookup fetches the matching bucket from both sources. A
 WordNet POS group supplies the definitions when present. Its transcription
 comes from the corresponding Wiktionary POS group. Wiktionary groups absent
 from WordNet remain available, including when contextual POS inference selects
-one. WordNet sense order is retained unless the optional Word Sense
-Disambiguation setting is enabled. That setting caches a quantized ONNX
-export of `sign/Ettin-150m-WSD` and its WASM runtime in the browser and runs
-inference in a worker. Model parts, metadata, and the WASM runtime load concurrently.
+one. WordNet sense order is retained unless Word Sense Disambiguation is set to
+SayedShaun, Glite LENS, or Ettin. SayedShaun uses a quantized ONNX export of its
+DistilBERT bi-encoder and precomputed WordNet definition vectors; Glite LENS uses a quantized context encoder and
+precomputed WordNet definition vectors from its gloss encoder; Ettin uses the
+quantized `sign/Ettin-150m-WSD` export. Each model runs in a browser worker,
+with its files cached locally. Only the selected worker is active. SayedShaun
+and Glite LENS fetch only the precomputed vector bucket for a requested WordNet
+headword and keep a bounded number of buckets in memory.
 Cards request filtering as soon as their WordNet definitions and the model are
 ready. Opened popups take priority over queued cards, followed by cards near the
 viewport. For each
 card with multiple WordNet glosses, the worker marks the occurrence
 in the selected context, scores the WordNet options, and retains those within
-the selected score margin of the best WordNet option. Context size selects
+the selected model's score margin of the best WordNet option. Context size selects
 1–3 surrounding sentences or paragraphs, defaulting to one sentence.
 Wiktionary-only POS groups remain unchanged. With WSD enabled, cards with
 multiple WordNet definitions appear after inference finishes. During model
 download, those cards remain hidden. If the model or a request fails, cards
 show all dictionary definitions with an error message; errors can be
-retried in Settings. Disabling WSD stops the worker and releases its model.
+retried in Settings. Selecting None stops the worker and releases its model.
 Opened word popups keep their activity indicator visible through dictionary
 lookup and WSD inference.
-Reduction levels 0–10 use margins calibrated on 429
+Reduction levels 0–10 have separate model-specific margins calibrated on 429
 single-sentence SemEval-2007 occurrences for zero observed calibration misses
-and nominal 1–10% miss rates respectively. Calibration used native ONNX
-inference; browser WASM scores and larger context windows may differ.
+and nominal 1–10% miss rates respectively. The SayedShaun margins use browser
+WASM scores; the Glite LENS margins use its quantized gloss vectors and browser
+WASM context scores; the Ettin margins use native ONNX scores. Larger context
+windows and browser runtime differences can change the observed miss rate.
 
 Runtime POS selection:
 

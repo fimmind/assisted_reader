@@ -194,9 +194,9 @@ export function StudyDefinitionText({
                 context={{ text: popup.context, start: popup.selection.start, end: popup.selection.end }}
                 contextParagraphs={[popup.context]}
                 contextParagraphIndex={0}
-                wsdEnabled={settings.wordSenseDisambiguationEnabled}
+                wsdMode={settings.wsdMode}
                 wsdPriority="popup"
-                wsdMargin={marginForReductionLevel(settings.wsdReductionLevel)}
+                wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
                 wsdContextUnit={settings.wsdContextUnit}
                 wsdContextSize={settings.wsdContextSize}
                 pendingIndicator={<div className="rounded-md border bg-popover px-3 py-2 text-sm shadow-sm" role="status">Disambiguating definition…</div>}

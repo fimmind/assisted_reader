@@ -110,7 +110,7 @@ test("Hitchhiker analysis fast path stays below 50ms", () => {
     deduplicationRadius: 5,
     knowledgeThreshold: 0.5,
     englishVariant: 'US',
-    wordSenseDisambiguationEnabled: false,
+    wsdMode: 'none',
     wsdReductionLevel: 0,
     wsdContextUnit: 'sentence',
     wsdContextSize: 1,

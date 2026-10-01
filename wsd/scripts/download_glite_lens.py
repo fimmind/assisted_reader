@@ -19,7 +19,7 @@ RELEASE_PREFIX = (
 )
 MODEL_URL = (
     "https://media.githubusercontent.com/media/GliteTech/"
-    f"research-semcor-relabeling/refs/heads/main/{RELEASE_PREFIX}/"
+    f"research-semcor-relabeling/{GLITE_COMMIT}/{RELEASE_PREFIX}/"
     "training_runs/lens-gpt55-s42/best_model.ckpt"
 )
 TOKENIZER_PREFIX = (

@@ -1,5 +1,5 @@
 import { SENTENCE_RE } from './constants';
-import type { LexiconEntry, LexiconSense } from './types';
+import type { LexiconEntry, LexiconSense, WsdMode } from './types';
 
 export interface WsdContext {
   text: string;
@@ -14,7 +14,7 @@ interface SentenceSegment {
   end: number;
 }
 
-export const WSD_MARGIN_BY_REDUCTION_LEVEL: readonly number[] = [
+export const ETTIN_MARGIN_BY_REDUCTION_LEVEL: readonly number[] = [
   5.83791184425354,
   4.99607515335083,
   4.563767194747925,
@@ -28,8 +28,41 @@ export const WSD_MARGIN_BY_REDUCTION_LEVEL: readonly number[] = [
   2.8481526374816895,
 ];
 
-export function marginForReductionLevel(level: number): number {
-  const margin = WSD_MARGIN_BY_REDUCTION_LEVEL[level];
+export const SAYEDSHAUN_MARGIN_BY_REDUCTION_LEVEL: readonly number[] = [
+  8.013749546077884,
+  7.150079341920595,
+  5.1866249366168375,
+  3.922373754862072,
+  3.5443301865161416,
+  3.3042476867311947,
+  3.0947652411336293,
+  2.8522067646180744,
+  2.584678309612947,
+  2.4042438881280717,
+  2.341348441519557,
+];
+
+export const GLITE_LENS_MARGIN_BY_REDUCTION_LEVEL: readonly number[] = [
+  35.92956075091025,
+  28.801170284738646,
+  23.68325989190771,
+  18.85929058255408,
+  15.516171207015532,
+  14.074248390984962,
+  13.36846521612813,
+  12.813326430410257,
+  11.132158141324226,
+  9.989735323122886,
+  9.027904800054216,
+];
+
+export function marginForReductionLevel(level: number, mode: WsdMode): number {
+  if (mode === 'none') {
+    throw new RangeError(`WSD reduction margin requires an enabled model: mode=${mode}`);
+  }
+  const margins = mode === 'sayedshaun' ? SAYEDSHAUN_MARGIN_BY_REDUCTION_LEVEL
+    : mode === 'glite-lens' ? GLITE_LENS_MARGIN_BY_REDUCTION_LEVEL : ETTIN_MARGIN_BY_REDUCTION_LEVEL;
+  const margin = margins[level];
   if (!Number.isInteger(level) || margin === undefined) {
     throw new RangeError(`Invalid WSD reduction level: level=${level}`);
   }
@@ -112,6 +145,18 @@ export function wordNetGlosses(entry: LexiconEntry): string[] {
   return entry.senses.flatMap((sense) => sense.source === 'wordnet' ? sense.definitions : []);
 }
 
+export function wordNetDefinitionIds(entry: LexiconEntry): string[] {
+  return entry.senses.flatMap((sense) => {
+    if (sense.source !== 'wordnet') {
+      return [];
+    }
+    if (!sense.definitionIds || sense.definitionIds.length !== sense.definitions.length) {
+      throw new Error(`WordNet sense IDs are missing: word=${entry.word} partOfSpeech=${sense.partOfSpeech}`);
+    }
+    return sense.definitionIds;
+  });
+}
+
 export function buildWsdPrompt(context: WsdContext, glosses: string[], letters: string[]): string {
   if (glosses.length < 2 || glosses.length > 127 || letters.length !== 128) {
     throw new RangeError(`Invalid WSD candidate count: candidates=${glosses.length} letters=${letters.length}`);
@@ -142,15 +187,18 @@ export function filterWordNetEntry(entry: LexiconEntry, scores: number[], margin
     }
     const scored = sense.definitions.map((gloss, index) => ({
       gloss,
+      id: sense.definitionIds?.[index],
       score: scores[offset + index],
       index,
     }));
     offset += sense.definitions.length;
-    const definitions = scored
+    const retained = scored
       .filter((item) => best - item.score <= margin)
-      .sort((left, right) => right.score - left.score || left.index - right.index)
-      .map((item) => item.gloss);
-    return definitions.length > 0 ? [{ ...sense, definitions }] : [];
+      .sort((left, right) => right.score - left.score || left.index - right.index);
+    return retained.length > 0 ? [{ ...sense,
+      definitions: retained.map((item) => item.gloss),
+      definitionIds: sense.definitionIds ? retained.map((item) => item.id as string) : undefined,
+    }] : [];
   });
   if (senses.length === 0) {
     throw new Error(`WSD excluded every definition: word=${entry.word} margin=${margin}`);

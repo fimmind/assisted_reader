@@ -1,0 +1,6 @@
+SayedShaun WSD cosine encoder
+Source: https://huggingface.co/SayedShaun/word-sense-disambiguation
+Revision: 54e41c09c61ae8bd60c62e40bf483141c49ce0d3
+Fine-tuned weights: MIT (see LICENSE)
+Base encoder: distilbert/distilbert-base-uncased
+Browser model: dynamically quantized ONNX export of the [CLS] encoder
