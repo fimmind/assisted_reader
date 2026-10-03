@@ -8,6 +8,8 @@ import warnings
 from pathlib import Path
 from urllib.request import urlopen
 
+from wsd_progress import report_progress
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_ROOT = ROOT / ".cache" / "models"
@@ -80,8 +82,14 @@ def download_asset(url: str, path: Path, expected_sha256: str) -> None:
     for attempt in range(1, 4):
         try:
             with urlopen(url, timeout=120) as source, temporary.open("wb") as destination:
+                total = int(source.headers.get("Content-Length", "0"))
+                completed = 0
+                started = time.monotonic()
                 while chunk := source.read(1024 * 1024):
                     destination.write(chunk)
+                    completed += len(chunk)
+                    if total and (completed % (32 * 1024 * 1024) == 0 or completed == total):
+                        report_progress(f"Download {path.name} (bytes)", completed, total, started, 0)
             actual = file_sha256(temporary)
             if actual != expected_sha256:
                 raise ValueError(

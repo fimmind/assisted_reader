@@ -12,6 +12,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
 import type { UserProfile } from '@/core/types';
 import { getWsdModelStatus, startWsdModel, stopWsdModel, subscribeWsdModelStatus } from '@/core/wsd-runtime';
+import { failedWsdAsset, loadWsdAvailability, uncheckedWsdAvailability } from '@/core/wsd-assets';
+import type { FailedWsdAsset } from '@/core/wsd-assets';
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -19,16 +21,46 @@ export default function SettingsPage() {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string>('');
   const [wsdStatus, setWsdStatus] = useState(getWsdModelStatus);
+  const [wsdAvailability, setWsdAvailability] = useState(uncheckedWsdAvailability);
+  const [failedAsset, setFailedAsset] = useState<FailedWsdAsset | null>(null);
+  const selectedWsdAvailable = settings.wsdMode === 'none' || wsdAvailability[settings.wsdMode].available;
+
+  useEffect(() => subscribeWsdModelStatus(setWsdStatus), []);
 
   useEffect(() => {
-    const unsubscribe = subscribeWsdModelStatus(setWsdStatus);
-    if (settings.wsdMode !== 'none') {
+    const failed = failedWsdAsset(wsdStatus.mode, wsdStatus.phase, wsdStatus.message);
+    if (failed) setFailedAsset(failed);
+  }, [wsdStatus.mode, wsdStatus.phase, wsdStatus.message]);
+
+  useEffect(() => {
+    let controller: AbortController | null = null;
+    const refresh = (): void => {
+      controller?.abort();
+      const active = new AbortController();
+      controller = active;
+      void loadWsdAvailability(failedAsset, active.signal).then((availability) => {
+        if (!active.signal.aborted) setWsdAvailability(availability);
+      }).catch((error: unknown) => {
+        if (!active.signal.aborted) console.error('wsd-availability-check-failed', { error });
+      });
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    const timer = window.setInterval(refresh, 15_000);
+    return () => {
+      controller?.abort();
+      window.removeEventListener('focus', refresh);
+      window.clearInterval(timer);
+    };
+  }, [failedAsset]);
+
+  useEffect(() => {
+    if (settings.wsdMode !== 'none' && selectedWsdAvailable) {
       startWsdModel(settings.wsdMode);
     } else {
       stopWsdModel();
     }
-    return unsubscribe;
-  }, [settings.wsdMode]);
+  }, [settings.wsdMode, selectedWsdAvailable]);
 
   const refreshProfiles = () => {
     const state = loadProfileState();
@@ -255,17 +287,20 @@ export default function SettingsPage() {
                     key={mode}
                     variant={settings.wsdMode === mode ? 'default' : 'outline'}
                     aria-pressed={settings.wsdMode === mode}
+                    disabled={mode !== 'none' && !wsdAvailability[mode].available}
+                    title={mode === 'none' ? undefined : wsdAvailability[mode].reason}
                     onClick={() => updateSetting('wsdMode', mode)}
                     className="min-w-[100px]"
                   >
                     {mode === 'none' ? 'None' : mode === 'sayedshaun' ? 'SayedShaun' : mode === 'glite-lens' ? 'Glite LENS' : 'Ettin'}
+                    {mode !== 'none' && wsdAvailability[mode].checked && !wsdAvailability[mode].available && ' (Unavailable)'}
                   </Button>
                 ))}
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Hide WordNet definitions that may not fit the context. Glite LENS uses precomputed definition embeddings.
+                Hide WordNet definitions that may not fit the context. SayedShaun and Glite LENS use precomputed definition embeddings.
               </p>
-              {settings.wsdMode !== 'none' && (
+              {settings.wsdMode !== 'none' && wsdAvailability[settings.wsdMode].available && (
                 <div className="space-y-2" role="status" aria-live="polite">
                   <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                     <span>{wsdStatus.phase === 'error' ? `Model error: ${wsdStatus.message}` : wsdStatus.message}</span>

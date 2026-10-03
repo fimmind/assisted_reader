@@ -6,10 +6,14 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import time
 
 import numpy as np
 import onnxruntime as ort
 from transformers import AutoTokenizer
+
+from wsd_progress import report_progress
+from wsd_memory import require_memory_scope
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -51,7 +55,7 @@ def package_vectors() -> dict[str, object]:
     print(json.dumps({"stage": "glosses", "count": len(texts)}), flush=True)
     tokenizer = AutoTokenizer.from_pretrained(str(SOURCE), local_files_only=True)
     options = ort.SessionOptions()
-    options.intra_op_num_threads = 8
+    options.intra_op_num_threads = 4
     session = ort.InferenceSession(str(MODEL), sess_options=options, providers=["CPUExecutionProvider"])
     model_hash = sha256(MODEL)
     source_hash = source_digest.hexdigest()
@@ -66,9 +70,16 @@ def package_vectors() -> dict[str, object]:
         raise ValueError(f"Invalid SayedShaun vector progress: completed={completed} total={len(texts)}")
     vectors = np.memmap(VECTOR_WORK, dtype="<f2", mode="r+" if completed else "w+",
                         shape=(len(texts), VECTOR_SIZE))
-    lengths = [len(ids) for ids in tokenizer(texts, add_special_tokens=True, truncation=True,
-                                            max_length=256)["input_ids"]]
+    lengths: list[int] = []
+    tokenizing_started = time.monotonic()
+    for first in range(0, len(texts), 256):
+        lengths.extend(len(ids) for ids in tokenizer(texts[first:first + 256], add_special_tokens=True,
+                                                     truncation=True, max_length=256)["input_ids"])
+        if first % 3200 == 0 or first + 256 >= len(texts):
+            report_progress("SayedShaun tokenization", min(first + 256, len(texts)), len(texts), tokenizing_started, 0)
     order = np.argsort(np.asarray(lengths), kind="stable")
+    encoding_started = time.monotonic()
+    report_progress("SayedShaun embeddings", completed, len(order), encoding_started, completed)
     for offset in range(completed, len(order), 64):
         indices = order[offset:offset + 64]
         encoded = tokenizer([texts[index] for index in indices], padding=True, truncation=True,
@@ -85,8 +96,7 @@ def package_vectors() -> dict[str, object]:
                                                  "source_sha256": source_hash,
                                                  "completed": offset + len(indices)}) + "\n", encoding="utf-8")
             progress_path.replace(VECTOR_PROGRESS)
-            print(json.dumps({"stage": "encoding", "completed": offset + len(indices),
-                              "total": len(texts)}), flush=True)
+            report_progress("SayedShaun embeddings", offset + len(indices), len(texts), encoding_started, completed)
     vector_root = DESTINATION / "vectors"
     vector_root.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, dict[str, int | str]] = {}
@@ -107,10 +117,11 @@ def package_vectors() -> dict[str, object]:
     if global_offset != len(texts):
         raise ValueError(f"SayedShaun vector count mismatch: offset={global_offset} texts={len(texts)}")
     return {"format": "float16-le", "dimensions": VECTOR_SIZE, "count": len(texts),
-            "sourceSha256": source_hash, "buckets": manifest}
+            "sourceSha256": source_hash, "modelSha256": model_hash, "buckets": manifest}
 
 
 def main() -> None:
+    require_memory_scope()
     if not MODEL.is_file():
         raise FileNotFoundError(f"Missing exported SayedShaun model: path={MODEL}")
     DESTINATION.mkdir(parents=True, exist_ok=True)
@@ -139,7 +150,10 @@ def main() -> None:
         "metadata": metadata,
     }
     manifest["vectors"] = package_vectors()
-    (DESTINATION / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    manifest_path = DESTINATION / "manifest.json"
+    temporary = manifest_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(manifest_path)
     VECTOR_WORK.unlink()
     VECTOR_PROGRESS.unlink()
     print(json.dumps({"stage": "done", "destination": str(DESTINATION)}), flush=True)

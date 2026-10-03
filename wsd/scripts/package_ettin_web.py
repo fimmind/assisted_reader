@@ -6,6 +6,10 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import time
+
+from wsd_progress import report_progress
+from wsd_memory import require_memory_scope
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,11 +21,14 @@ REVISION = "8751b577199d1bb95b74fa2457da7065d57100ae"
 
 
 def main() -> None:
+    require_memory_scope()
     if not MODEL.is_file():
         raise FileNotFoundError(f"Missing exported quantized model: {MODEL}")
     destination = DESTINATION
     destination.mkdir(parents=True, exist_ok=True)
     parts = []
+    started = time.monotonic()
+    completed = 0
     with MODEL.open("rb") as model_file:
         index = 0
         while chunk := model_file.read(PART_SIZE):
@@ -32,6 +39,8 @@ def main() -> None:
                 "size": len(chunk),
                 "sha256": hashlib.sha256(chunk).hexdigest(),
             })
+            completed += len(chunk)
+            report_progress('Ettin packaging (bytes)', completed, MODEL.stat().st_size, started, 0)
             index += 1
     if not parts:
         raise ValueError(f"Exported model is empty: {MODEL}")
@@ -43,7 +52,9 @@ def main() -> None:
     for name in ("tokenizer.json", "tokenizer_config.json", "answer_letters.json"):
         shutil.copyfile(SOURCE / name, destination / name)
         metadata[name] = hashlib.sha256((destination / name).read_bytes()).hexdigest()
-    (destination / "manifest.json").write_text(json.dumps({
+    manifest_path = destination / "manifest.json"
+    temporary = manifest_path.with_suffix('.tmp')
+    temporary.write_text(json.dumps({
         "model": "sign/Ettin-150m-WSD",
         "revision": REVISION,
         "license": "Apache-2.0",
@@ -52,6 +63,7 @@ def main() -> None:
         "parts": parts,
         "metadata": metadata,
     }, indent=2) + "\n")
+    temporary.replace(manifest_path)
     print(f"Packaged {len(parts)} model chunks ({sum(part['size'] for part in parts)} bytes)")
 
 

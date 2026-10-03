@@ -10,6 +10,9 @@ import torch
 from onnxruntime.quantization import QuantType, quantize_dynamic
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 
+from wsd_exports import write_export_receipt
+from wsd_memory import require_memory_scope
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_ROOT = ROOT / ".cache" / "models"
@@ -37,6 +40,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    require_memory_scope()
     if not CHECKPOINT.is_file() or not (BASE / "config.json").is_file():
         raise FileNotFoundError(f"Missing Glite LENS checkpoint or base config: checkpoint={CHECKPOINT} base={BASE}")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -74,6 +78,7 @@ def main() -> None:
         dynamo=False,
     )
     quantize_dynamic(fp32, int8, weight_type=QuantType.QUInt8)
+    write_export_receipt(args.output, "model-export.json", ["model-int8.onnx","tokenizer.json","tokenizer_config.json"], Path(__file__))
     print(f"Exported {int8} ({int8.stat().st_size / 1_000_000:.1f} MB)")
 
 

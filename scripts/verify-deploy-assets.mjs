@@ -21,6 +21,7 @@ const requiredFiles = [
   'data/lexicon/index.json',
   'data/wordnet/index.json',
   'data/wordnet/LICENSE',
+  'wsd/availability.json',
   'wsd/ettin-150m-wsd/manifest.json',
   'wsd/ettin-150m-wsd/LICENSE',
   'wsd/ettin-150m-wsd/NOTICE.txt',
@@ -285,6 +286,12 @@ async function verifyWsdRuntime() {
 async function main() {
   for (const file of requiredFiles) {
     await assertFileExists(file);
+  }
+  const availability = JSON.parse(await readFile(path.join(DIST_DIR, 'wsd/availability.json'), 'utf8'));
+  for (const model of ['sayedshaun', 'glite-lens', 'ettin']) {
+    if (availability[model]?.available !== true || availability[model]?.reason !== '') {
+      throw new Error(`Invalid deployed WSD availability: model=${model}`);
+    }
   }
   await verifyLexiconChunks();
   await verifyWordNetAssets(path.join(DIST_DIR, 'data/wordnet'));
