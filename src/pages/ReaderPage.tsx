@@ -703,6 +703,7 @@ export default function ReaderPage() {
   const lastPersistedChapterProgressRef = useRef(0);
 
   const lastScrollY = useRef(0);
+  const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
   const lastScrollActivityAtRef = useRef(Number.NEGATIVE_INFINITY);
 
   const paraRefs = useRef<(HTMLParagraphElement | null)[]>([]);
@@ -1218,8 +1219,38 @@ export default function ReaderPage() {
   }, [book, isLoading, restoreCurrentChapterProgress]);
 
   useEffect(() => {
+    let lastTouchY: number | null = null;
+    let scrollbarPointerId: number | null = null;
     const recordScrollActivity = () => {
       lastScrollActivityAtRef.current = performance.now();
+    };
+    const recordWheelScrollActivity = (event: WheelEvent) => {
+      if (event.deltaY !== 0) {
+        scrollDirectionRef.current = event.deltaY > 0 ? 1 : -1;
+      }
+      recordScrollActivity();
+    };
+    const recordTouchStart = (event: TouchEvent) => {
+      lastTouchY = event.touches[0]?.clientY ?? null;
+    };
+    const recordTouchScrollActivity = (event: TouchEvent) => {
+      const y = event.touches[0]?.clientY ?? null;
+      if (y !== null && lastTouchY !== null && y !== lastTouchY) {
+        scrollDirectionRef.current = y < lastTouchY ? 1 : -1;
+      }
+      lastTouchY = y;
+      recordScrollActivity();
+    };
+    const recordScrollbarPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'mouse' && event.clientX >= document.documentElement.clientWidth) {
+        scrollbarPointerId = event.pointerId;
+      }
+    };
+    const recordScrollbarPointerUp = (event: PointerEvent) => {
+      if (event.pointerId === scrollbarPointerId) {
+        scrollbarPointerId = null;
+        scrollDirectionRef.current = 0;
+      }
     };
     const recordKeyboardScrollActivity = (event: KeyboardEvent) => {
       const target = event.target;
@@ -1227,26 +1258,40 @@ export default function ReaderPage() {
         return;
       }
       if (SCROLL_KEYS.has(event.key)) {
+        scrollDirectionRef.current = event.key === 'ArrowUp' || event.key === 'PageUp'
+          || event.key === 'Home' || (event.key === ' ' && event.shiftKey) ? -1 : 1;
         recordScrollActivity();
       }
     };
     const handleScroll = () => {
       const y = window.scrollY;
-      if (y > lastScrollY.current && y > 100) setHeaderVisible(false);
-      else if (y < lastScrollY.current) setHeaderVisible(true);
+      const previousY = lastScrollY.current;
       lastScrollY.current = y;
       if (isRestoringProgressRef.current) {
         return;
       }
+      if (y > previousY && y > 100 && (scrollDirectionRef.current === 1 || scrollbarPointerId !== null)) {
+        setHeaderVisible(false);
+      } else if (y < previousY && (scrollDirectionRef.current === -1 || scrollbarPointerId !== null)) {
+        setHeaderVisible(true);
+      }
       scheduleChapterProgressPersist();
     };
-    window.addEventListener('wheel', recordScrollActivity, { passive: true });
-    window.addEventListener('touchmove', recordScrollActivity, { passive: true });
+    window.addEventListener('wheel', recordWheelScrollActivity, { passive: true });
+    window.addEventListener('touchstart', recordTouchStart, { passive: true });
+    window.addEventListener('touchmove', recordTouchScrollActivity, { passive: true });
+    window.addEventListener('pointerdown', recordScrollbarPointerDown);
+    window.addEventListener('pointerup', recordScrollbarPointerUp);
+    window.addEventListener('pointercancel', recordScrollbarPointerUp);
     window.addEventListener('keydown', recordKeyboardScrollActivity);
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
-      window.removeEventListener('wheel', recordScrollActivity);
-      window.removeEventListener('touchmove', recordScrollActivity);
+      window.removeEventListener('wheel', recordWheelScrollActivity);
+      window.removeEventListener('touchstart', recordTouchStart);
+      window.removeEventListener('touchmove', recordTouchScrollActivity);
+      window.removeEventListener('pointerdown', recordScrollbarPointerDown);
+      window.removeEventListener('pointerup', recordScrollbarPointerUp);
+      window.removeEventListener('pointercancel', recordScrollbarPointerUp);
       window.removeEventListener('keydown', recordKeyboardScrollActivity);
       window.removeEventListener('scroll', handleScroll);
     };
@@ -1785,7 +1830,11 @@ export default function ReaderPage() {
 
       <main
         className={cn('mx-auto px-4 sm:px-6', getOuterWidthClass())}
-        onClick={() => setHeaderVisible(true)}
+        onClick={() => {
+          scrollDirectionRef.current = 0;
+          lastScrollY.current = window.scrollY;
+          setHeaderVisible(true);
+        }}
       >
         <div className="py-12 md:py-20" data-testid="reading-row">
           <div className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
