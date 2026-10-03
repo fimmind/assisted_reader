@@ -60,7 +60,7 @@ async function sha256(bytes: ArrayBuffer): Promise<string> {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function verifiedBytes(cache: Cache, url: string, expectedHash: string): Promise<ArrayBuffer> {
+async function verifiedBytes(cache: Cache, url: string, expectedHash: string, onDownload: (() => void) | null): Promise<ArrayBuffer> {
   const cached = await cache.match(url);
   if (cached) {
     const bytes = await cached.arrayBuffer();
@@ -72,6 +72,7 @@ async function verifiedBytes(cache: Cache, url: string, expectedHash: string): P
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
+      onDownload?.();
       const response = await fetch(url, { cache: 'no-cache', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       if (!response.ok) {
         throw new Error(`status=${response.status} body=${(await response.text()).slice(0, 500)}`);
@@ -165,18 +166,24 @@ async function loadModel(): Promise<void> {
   const cache = await caches.open(CACHE_NAME);
   const loadedManifest = await loadManifest();
   let completed = 0;
+  let downloadStarted = false;
   const [parts, tokenizerBytes, configBytes, wasmBinary] = await Promise.all([
     Promise.all(loadedManifest.parts.map(async (part) => {
-      const bytes = await verifiedBytes(cache, `${MODEL_BASE}${part.name}?sha256=${part.sha256}`, part.sha256);
+      const bytes = await verifiedBytes(cache, `${MODEL_BASE}${part.name}?sha256=${part.sha256}`, part.sha256, () => {
+        downloadStarted = true;
+        reportStatus('downloading', completed, loadedManifest.size, 'Downloading model');
+      });
       if (bytes.byteLength !== part.size) {
         throw new RangeError(`Wrong SayedShaun WSD part size: name=${part.name} expected=${part.size} actual=${bytes.byteLength}`);
       }
       completed += part.size;
-      reportStatus('downloading', completed, loadedManifest.size, 'Downloading model');
+      if (downloadStarted) {
+        reportStatus('downloading', completed, loadedManifest.size, 'Downloading model');
+      }
       return bytes;
     })),
-    verifiedBytes(cache, `${MODEL_BASE}tokenizer.json?sha256=${loadedManifest.metadata['tokenizer.json']}`, loadedManifest.metadata['tokenizer.json']),
-    verifiedBytes(cache, `${MODEL_BASE}tokenizer_config.json?sha256=${loadedManifest.metadata['tokenizer_config.json']}`, loadedManifest.metadata['tokenizer_config.json']),
+    verifiedBytes(cache, `${MODEL_BASE}tokenizer.json?sha256=${loadedManifest.metadata['tokenizer.json']}`, loadedManifest.metadata['tokenizer.json'], null),
+    verifiedBytes(cache, `${MODEL_BASE}tokenizer_config.json?sha256=${loadedManifest.metadata['tokenizer_config.json']}`, loadedManifest.metadata['tokenizer_config.json'], null),
     loadWasm(cache),
   ]);
   const modelBytes = new Uint8Array(loadedManifest.size);
@@ -232,8 +239,8 @@ async function loadBucket(name: string): Promise<VectorBucket> {
   }
   const cache = await caches.open(CACHE_NAME);
   const [metadata, bytes] = await Promise.all([
-    verifiedBytes(cache, `${MODEL_BASE}vectors/${name}.json?sha256=${part.metadataSha256}`, part.metadataSha256),
-    verifiedBytes(cache, `${MODEL_BASE}vectors/${name}.bin?sha256=${part.vectorsSha256}`, part.vectorsSha256),
+    verifiedBytes(cache, `${MODEL_BASE}vectors/${name}.json?sha256=${part.metadataSha256}`, part.metadataSha256, null),
+    verifiedBytes(cache, `${MODEL_BASE}vectors/${name}.bin?sha256=${part.vectorsSha256}`, part.vectorsSha256, null),
   ]);
   if (bytes.byteLength !== part.bytes) {
     throw new RangeError(`SayedShaun vector bucket size mismatch: name=${name} expected=${part.bytes} actual=${bytes.byteLength}`);
