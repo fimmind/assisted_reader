@@ -97,8 +97,9 @@ EPUB (`parseEpubBook`):
 when importing EPUB. No CDN script or server upload is needed. Namespace-aware
 XML parsing resolves the container, package metadata, manifest and spine. Chapter
 paths resolve relative to the OPF, including parent paths, URL escapes and fragments.
-Navigation documents and `linear="no"` spine entries are skipped. Missing chapter
-files fail the import instead of silently producing an incomplete book.
+Visible navigation documents in the spine are retained. `linear="no"` entries
+are imported as supplementary chapters for internal links; sequential reading
+skips them. Missing chapter files fail the import instead of silently producing an incomplete book.
 
 XHTML chapters are parsed as XML so self-closing elements such as `<title/>`
 cannot swallow chapter text. Invalid legacy XHTML falls back to HTML parsing;
@@ -106,31 +107,54 @@ chapters declared as HTML use HTML parsing directly. Missing spine entries and
 empty extracted text have separate errors; empty text is not treated as proof
 of DRM. An inert document is walked in document order, retaining paragraphs, headings,
 lists and container text without duplicating nested blocks. Scripts, styles,
-navigation and explicitly hidden elements are removed. Headings remain in the
-text. EPUB 3 `nav` with `epub:type="toc"` is preferred; EPUB 2 NCX `navMap`
+and explicitly hidden elements are removed. Visible navigation content and
+headings remain in the text. EPUB 3 `nav` with `epub:type="toc"` is preferred; EPUB 2 NCX `navMap`
 is tried next. Page-list and landmark navigation do not define chapters.
 TOC paths resolve relative to the navigation file, and decoded fragment IDs
-map to text positions within content files. Consecutive text belongs to its
-preceding TOC entry, including across spine file boundaries. Duplicate opening
+map to reader-block positions within content files, preserving media placement
+at chapter boundaries. Consecutive text belongs to its preceding TOC entry, including across spine file boundaries. Duplicate opening
 positions use the last label; text before the first entry is kept as front matter.
 Missing targets, unresolved anchors, malformed navigation or backwards entries
 invalidate that TOC. If no usable TOC remains, all readable spine text becomes
 one `Chapter 1`, without guessing chapter boundaries from files or headings.
 Missing actual spine content still fails import instead of losing book text.
-Existing EPUBs must be re-imported to use the new grouping.
-Package title and creators populate book metadata, falling back to the filename
-and Unknown Author. Only ordinary book text and metadata are persisted.
+The importer stores a canonical plain-text paragraph projection for NLP and a
+parallel reader-block stream for presentation. Reader blocks retain semantic
+headings and lists, safe common CSS properties from inline and linked stylesheets,
+emphasis, internal and external links, anchors, inline and standalone images, and horizontal rules.
+Explicit line breaks and nonbreaking spaces remain in the canonical text;
+the rendered text and analysis projection have identical offsets. Local CSS
+imports are resolved in order, with cycles ignored and missing resources reported.
+Authored titles stay in the content, including titles styled as ordinary
+paragraphs. Navigation labels are metadata and are never injected into the
+presentation of new rich imports. No paragraph is removed to eliminate a
+duplicate heading. Legacy plain chapters can still use a generated heading.
+Image assets are embedded as data URIs. Reader font family and line spacing stay
+under the user's reader controls; fixed page layouts, embedded fonts, scripts,
+external assets and advanced CSS layout are not reproduced. Vocabulary cards
+continue to use the canonical paragraph indexes and text offsets. Existing EPUBs
+must be re-imported to preserve presentation. Package title and creators populate
+book metadata, falling back to the filename and Unknown Author.
 
 ### FB2 import (React reader)
 
 `book-parser.ts` lazily loads `fb2-parser.ts` for uncompressed `.fb2` files.
 TextDecoder honors UTF-16 byte order and XML-declared encodings, with UTF-8 as
-the default. DOMParser validates FictionBook XML; DTDs are rejected. Title and
+the default. DOMParser checks FictionBook XML syntax and root identity; DTDs are rejected. Title and
 authors come from `description/title-info`, with filename/Unknown Author
 fallbacks. Body sections are walked in document order, flushing parent prose
-before nested chapters to avoid duplication. Paragraphs, verse, subtitles and
-table row text are retained; images, binary data and the named notes body are
-omitted. The normal book store preserves `sourceType: 'fb2'`.
+before nested chapters to avoid duplication. Multi-paragraph source titles and
+header-only parent sections remain in the content; parent continuations do not
+repeat a synthetic heading. The importer stores canonical
+paragraph text for NLP alongside reader blocks that retain named CSS styles,
+verse, subtitles, table rows, epigraphs, citations, emphasis, links and embedded
+binary images. Empty lines and stanza separators are spacers, not horizontal
+rules. Additional bodies remain link-accessible supplementary chapters and
+are skipped during sequential reading. Image-only sections are retained.
+Vocabulary cards continue to use the canonical
+paragraph indexes and text offsets; the normal book store preserves
+`sourceType: 'fb2'`. Existing FB2 imports must be re-imported to preserve
+presentation.
 
 ### PDF import (React reader)
 

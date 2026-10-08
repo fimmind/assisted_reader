@@ -1,7 +1,7 @@
 import {
-  memo, useState, useEffect, useRef, useLayoutEffect, useCallback,
+  createElement, memo, useState, useEffect, useRef, useLayoutEffect, useCallback,
 } from 'react';
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
 import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -27,6 +27,7 @@ import {
   definitionTargetKey,
   lookupFirstAvailableDefinition,
 } from '@/core/definition-target';
+import { adjacentReadingChapter, chapterTitleForReader, readerAnchorChapter, readerBlocksForChapter } from '@/core/reader-content';
 import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
@@ -37,7 +38,19 @@ import type { LazyLexicon } from '@/core/lexicon';
 import type { DefinitionLookupCandidate } from '@/core/definition-target';
 import type { ChapterAnalyzer, LexicalAnalysisCache } from '@/core/reader-analysis';
 import type { StudyTextScope } from '@/core/study';
-import type { DefinitionTarget, ImportedBook, LexiconEntry, ParagraphAnalysis, PartOfSpeech, ReaderSettings, UserProfile, VocabularyModel } from '@/core/types';
+import type {
+  DefinitionTarget,
+  ImportedBook,
+  LexiconEntry,
+  ParagraphAnalysis,
+  PartOfSpeech,
+  ReaderInlineMark,
+  ReaderParagraphBlock,
+  ReaderSettings,
+  ReaderTextRun,
+  UserProfile,
+  VocabularyModel,
+} from '@/core/types';
 
 function clampChapterNumber(book: ImportedBook, chapterNumber: number | undefined): number {
   if (typeof chapterNumber !== 'number' || !Number.isFinite(chapterNumber)) {
@@ -118,10 +131,11 @@ interface ReaderActivityIndicatorProps {
 
 interface ReaderParagraphTextProps {
   analysis: ParagraphAnalysis;
+  block: ReaderParagraphBlock;
   assistanceEnabled: boolean;
   sourceParagraphIndex: number;
   visibleParagraphIndex: number;
-  onElementChange: (visibleParagraphIndex: number, element: HTMLParagraphElement | null) => void;
+  onElementChange: (visibleParagraphIndex: number, element: HTMLElement | null) => void;
   onOpenWordPopup: (
     anchorRect: PopupAnchorRect,
     lookupCandidates: DefinitionLookupCandidate[],
@@ -246,8 +260,29 @@ function resolveTextNodeStartOffset(container: HTMLElement, targetNode: Text): n
   return null;
 }
 
+function resolveTextPosition(
+  container: HTMLElement,
+  offset: number,
+  boundary: 'start' | 'end',
+): { node: Text; offset: number } | null {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode() as Text | null;
+  let nodeStart = 0;
+  let lastNode: Text | null = null;
+  while (node) {
+    const nodeEnd = nodeStart + node.length;
+    if (boundary === 'start' ? offset < nodeEnd || offset === nodeStart : offset <= nodeEnd) {
+      return { node, offset: Math.max(0, Math.min(offset - nodeStart, node.length)) };
+    }
+    nodeStart = nodeEnd;
+    lastNode = node;
+    node = walker.nextNode() as Text | null;
+  }
+  return lastNode && offset === nodeStart ? { node: lastNode, offset: lastNode.length } : null;
+}
+
 function resolveParagraphWordClick(
-  paragraphElement: HTMLParagraphElement,
+  paragraphElement: HTMLElement,
   paragraphText: string,
   clientX: number,
   clientY: number,
@@ -284,14 +319,12 @@ function resolveParagraphWordClick(
 
   const start = selectedMatch.index;
   const end = start + selectedMatch[0].length;
-  const localStart = start - nodeStart;
-  const localEnd = end - nodeStart;
-  if (localStart < 0 || localEnd > caret.node.length) {
-    return null;
-  }
+  const startPosition = resolveTextPosition(paragraphElement, start, 'start');
+  const endPosition = resolveTextPosition(paragraphElement, end, 'end');
+  if (!startPosition || !endPosition) return null;
   const range = document.createRange();
-  range.setStart(caret.node, localStart);
-  range.setEnd(caret.node, localEnd);
+  range.setStart(startPosition.node, startPosition.offset);
+  range.setEnd(endPosition.node, endPosition.offset);
   const rect = range.getBoundingClientRect();
   if (rect.width === 0 && rect.height === 0) {
     return null;
@@ -347,6 +380,7 @@ function calculateWordLookupIndicatorPosition(
 
 const ReaderParagraphText = memo(function ReaderParagraphText({
   analysis,
+  block,
   assistanceEnabled,
   sourceParagraphIndex,
   visibleParagraphIndex,
@@ -362,92 +396,183 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
   }
 
   const nodes: ReactNode[] = [];
-  let cursor = 0;
-  for (const analyzedToken of analysis.tokens) {
+  const richContent = block.content.length > 0
+    ? block.content
+    : [{ type: 'text' as const, text: analysis.paragraphText, marks: [] as ReaderInlineMark[] }];
+  const highlightedRanges = analysis.tokens.flatMap((analyzedToken) => {
     const target = createDefinitionTarget(analyzedToken.lemma, analyzedToken.partOfSpeech);
     const shouldHighlight = assistanceEnabled
       && analyzedToken.unknown
       && highlightedTargetKeys.has(definitionTargetKey(target));
-    if (!shouldHighlight) {
-      continue;
-    }
-    if (analyzedToken.start > cursor) {
-      nodes.push(analysis.paragraphText.slice(cursor, analyzedToken.start));
-    }
-    const isPriority = (1 - analyzedToken.pKnown) > 0.6;
+    return shouldHighlight ? [analyzedToken] : [];
+  });
 
-    nodes.push(
-      <span
-        key={`${analyzedToken.lemma}-${analyzedToken.start}`}
-        data-word-popup-trigger="true"
-        className={cn(
-          'cursor-pointer',
-          'rounded-sm px-0.5 -mx-0.5',
-          isPriority ? 'unknown-word priority' : 'unknown-word',
-        )}
-        onClick={(event) => {
-          const lookupCandidates = buildDefinitionLookupCandidates(
-            analysis.paragraphText,
-            analyzedToken.start,
-            analyzedToken.end,
-            target,
-          );
-          onOpenWordPopup(
-            capturePopupAnchorRect(event.currentTarget.getBoundingClientRect()),
-            lookupCandidates,
-            sourceParagraphIndex,
-            analysis.paragraphText,
-          );
-        }}
-      >
-        {analysis.paragraphText.slice(analyzedToken.start, analyzedToken.end)}
-      </span>,
-    );
-    cursor = analyzedToken.end;
-  }
+  const formatRunText = (text: string, run: ReaderTextRun, key: string): ReactNode => {
+    let result: ReactNode = text;
+    const runStyle = run.style as CSSProperties | undefined;
+    if (runStyle && Object.keys(runStyle).length > 0) {
+      result = <span style={runStyle}>{result}</span>;
+    }
+    const markTags: Record<ReaderInlineMark, string> = {
+      strong: 'strong',
+      emphasis: 'em',
+      underline: 'u',
+      strike: 's',
+      subscript: 'sub',
+      superscript: 'sup',
+      code: 'code',
+      mark: 'mark',
+      small: 'small',
+      big: 'big',
+    };
+    for (const mark of [...run.marks].reverse()) {
+      result = createElement(markTags[mark], { key: `${key}-${mark}` }, result);
+    }
+    if (run.href) {
+      const external = /^https?:/i.test(run.href);
+      return <a key={key} href={run.href} {...(external ? { target: '_blank', rel: 'noreferrer' } : {})}>{result}</a>;
+    }
+    return <span key={key}>{result}</span>;
+  };
 
-  if (cursor < analysis.paragraphText.length) {
-    nodes.push(analysis.paragraphText.slice(cursor));
-  }
+  let paragraphOffset = 0;
+  richContent.forEach((content, contentIndex) => {
+    if (content.type === 'image') {
+      nodes.push(
+        <img
+          key={`inline-image-${contentIndex}`}
+          src={content.src}
+          alt={content.alt}
+          title={content.title}
+          className="inline-block max-w-full align-middle"
+          style={content.style as CSSProperties | undefined}
+          loading="lazy"
+        />,
+      );
+      return;
+    }
+    const runStart = paragraphOffset;
+    const runEnd = runStart + content.text.length;
+    const run = content;
+    if (run.lineBreakBefore) nodes.push(<br key={`line-break-${contentIndex}`} />);
+    let cursor = runStart;
+    for (const analyzedToken of highlightedRanges) {
+      if (analyzedToken.end <= runStart || analyzedToken.start >= runEnd) continue;
+      const tokenStart = Math.max(runStart, analyzedToken.start);
+      const tokenEnd = Math.min(runEnd, analyzedToken.end);
+      if (tokenStart > cursor) {
+        nodes.push(formatRunText(run.text.slice(cursor - runStart, tokenStart - runStart), run, `text-${contentIndex}-${cursor}`));
+      }
+      const target = createDefinitionTarget(analyzedToken.lemma, analyzedToken.partOfSpeech);
+      const isPriority = (1 - analyzedToken.pKnown) > 0.6;
+      const highlightedText = run.text.slice(tokenStart - runStart, tokenEnd - runStart);
+      const formattedHighlight = formatRunText(highlightedText, run, `highlight-${contentIndex}-${tokenStart}`);
+      nodes.push(
+        <span
+          key={`${analyzedToken.lemma}-${analyzedToken.start}-${contentIndex}`}
+          data-word-popup-trigger="true"
+          className={cn(
+            'cursor-pointer rounded-sm px-0.5 -mx-0.5',
+            isPriority ? 'unknown-word priority' : 'unknown-word',
+          )}
+          onClick={(event) => {
+            if (event.target instanceof Element && event.target.closest('a')) return;
+            const lookupCandidates = buildDefinitionLookupCandidates(
+              analysis.paragraphText,
+              analyzedToken.start,
+              analyzedToken.end,
+              target,
+            );
+            onOpenWordPopup(
+              capturePopupAnchorRect(event.currentTarget.getBoundingClientRect()),
+              lookupCandidates,
+              sourceParagraphIndex,
+              analysis.paragraphText,
+            );
+          }}
+        >
+          {formattedHighlight}
+        </span>,
+      );
+      cursor = tokenEnd;
+    }
+    if (cursor < runEnd) {
+      nodes.push(formatRunText(run.text.slice(cursor - runStart), run, `text-${contentIndex}-${cursor}`));
+    }
+    paragraphOffset = runEnd;
+  });
+
+  const blockTag = block.blockType === 'heading'
+    ? `h${block.level ?? 2}`
+    : block.blockType === 'pre' ? 'pre'
+      : block.blockType === 'blockquote' ? 'blockquote' : 'p';
+  const blockStyle: CSSProperties = {
+    ...(block.blockType === 'heading' ? {
+      fontSize: block.level === 1 ? '1.5em' : block.level === 2 ? '1.35em' : '1.2em',
+      fontWeight: 500,
+      lineHeight: 1.25,
+      marginBlock: '1em 0.5em',
+    } : {}),
+    ...(block.blockType === 'blockquote' ? { marginBlock: '1em', marginInline: '1.5em' } : {}),
+    ...(block.blockType === 'pre' ? { whiteSpace: 'pre-wrap', overflowX: 'auto' } : {}),
+    ...(block.blockType === 'verse' ? { whiteSpace: 'pre-line' } : {}),
+    ...(block.style as CSSProperties | undefined),
+    ...(block.blockType === 'list-item' ? { display: 'list-item', listStyleType: 'none', marginInlineStart: block.style?.marginInlineStart ?? '1.5em' } : {}),
+  };
+  const blockClass = cn(
+    'text-foreground/90 reader-text cursor-pointer',
+    block.blockType === 'heading' && 'reader-imported-heading',
+    block.blockType === 'list-item' && 'reader-list-item',
+    block.blockType === 'verse' && 'reader-verse',
+    block.blockType === 'pre' && 'reader-pre',
+    block.blockType === 'blockquote' && 'reader-blockquote',
+  );
 
   return (
-    <p
-      ref={(element) => onElementChange(visibleParagraphIndex, element)}
-      className="text-foreground/90 reader-text cursor-pointer"
-      data-testid={`paragraph-${visibleParagraphIndex}`}
-      onClick={(event: ReactMouseEvent<HTMLParagraphElement>) => {
-        const clickedTrigger = event.target instanceof Element
-          ? event.target.closest('[data-word-popup-trigger="true"]')
-          : null;
-        if (clickedTrigger) {
-          return;
-        }
-        const click = resolveParagraphWordClick(
-          event.currentTarget,
-          analysis.paragraphText,
-          event.clientX,
-          event.clientY,
-        );
-        if (!click) {
-          return;
-        }
-        const analyzedToken = tokenByRange.get(`${click.start}:${click.end}`);
-        const rawWord = analysis.paragraphText.slice(click.start, click.end);
-        const target = createDefinitionTarget(
-          analyzedToken?.lemma ?? normalizeToken(rawWord),
-          analyzedToken?.partOfSpeech ?? null,
-        );
-        const lookupCandidates = buildDefinitionLookupCandidates(
-          analysis.paragraphText,
-          click.start,
-          click.end,
-          target,
-        );
-        onOpenWordPopup(click.anchorRect, lookupCandidates, sourceParagraphIndex, analysis.paragraphText);
-      }}
-    >
-      {nodes.length > 0 ? nodes : analysis.paragraphText}
-    </p>
+    <>
+      {block.anchorIds?.map((anchorId) => <span key={anchorId} id={anchorId} className="reader-anchor" />)}
+      {createElement(
+        blockTag,
+        {
+          ref: (element: HTMLElement | null) => onElementChange(visibleParagraphIndex, element),
+          className: blockClass,
+          style: blockStyle,
+          'data-testid': `paragraph-${visibleParagraphIndex}`,
+          'data-reader-list-marker': block.listMarker,
+          onClick: (event: ReactMouseEvent<HTMLElement>) => {
+            const clickedTrigger = event.target instanceof Element
+              ? event.target.closest('[data-word-popup-trigger="true"]')
+              : null;
+            if (clickedTrigger || (event.target instanceof Element && event.target.closest('a'))) {
+              return;
+            }
+            const click = resolveParagraphWordClick(
+              event.currentTarget,
+              analysis.paragraphText,
+              event.clientX,
+              event.clientY,
+            );
+            if (!click) {
+              return;
+            }
+            const analyzedToken = tokenByRange.get(`${click.start}:${click.end}`);
+            const rawWord = analysis.paragraphText.slice(click.start, click.end);
+            const target = createDefinitionTarget(
+              analyzedToken?.lemma ?? normalizeToken(rawWord),
+              analyzedToken?.partOfSpeech ?? null,
+            );
+            const lookupCandidates = buildDefinitionLookupCandidates(
+              analysis.paragraphText,
+              click.start,
+              click.end,
+              target,
+            );
+            onOpenWordPopup(click.anchorRect, lookupCandidates, sourceParagraphIndex, analysis.paragraphText);
+          },
+        },
+        nodes.length > 0 ? nodes : analysis.paragraphText,
+      )}
+    </>
   );
 });
 
@@ -616,59 +741,6 @@ function selectDeduplicatedCardTargets(
   return selected;
 }
 
-function normalizeHeadingText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function isChapterHeadingText(text: string): boolean {
-  return /^chapter\b/i.test(normalizeHeadingText(text));
-}
-
-function isGenericChapterHeading(text: string): boolean {
-  const normalized = normalizeHeadingText(text).toLowerCase();
-  return normalized === 'chapter' || normalized === 'chapter.';
-}
-
-function resolveChapterDisplayTitle(
-  chapterTitle: string | undefined,
-  chapterNumber: number,
-  firstParagraph: string | undefined,
-): string {
-  const fallbackTitle = `Chapter ${chapterNumber}`;
-  const normalizedTitle = chapterTitle ? normalizeHeadingText(chapterTitle) : '';
-  const normalizedFirstParagraph = firstParagraph ? normalizeHeadingText(firstParagraph) : '';
-
-  if (normalizedTitle.length === 0) {
-    if (normalizedFirstParagraph.length > 0 && isChapterHeadingText(normalizedFirstParagraph)) {
-      return normalizedFirstParagraph;
-    }
-    return fallbackTitle;
-  }
-
-  if (isGenericChapterHeading(normalizedTitle)) {
-    if (normalizedFirstParagraph.length > 0 && isChapterHeadingText(normalizedFirstParagraph)) {
-      return normalizedFirstParagraph;
-    }
-    return fallbackTitle;
-  }
-
-  return normalizedTitle;
-}
-
-function shouldHideFirstParagraphAsDuplicateTitle(
-  chapterDisplayTitle: string,
-  firstParagraph: string | undefined,
-): boolean {
-  if (!firstParagraph) {
-    return false;
-  }
-  const normalizedParagraph = normalizeHeadingText(firstParagraph);
-  if (!isChapterHeadingText(normalizedParagraph)) {
-    return false;
-  }
-  return normalizedParagraph.toLowerCase() === normalizeHeadingText(chapterDisplayTitle).toLowerCase();
-}
-
 export default function ReaderPage() {
   const { bookId } = useParams();
   const [, setLocation] = useLocation();
@@ -706,13 +778,13 @@ export default function ReaderPage() {
   const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
   const lastScrollActivityAtRef = useRef(Number.NEGATIVE_INFINITY);
 
-  const paraRefs = useRef<(HTMLParagraphElement | null)[]>([]);
+  const paraRefs = useRef<(HTMLElement | null)[]>([]);
   const wordPopupRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  const setParagraphElement = useCallback((visibleParagraphIndex: number, element: HTMLParagraphElement | null) => {
+  const setParagraphElement = useCallback((visibleParagraphIndex: number, element: HTMLElement | null) => {
     paraRefs.current[visibleParagraphIndex] = element;
   }, []);
-  const getParagraphElement = useCallback((visibleParagraphIndex: number): HTMLParagraphElement | null => (
+  const getParagraphElement = useCallback((visibleParagraphIndex: number): HTMLElement | null => (
     paraRefs.current[visibleParagraphIndex] ?? null
   ), []);
 
@@ -1168,18 +1240,24 @@ export default function ReaderPage() {
     }, 250);
   }, [persistCurrentChapterProgress]);
 
+  const pendingReaderAnchorRef = useRef<string | null>(null);
+
   const restoreCurrentChapterProgress = useCallback((targetBook: ImportedBook) => {
+    if (pendingReaderAnchorRef.current) {
+      document.getElementById(pendingReaderAnchorRef.current)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+      return;
+    }
     const targetScrollTop = calculateScrollTopFromProgress(targetBook.currentChapterProgress);
     window.scrollTo({ top: targetScrollTop, behavior: 'auto' });
   }, []);
 
-  const updateCurrentChapter = async (delta: number) => {
+  const updateCurrentChapter = async (delta: -1 | 1) => {
     if (!book) {
       return;
     }
     persistCurrentChapterProgress(true);
     const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
-    const nextChapter = clampChapterNumber(book, currentChapterNumber + delta);
+    const nextChapter = adjacentReadingChapter(book.chapters, currentChapterNumber, delta);
     if (nextChapter === currentChapterNumber) {
       return;
     }
@@ -1214,6 +1292,7 @@ export default function ReaderPage() {
     delayedRestoreTimeoutRef.current = window.setTimeout(() => {
       restoreCurrentChapterProgress(book);
       isRestoringProgressRef.current = false;
+      pendingReaderAnchorRef.current = null;
       delayedRestoreTimeoutRef.current = null;
     }, 900);
   }, [book, isLoading, restoreCurrentChapterProgress]);
@@ -1665,32 +1744,23 @@ export default function ReaderPage() {
   const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
   const currentChapter = book.chapters[currentChapterNumber - 1];
   const chapterParagraphs = currentChapter?.paragraphs ?? [];
-  const chapterDisplayTitle = resolveChapterDisplayTitle(
-    currentChapter?.title,
-    currentChapterNumber,
-    chapterParagraphs[0],
-  );
+  const chapterDisplayTitle = currentChapter ? chapterTitleForReader(currentChapter, currentChapterNumber) : null;
   const profileStateForRender = loadProfileState();
   const activeProfileForRender = getActiveProfile(profileStateForRender);
   const observationLabels = activeProfileForRender.observations;
-  const paragraphStartIndex = shouldHideFirstParagraphAsDuplicateTitle(chapterDisplayTitle, chapterParagraphs[0]) ? 1 : 0;
-  const visibleParagraphEntries = chapterParagraphs.slice(paragraphStartIndex).map((paragraphText, visibleIndex) => ({
-    paragraphText,
-    visibleIndex,
-    sourceIndex: visibleIndex + paragraphStartIndex,
-  }));
+  const chapterReaderBlocks = readerBlocksForChapter(chapterParagraphs, currentChapter?.readerBlocks);
   const openChapterStudy = (): void => {
     if (!currentChapter || chapterParagraphs.length === 0 || !resourcesRef.current) {
       return;
     }
     persistCurrentChapterProgress(true);
-    const visibleParagraphCount = Math.max(1, chapterParagraphs.length - paragraphStartIndex);
+    const visibleParagraphCount = Math.max(1, chapterParagraphs.length);
     const visibleAnchorIndex = resolveAnalysisAnchorIndex(
       visibleParagraphCount,
       calculateScrollProgressFromDocument(),
     );
     const sourceAnchorIndex = clampParagraphIndex(
-      visibleAnchorIndex + paragraphStartIndex,
+      visibleAnchorIndex,
       chapterParagraphs.length,
     );
     setStudyScope({
@@ -1838,29 +1908,76 @@ export default function ReaderPage() {
       >
         <div className="py-12 md:py-20" data-testid="reading-row">
           <div className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
-            <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
+            {chapterDisplayTitle && <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
               {chapterDisplayTitle}
-            </h1>
+            </h1>}
 
             <div
               className={cn(getTextFontClasses())}
               style={{ fontSize: `${settings.fontSize}px` }}
               data-testid="text-column"
+              onClickCapture={(event: ReactMouseEvent<HTMLDivElement>) => {
+                const link = event.target instanceof Element ? event.target.closest('a') : null;
+                const href = link?.getAttribute('href');
+                if (!href?.startsWith('#')) return;
+                const anchor = href.slice(1);
+                const targetChapter = readerAnchorChapter(book.chapters, anchor);
+                event.preventDefault();
+                event.stopPropagation();
+                if (targetChapter === null) {
+                  console.warn('reader-link-target-missing', { bookId: book.id, href });
+                  return;
+                }
+                if (targetChapter === currentChapterNumber) {
+                  document.getElementById(anchor)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+                  return;
+                }
+                persistCurrentChapterProgress(true);
+                pendingReaderAnchorRef.current = anchor;
+                const nextBook: ImportedBook = { ...book, currentChapter: targetChapter, currentChapterProgress: 0, updatedAt: new Date().toISOString() };
+                setBook(nextBook);
+                void upsertBook(nextBook).catch((error) => console.warn('reader-link-progress-save-failed', { bookId: book.id, targetChapter, error }));
+              }}
             >
-              {visibleParagraphEntries.map((entry) => {
-                const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardTargets: [] };
+              {chapterReaderBlocks.map((block, blockIndex) => {
+                if (block.type === 'image') {
+                  return (
+                    <figure key={`reader-image-${blockIndex}`} className="my-6 w-full">
+                      {block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}
+                      <img
+                        src={block.src}
+                        alt={block.alt}
+                        title={block.title}
+                        className="mx-auto block max-w-full"
+                        style={block.style as CSSProperties | undefined}
+                        loading="lazy"
+                      />
+                    </figure>
+                  );
+                }
+                if (block.type === 'spacer') {
+                  return <div key={`reader-spacer-${blockIndex}`} aria-hidden="true" style={{ height: '1em', ...block.style } as CSSProperties}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}</div>;
+                }
+                if (block.type === 'rule') {
+                  return <div key={`reader-rule-${blockIndex}`}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}<hr className="my-8 border-border" style={block.style as CSSProperties | undefined} /></div>;
+                }
+                const sourceIndex = block.paragraphIndex;
+                const visibleIndex = sourceIndex;
+                const paragraphText = chapterParagraphs[sourceIndex] ?? '';
+                const analysis = chapterAnalysis[sourceIndex] ?? { paragraphText, tokens: [], cardTargets: [] };
                 return (
-                <div key={entry.sourceIndex} className="mb-2" data-testid={`paragraph-block-${entry.visibleIndex}`}>
+                <div key={`paragraph-${sourceIndex}`} className="mb-2" data-testid={`paragraph-block-${visibleIndex}`}>
                   <ReaderParagraphText
                     analysis={analysis}
+                    block={block}
                     assistanceEnabled={assistanceEnabled}
-                    sourceParagraphIndex={entry.sourceIndex}
-                    visibleParagraphIndex={entry.visibleIndex}
+                    sourceParagraphIndex={sourceIndex}
+                    visibleParagraphIndex={visibleIndex}
                     onElementChange={setParagraphElement}
                     onOpenWordPopup={openRootWordPopup}
                   />
                   {assistanceEnabled && analysis.cardTargets.length > 0 && (
-                    <div className="mt-3 flex flex-wrap items-start gap-3 [&>[data-definition-card]]:w-[250px]" data-testid={`mobile-card-group-${entry.visibleIndex}`}>
+                    <div className="mt-3 flex flex-wrap items-start gap-3 [&>[data-definition-card]]:w-[250px]" data-testid={`mobile-card-group-${visibleIndex}`}>
                       {analysis.cardTargets.map((target) => {
                         const rawDefinition = definitionsByLemma.get(target.lemma)
                           ?? createFallbackLexiconEntry(target.lemma);
@@ -1875,11 +1992,11 @@ export default function ReaderPage() {
                             definition={definition}
                             context={contextForCard(analysis, target)}
                             contextParagraphs={chapterParagraphs}
-                            contextParagraphIndex={entry.sourceIndex}
+                            contextParagraphIndex={sourceIndex}
                             wsdMode={settings.wsdMode}
                             wsdPriority="card"
                             getPriorityTarget={getParagraphElement}
-                            priorityTargetIndex={entry.visibleIndex}
+                            priorityTargetIndex={visibleIndex}
                             wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
                             wsdContextUnit={settings.wsdContextUnit}
                             wsdContextSize={settings.wsdContextSize}
@@ -1887,10 +2004,10 @@ export default function ReaderPage() {
                             fontSize={settings.fontSize}
                             definitionStatus={definitionStatus}
                             onDefinitionWordClick={(click) => {
-                              openDefinitionWordPopup(null, click, entry.sourceIndex);
+                              openDefinitionWordPopup(null, click, sourceIndex);
                             }}
-                            onMarkKnown={() => markLemma(target.lemma, true, entry.sourceIndex)}
-                            onMarkUnknown={() => markLemma(target.lemma, false, entry.sourceIndex)}
+                            onMarkKnown={() => markLemma(target.lemma, true, sourceIndex)}
+                            onMarkUnknown={() => markLemma(target.lemma, false, sourceIndex)}
                             isMarkedKnown={observation === 1}
                             isMarkedUnknown={observation === 0}
                             pronunciationVariant={settings.englishVariant}

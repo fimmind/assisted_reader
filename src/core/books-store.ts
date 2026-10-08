@@ -1,5 +1,12 @@
 import { BOOKS_DB_NAME, BOOKS_DB_VERSION, BOOKS_FALLBACK_STORAGE_KEY, BOOKS_STORE_NAME } from './constants';
-import type { ImportedBook } from './types';
+import type {
+  ImportedBook,
+  ReaderContentBlock,
+  ReaderContentStyle,
+  ReaderInlineContent,
+  ReaderInlineMark,
+  ReaderParagraphBlock,
+} from './types';
 
 const DISMISSED_SEED_BOOK_KEY = 'easeword-dismissed-seed-book-v1';
 
@@ -41,6 +48,123 @@ function normalizeChapterProgress(rawValue: unknown): number {
   return rawValue;
 }
 
+const READER_STYLE_KEYS: ReadonlySet<keyof ReaderContentStyle> = new Set([
+  'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'color', 'backgroundColor', 'textDecoration',
+  'textTransform', 'textAlign', 'textIndent', 'lineHeight', 'letterSpacing', 'wordSpacing', 'whiteSpace',
+  'verticalAlign', 'direction', 'marginTop', 'marginBottom', 'margin', 'marginLeft', 'marginRight',
+  'marginInlineStart', 'marginInlineEnd', 'paddingTop', 'paddingBottom', 'paddingInlineStart', 'paddingInlineEnd',
+  'padding', 'paddingLeft', 'paddingRight', 'display', 'width', 'maxWidth', 'height', 'maxHeight',
+  'minWidth', 'objectFit', 'objectPosition', 'borderTop', 'borderBottom', 'borderColor', 'borderWidth', 'borderStyle',
+  'listStyleType', 'float', 'clear',
+]);
+
+const READER_MARKS: ReadonlySet<ReaderInlineMark> = new Set([
+  'strong', 'emphasis', 'underline', 'strike', 'subscript', 'superscript', 'code', 'mark', 'small', 'big',
+]);
+
+function normalizeReaderStyle(raw: unknown): ReaderContentStyle | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const result: ReaderContentStyle = {};
+  for (const [rawKey, rawValue] of Object.entries(raw)) {
+    if (!READER_STYLE_KEYS.has(rawKey as keyof ReaderContentStyle) || typeof rawValue !== 'string') continue;
+    if (rawValue.length > 160 || /url\s*\(|expression\s*\(|javascript\s*:|var\s*\(/i.test(rawValue)) continue;
+    result[rawKey as keyof ReaderContentStyle] = rawValue;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function normalizeReaderInlineContent(raw: unknown): ReaderInlineContent[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item): ReaderInlineContent[] => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as Record<string, unknown>;
+    if (candidate.type === 'text' && typeof candidate.text === 'string') {
+      const marks = Array.isArray(candidate.marks)
+        ? candidate.marks.filter((mark): mark is ReaderInlineMark => typeof mark === 'string' && READER_MARKS.has(mark as ReaderInlineMark))
+        : [];
+      const href = typeof candidate.href === 'string' && /^(https?:|mailto:|tel:|#)/i.test(candidate.href) && !candidate.href.startsWith('//')
+        ? candidate.href
+        : undefined;
+      const style = normalizeReaderStyle(candidate.style);
+      return [{
+        type: 'text',
+        text: candidate.text,
+        marks,
+        ...(style ? { style } : {}),
+        ...(href ? { href } : {}),
+        ...(typeof candidate.title === 'string' ? { title: candidate.title } : {}),
+        ...(candidate.lineBreakBefore === true ? { lineBreakBefore: true } : {}),
+      }];
+    }
+    if (candidate.type === 'image' && typeof candidate.src === 'string' && candidate.src.startsWith('data:image/')) {
+      const style = normalizeReaderStyle(candidate.style);
+      return [{
+        type: 'image',
+        src: candidate.src,
+        alt: typeof candidate.alt === 'string' ? candidate.alt : '',
+        ...(typeof candidate.title === 'string' ? { title: candidate.title } : {}),
+        ...(style ? { style } : {}),
+      }];
+    }
+    return [];
+  });
+}
+
+function normalizeReaderBlocks(raw: unknown, paragraphCount: number): ReaderContentBlock[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const blockTypes = new Set(['paragraph', 'heading', 'blockquote', 'list-item', 'verse', 'pre', 'caption', 'table-row']);
+  const blocks: ReaderContentBlock[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as Record<string, unknown>;
+    if (candidate.type === 'paragraph' && typeof candidate.paragraphIndex === 'number'
+      && Number.isInteger(candidate.paragraphIndex) && candidate.paragraphIndex >= 0 && candidate.paragraphIndex < paragraphCount
+      && typeof candidate.blockType === 'string' && blockTypes.has(candidate.blockType)) {
+      const content = normalizeReaderInlineContent(candidate.content);
+      const anchorIds = Array.isArray(candidate.anchorIds)
+        ? candidate.anchorIds.filter((anchor): anchor is string => typeof anchor === 'string' && anchor.length > 0)
+        : [];
+      const style = normalizeReaderStyle(candidate.style);
+      const paragraph: ReaderParagraphBlock = {
+        type: 'paragraph',
+        paragraphIndex: candidate.paragraphIndex,
+        blockType: candidate.blockType as ReaderParagraphBlock['blockType'],
+        ...(typeof candidate.level === 'number' && Number.isInteger(candidate.level) ? { level: candidate.level } : {}),
+        ...(typeof candidate.listMarker === 'string' ? { listMarker: candidate.listMarker } : {}),
+        ...(anchorIds.length ? { anchorIds } : {}),
+        ...(style ? { style } : {}),
+        content,
+      };
+      blocks.push(paragraph);
+    } else if ((candidate.type === 'image' || candidate.type === 'rule' || candidate.type === 'spacer')
+      && typeof candidate.afterParagraphIndex === 'number' && Number.isInteger(candidate.afterParagraphIndex)
+      && candidate.afterParagraphIndex >= 0 && candidate.afterParagraphIndex <= paragraphCount) {
+      const anchorIds = Array.isArray(candidate.anchorIds) ? candidate.anchorIds.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
+      if (candidate.type === 'image' && typeof candidate.src === 'string' && candidate.src.startsWith('data:image/')) {
+        const style = normalizeReaderStyle(candidate.style);
+        blocks.push({
+          type: 'image',
+          afterParagraphIndex: candidate.afterParagraphIndex,
+          ...(anchorIds.length ? { anchorIds } : {}),
+          src: candidate.src,
+          alt: typeof candidate.alt === 'string' ? candidate.alt : '',
+          ...(typeof candidate.title === 'string' ? { title: candidate.title } : {}),
+          ...(style ? { style } : {}),
+        });
+      } else if (candidate.type === 'rule' || candidate.type === 'spacer') {
+        const style = normalizeReaderStyle(candidate.style);
+        blocks.push({
+          type: candidate.type,
+          afterParagraphIndex: candidate.afterParagraphIndex,
+          ...(anchorIds.length ? { anchorIds } : {}),
+          ...(style ? { style } : {}),
+        });
+      }
+    }
+  }
+  return blocks;
+}
+
 function normalizeBook(raw: unknown): ImportedBook | null {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -54,11 +178,18 @@ function normalizeBook(raw: unknown): ImportedBook | null {
   }
 
   const normalizedChapters = candidate.chapters
-    .map((chapter) => ({
-      title: typeof chapter.title === 'string' && chapter.title.length > 0 ? chapter.title : 'Chapter',
-      paragraphs: Array.isArray(chapter.paragraphs) ? chapter.paragraphs.filter((item): item is string => typeof item === 'string') : [],
-    }))
-    .filter((chapter) => chapter.paragraphs.length > 0);
+    .map((chapter) => {
+      const paragraphs = Array.isArray(chapter.paragraphs) ? chapter.paragraphs.filter((item): item is string => typeof item === 'string') : [];
+      const readerBlocks = normalizeReaderBlocks(chapter.readerBlocks, paragraphs.length);
+      return {
+        title: typeof chapter.title === 'string' && chapter.title.length > 0 ? chapter.title : 'Chapter',
+        paragraphs,
+        ...(readerBlocks ? { readerBlocks } : {}),
+        ...(chapter.titlePresentation === 'content' || chapter.titlePresentation === 'generated' || chapter.titlePresentation === 'continuation' ? { titlePresentation: chapter.titlePresentation } : {}),
+        ...(typeof chapter.linear === 'boolean' ? { linear: chapter.linear } : {}),
+      };
+    })
+    .filter((chapter) => chapter.paragraphs.length > 0 || chapter.readerBlocks?.some((block) => block.type === 'image'));
 
   const isSeedHitchhiker = candidate.id === 'seed-hitchhiker';
   const fallbackTitle = isSeedHitchhiker ? "The Hitchhiker's Guide to the Galaxy" : 'Untitled Book';
