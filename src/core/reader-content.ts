@@ -1,4 +1,5 @@
-import type { BookChapter, ReaderContentBlock, ReaderParagraphBlock } from './types';
+import { normalizeToken } from './math';
+import type { BookChapter, ParagraphAnalysis, ReaderContentBlock, ReaderParagraphBlock } from './types';
 
 /** Navigation labels never replace authored text, styles, or anchors. */
 export function chapterTitleForReader(chapter: BookChapter, chapterNumber: number): string | null {
@@ -53,4 +54,24 @@ export function adjacentReadingChapter(chapters: BookChapter[], currentChapter: 
     if (chapters[index].linear !== false) return index + 1;
   }
   return currentChapter;
+}
+
+/** Wait until the initial viewport paragraphs are analyzed and their card lookups settle. */
+export function areInitialReaderCardsReady(
+  visibleParagraphs: number[],
+  analyzedParagraphs: ReadonlySet<number>,
+  analyses: readonly ParagraphAnalysis[],
+  availableDefinitions: ReadonlySet<string>,
+  loadingDefinitions: ReadonlySet<string>,
+  failedDefinitions: ReadonlySet<string>,
+): boolean {
+  return visibleParagraphs.every((index) => {
+    if (!analyzedParagraphs.has(index)) return false;
+    const analysis = analyses[index];
+    if (!analysis) return false;
+    return analysis.cardTargets.every((target) => {
+      const lemma = normalizeToken(target.lemma);
+      return !loadingDefinitions.has(lemma) && (availableDefinitions.has(lemma) || failedDefinitions.has(lemma));
+    });
+  });
 }

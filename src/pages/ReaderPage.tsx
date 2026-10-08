@@ -27,7 +27,7 @@ import {
   definitionTargetKey,
   lookupFirstAvailableDefinition,
 } from '@/core/definition-target';
-import { adjacentReadingChapter, chapterTitleForReader, readerAnchorChapter, readerBlocksForChapter } from '@/core/reader-content';
+import { adjacentReadingChapter, areInitialReaderCardsReady, chapterTitleForReader, readerAnchorChapter, readerBlocksForChapter } from '@/core/reader-content';
 import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
@@ -77,6 +77,20 @@ function clampChapterProgress(progress: number | undefined): number {
     return 1;
   }
   return progress;
+}
+
+function measureVisibleReaderParagraphs(
+  paragraphElements: Array<HTMLElement | null>,
+  paragraphCount: number,
+  viewportHeight: number,
+): number[] {
+  return paragraphElements.flatMap((paragraph, index) => {
+    if (!paragraph || index >= paragraphCount) return [];
+    const wrapper = paragraph.parentElement;
+    if (!wrapper) return [];
+    const bounds = wrapper.getBoundingClientRect();
+    return bounds.top < viewportHeight && bounds.bottom > 0 ? [index] : [];
+  });
 }
 
 type NlpLike = ((text: string) => {
@@ -757,6 +771,10 @@ export default function ReaderPage() {
   const [wordPopups, setWordPopups] = useState<WordPopupState[]>([]);
   const [activeAnalysisRunId, setActiveAnalysisRunId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [initialViewportReady, setInitialViewportReady] = useState(false);
+  const [initialLoadingMessage, setInitialLoadingMessage] = useState<string>('Loading reader...');
+  const [initialProgressRestored, setInitialProgressRestored] = useState(false);
+  const [initialAnalysisRevision, setInitialAnalysisRevision] = useState(0);
   const [studyOpen, setStudyOpen] = useState(false);
   const [studyScope, setStudyScope] = useState<StudyTextScope | null>(null);
   const resourcesRef = useRef<ReaderResources | null>(null);
@@ -773,6 +791,24 @@ export default function ReaderPage() {
   const delayedRestoreTimeoutRef = useRef<number | null>(null);
   const isRestoringProgressRef = useRef(false);
   const lastPersistedChapterProgressRef = useRef(0);
+  const initialReaderLoadPendingRef = useRef(false);
+  const initialViewportParagraphsRef = useRef<number[] | null>(null);
+  const completedInitialAnalysisRef = useRef<Set<number>>(new Set());
+  const publishedAnalysisParagraphsRef = useRef<Set<number>>(new Set());
+  const initialAnalysisFailedRef = useRef(false);
+  const readyInitialCardsRef = useRef<Set<string>>(new Set());
+
+  const recordInitialCardReadiness = useCallback((paragraphIndex: number, targetKey: string, ready: boolean): void => {
+    if (!initialReaderLoadPendingRef.current) return;
+    const key = `${paragraphIndex}:${targetKey}`;
+    if (readyInitialCardsRef.current.has(key) === ready) return;
+    if (ready) {
+      readyInitialCardsRef.current.add(key);
+    } else {
+      readyInitialCardsRef.current.delete(key);
+    }
+    setInitialAnalysisRevision((revision) => revision + 1);
+  }, []);
 
   const lastScrollY = useRef(0);
   const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
@@ -1084,6 +1120,20 @@ export default function ReaderPage() {
                 }
                 return updated;
               });
+              if (initialReaderLoadPendingRef.current && analysisRunIdRef.current === currentRunId) {
+                for (const publishedIndex of publishedParagraphIndices) {
+                  publishedAnalysisParagraphsRef.current.add(publishedIndex);
+                }
+                const initialViewportParagraphs = initialViewportParagraphsRef.current;
+                if (initialViewportParagraphs) {
+                  for (const publishedIndex of publishedParagraphIndices) {
+                    if (initialViewportParagraphs.includes(publishedIndex)) {
+                      completedInitialAnalysisRef.current.add(publishedIndex);
+                    }
+                  }
+                  setInitialAnalysisRevision((revision) => revision + 1);
+                }
+              }
               lastPublishedAt = now;
             }
 
@@ -1094,6 +1144,13 @@ export default function ReaderPage() {
           }
         } catch (error) {
           console.warn('reader-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
+          if (initialReaderLoadPendingRef.current && analysisRunIdRef.current === currentRunId) {
+            initialAnalysisFailedRef.current = true;
+            for (const paragraphIndex of initialViewportParagraphsRef.current ?? []) {
+              completedInitialAnalysisRef.current.add(paragraphIndex);
+            }
+            setInitialAnalysisRevision((revision) => revision + 1);
+          }
         } finally {
           setActiveAnalysisRunId((activeRunId) => activeRunId === currentRunId ? null : activeRunId);
         }
@@ -1102,6 +1159,15 @@ export default function ReaderPage() {
   }, [requestAutomaticDefinition, resolveAnalysisAnchorIndex]);
 
   const loadReaderState = useCallback(async () => {
+    initialReaderLoadPendingRef.current = true;
+    initialViewportParagraphsRef.current = null;
+    completedInitialAnalysisRef.current = new Set();
+    publishedAnalysisParagraphsRef.current = new Set();
+    initialAnalysisFailedRef.current = false;
+    readyInitialCardsRef.current = new Set();
+    setInitialViewportReady(false);
+    setInitialLoadingMessage('Loading reader...');
+    setInitialProgressRestored(false);
     setIsLoading(true);
 
     try {
@@ -1134,6 +1200,8 @@ export default function ReaderPage() {
       recomputeVisibleAnalysis(selectedBook, resources, 'reset');
     } catch (error) {
       console.error('reader-load-failed', { error, bookId });
+      initialReaderLoadPendingRef.current = false;
+      setInitialViewportReady(true);
     } finally {
       setIsLoading(false);
     }
@@ -1291,6 +1359,11 @@ export default function ReaderPage() {
     });
     delayedRestoreTimeoutRef.current = window.setTimeout(() => {
       restoreCurrentChapterProgress(book);
+      if (initialReaderLoadPendingRef.current) {
+        initialViewportParagraphsRef.current = null;
+        completedInitialAnalysisRef.current = new Set();
+        setInitialProgressRestored(true);
+      }
       isRestoringProgressRef.current = false;
       pendingReaderAnchorRef.current = null;
       delayedRestoreTimeoutRef.current = null;
@@ -1730,10 +1803,100 @@ export default function ReaderPage() {
     };
   }, [closeAllWordPopups, wordPopups.length]);
 
+  useLayoutEffect(() => {
+    if (!book || isLoading || !initialReaderLoadPendingRef.current || initialViewportParagraphsRef.current !== null) return;
+    const paragraphCount = book.chapters[clampChapterNumber(book, book.currentChapter) - 1]?.paragraphs.length ?? 0;
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const viewportParagraphs = measureVisibleReaderParagraphs(
+          paraRefs.current,
+          paragraphCount,
+          window.innerHeight,
+        );
+        if (viewportParagraphs.length === 0 && paragraphCount > 0) {
+          viewportParagraphs.push(resolveAnalysisAnchorIndex(paragraphCount, book.currentChapterProgress));
+        }
+        initialViewportParagraphsRef.current = viewportParagraphs;
+        completedInitialAnalysisRef.current = new Set(viewportParagraphs.filter((index) => initialAnalysisFailedRef.current || publishedAnalysisParagraphsRef.current.has(index)));
+        if (!assistanceEnabledRef.current || viewportParagraphs.length === 0) {
+          initialReaderLoadPendingRef.current = false;
+          setInitialViewportReady(true);
+          return;
+        }
+        setInitialAnalysisRevision((revision) => revision + 1);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [book, isLoading, initialProgressRestored, resolveAnalysisAnchorIndex]);
+
+  useEffect(() => {
+    const visibleParagraphs = initialViewportParagraphsRef.current;
+    if (!initialReaderLoadPendingRef.current || !book || isLoading || !assistanceEnabled) return;
+    if (!visibleParagraphs || visibleParagraphs.some((index) => !completedInitialAnalysisRef.current.has(index))) {
+      setInitialLoadingMessage('Choosing difficult words...');
+      return;
+    }
+    if (!areInitialReaderCardsReady(
+      visibleParagraphs,
+      completedInitialAnalysisRef.current,
+      chapterAnalysis,
+      new Set(definitionsByLemma.keys()),
+      loadingDefinitionLemmas,
+      failedDefinitionLemmas,
+    )) {
+      setInitialLoadingMessage('Fetching definitions...');
+      return;
+    }
+    const visibleCardsReady = visibleParagraphs.every((index) =>
+      chapterAnalysis[index].cardTargets.every((target) =>
+        readyInitialCardsRef.current.has(`${index}:${definitionTargetKey(target)}`)));
+    if (!visibleCardsReady) {
+      setInitialLoadingMessage(settings.wsdMode === 'none' ? 'Fetching definitions...' : 'Performing WSD...');
+      return;
+    }
+    if (!initialProgressRestored) return;
+    const viewportCheckFrame = window.requestAnimationFrame(() => {
+      initialReaderLoadPendingRef.current = false;
+      setInitialViewportReady(true);
+    });
+    return () => window.cancelAnimationFrame(viewportCheckFrame);
+  }, [
+    book,
+    isLoading,
+    assistanceEnabled,
+    chapterAnalysis,
+    initialAnalysisRevision,
+    initialProgressRestored,
+    definitionsByLemma,
+    loadingDefinitionLemmas,
+    failedDefinitionLemmas,
+    activeAnalysisRunId,
+    settings.wsdMode,
+  ]);
+
+  const readerLoading = isLoading || (book !== null && !initialViewportReady);
+  useLayoutEffect(() => {
+    if (!readerLoading) return;
+    const root = document.documentElement;
+    const previousOverflow = root.style.overflow;
+    const previousScrollbarGutter = root.style.scrollbarGutter;
+    root.style.scrollbarGutter = 'stable';
+    root.style.overflow = 'hidden';
+    return () => {
+      root.style.overflow = previousOverflow;
+      root.style.scrollbarGutter = previousScrollbarGutter;
+    };
+  }, [readerLoading]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-6">
-        Loading reader...
+        <span role="status" aria-live="polite">Loading reader...</span>
       </div>
     );
   }
@@ -1775,7 +1938,8 @@ export default function ReaderPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <>
+    <div className="min-h-screen bg-background text-foreground" style={!initialViewportReady ? { visibility: 'hidden' } : undefined}>
       {readerSettingsOpen && (
         <div
           className="fixed inset-0 z-10 bg-black/20"
@@ -1989,6 +2153,7 @@ export default function ReaderPage() {
                         return (
                           <ContextualDefinitionCard
                             key={definitionTargetKey(target)}
+                            onReadinessChange={(ready) => recordInitialCardReadiness(sourceIndex, definitionTargetKey(target), ready)}
                             definition={definition}
                             context={contextForCard(analysis, target)}
                             contextParagraphs={chapterParagraphs}
@@ -2151,5 +2316,15 @@ export default function ReaderPage() {
         />
       )}
     </div>
+    {!initialViewportReady && (
+      <div
+        className="fixed inset-0 z-[100] flex min-h-screen items-center justify-center overscroll-none bg-background p-6 text-foreground"
+        onWheel={(event) => event.preventDefault()}
+        onTouchMove={(event) => event.preventDefault()}
+      >
+        <span role="status" aria-live="polite">{initialLoadingMessage}</span>
+      </div>
+    )}
+    </>
   );
 }

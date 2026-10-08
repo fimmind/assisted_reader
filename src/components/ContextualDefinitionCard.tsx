@@ -19,6 +19,7 @@ interface ContextualDefinitionCardProps extends ComponentProps<typeof WordDefini
   priorityTargetIndex?: number;
   pendingIndicator?: ReactNode;
   onWsdSettled?: () => void;
+  onReadinessChange?: (ready: boolean) => void;
 }
 
 interface ScoredDefinition {
@@ -51,6 +52,7 @@ export function ContextualDefinitionCard({
   priorityTargetIndex,
   pendingIndicator,
   onWsdSettled,
+  onReadinessChange,
   definition,
   definitionStatus,
   ...cardProps
@@ -140,6 +142,11 @@ export function ContextualDefinitionCard({
 
   const currentError = error?.key === requestKey ? error : null;
   const waitingForWsd = hasWordNetChoices && !readyScores && !currentError && !contextError && modelPhase !== 'error';
+  const readyToRender = definitionStatus !== 'loading' && !waitingForWsd;
+  useEffect(() => {
+    onReadinessChange?.(readyToRender);
+  }, [onReadinessChange, readyToRender]);
+
   if (wsdEnabled && (definitionStatus === 'loading' || waitingForWsd)) {
     return waitingForWsd ? pendingIndicator ?? null : null;
   }

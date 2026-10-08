@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adjacentReadingChapter, chapterTitleForReader, readerBlocksForChapter } from '../src/core/reader-content.js';
-import type { BookChapter } from '../src/core/types.js';
+import { adjacentReadingChapter, areInitialReaderCardsReady, chapterTitleForReader, readerBlocksForChapter } from '../src/core/reader-content.js';
+import type { BookChapter, ParagraphAnalysis } from '../src/core/types.js';
 
 test('matching opening text is preserved instead of being deleted or replaced with a generated title', () => {
   const chapter: BookChapter = { title: '1', paragraphs: ['1', 'Opening prose.'] };
@@ -21,4 +21,18 @@ test('supplementary chapters remain accessible without entering the normal readi
   assert.equal(adjacentReadingChapter(chapters, 1, 1), 2);
   assert.equal(adjacentReadingChapter(chapters, 2, 1), 2);
   assert.equal(adjacentReadingChapter(chapters, 3, -1), 2);
+});
+
+test('initial reader gate waits for visible analysis and definition requests to settle', () => {
+  const analyses: ParagraphAnalysis[] = [
+    { paragraphText: 'A visible paragraph.', tokens: [], cardTargets: [{ lemma: 'visible', partOfSpeech: 'noun' as const }] },
+    { paragraphText: 'Below the fold.', tokens: [], cardTargets: [{ lemma: 'later', partOfSpeech: 'noun' as const }] },
+  ];
+  assert.equal(areInitialReaderCardsReady([0], new Set(), analyses, new Set(['visible']), new Set(), new Set()), false);
+  assert.equal(areInitialReaderCardsReady([0], new Set([0]), analyses, new Set(), new Set(), new Set()), false);
+  assert.equal(areInitialReaderCardsReady([0], new Set([0]), analyses, new Set(['visible']), new Set(), new Set()), true);
+  assert.equal(areInitialReaderCardsReady([0], new Set([0]), analyses, new Set(['visible']), new Set(['visible']), new Set()), false);
+  assert.equal(areInitialReaderCardsReady([0], new Set([0]), analyses, new Set(), new Set(), new Set(['visible'])), true);
+  assert.equal(areInitialReaderCardsReady([0, 1], new Set([0]), analyses, new Set(['visible', 'later']), new Set(), new Set()), false);
+  assert.equal(areInitialReaderCardsReady([0], new Set([0]), [analyses[0]], new Set(), new Set(), new Set()), false);
 });
