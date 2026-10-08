@@ -798,6 +798,31 @@ export default function ReaderPage() {
   const initialAnalysisFailedRef = useRef(false);
   const readyInitialCardsRef = useRef<Set<string>>(new Set());
 
+  const beginReaderLoading = useCallback((): void => {
+    analysisRunIdRef.current += 1;
+    clearDeferredHandle(deferredAnalysisHandleRef.current);
+    deferredAnalysisHandleRef.current = null;
+    if (delayedRestoreTimeoutRef.current !== null) {
+      window.clearTimeout(delayedRestoreTimeoutRef.current);
+      delayedRestoreTimeoutRef.current = null;
+    }
+    initialReaderLoadPendingRef.current = true;
+    initialViewportParagraphsRef.current = null;
+    completedInitialAnalysisRef.current = new Set();
+    publishedAnalysisParagraphsRef.current = new Set();
+    initialAnalysisFailedRef.current = false;
+    readyInitialCardsRef.current = new Set();
+    setInitialViewportReady(false);
+    setInitialLoadingMessage('Loading reader...');
+    setInitialProgressRestored(false);
+  }, []);
+
+  const openReaderChapter = useCallback((nextBook: ImportedBook): void => {
+    beginReaderLoading();
+    setChapterAnalysis(buildPlainChapterAnalysis(nextBook));
+    setBook(nextBook);
+  }, [beginReaderLoading]);
+
   const recordInitialCardReadiness = useCallback((paragraphIndex: number, targetKey: string, ready: boolean): void => {
     if (!initialReaderLoadPendingRef.current) return;
     const key = `${paragraphIndex}:${targetKey}`;
@@ -1159,15 +1184,7 @@ export default function ReaderPage() {
   }, [requestAutomaticDefinition, resolveAnalysisAnchorIndex]);
 
   const loadReaderState = useCallback(async () => {
-    initialReaderLoadPendingRef.current = true;
-    initialViewportParagraphsRef.current = null;
-    completedInitialAnalysisRef.current = new Set();
-    publishedAnalysisParagraphsRef.current = new Set();
-    initialAnalysisFailedRef.current = false;
-    readyInitialCardsRef.current = new Set();
-    setInitialViewportReady(false);
-    setInitialLoadingMessage('Loading reader...');
-    setInitialProgressRestored(false);
+    beginReaderLoading();
     setIsLoading(true);
 
     try {
@@ -1205,7 +1222,7 @@ export default function ReaderPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [bookId, recomputeVisibleAnalysis]);
+  }, [beginReaderLoading, bookId, recomputeVisibleAnalysis]);
 
   useEffect(() => {
     bookRef.current = book;
@@ -1336,7 +1353,7 @@ export default function ReaderPage() {
       currentChapterProgress: 0,
       updatedAt: new Date().toISOString(),
     };
-    setBook(nextBook);
+    openReaderChapter(nextBook);
     window.scrollTo({ top: 0, behavior: 'auto' });
     void upsertBook(nextBook).catch((error) => {
       console.warn('reader-chapter-progress-save-failed', { bookId: nextBook.id, chapter: nextBook.currentChapter, error });
@@ -2099,7 +2116,7 @@ export default function ReaderPage() {
                 persistCurrentChapterProgress(true);
                 pendingReaderAnchorRef.current = anchor;
                 const nextBook: ImportedBook = { ...book, currentChapter: targetChapter, currentChapterProgress: 0, updatedAt: new Date().toISOString() };
-                setBook(nextBook);
+                openReaderChapter(nextBook);
                 void upsertBook(nextBook).catch((error) => console.warn('reader-link-progress-save-failed', { bookId: book.id, targetChapter, error }));
               }}
             >
