@@ -11,11 +11,12 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
 import { ContextualDefinitionCard } from '@/components/ContextualDefinitionCard';
+import type { ScoredDefinition } from '@/components/ContextualDefinitionCard';
 import { StudyFlow } from '@/components/StudyFlow';
 import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
-import { marginForReductionLevel } from '@/core/wsd-filter';
+import { marginForReductionLevel, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
-import { startWsdModel, stopWsdModel } from '@/core/wsd-runtime';
+import { scoreWordSenses, startWsdModel, stopWsdModel, waitForWsdModelReady } from '@/core/wsd-runtime';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
 import { WORD_RE } from '@/core/constants';
@@ -39,6 +40,7 @@ import type { DefinitionLookupCandidate } from '@/core/definition-target';
 import type { ChapterAnalyzer, LexicalAnalysisCache } from '@/core/reader-analysis';
 import type { StudyTextScope } from '@/core/study';
 import type {
+  BookChapter,
   DefinitionTarget,
   ImportedBook,
   LexiconEntry,
@@ -108,6 +110,19 @@ interface ReaderResources {
   lexicon: LazyLexicon;
   nlp: NlpLike;
   lexicalAnalysisCache: LexicalAnalysisCache;
+}
+
+interface PreparedChapterOpening {
+  bookId: string;
+  chapter: BookChapter;
+  settingsKey: string;
+  profileKey: string;
+  analyses: Map<number, ParagraphAnalysis>;
+  scores: Map<string, ScoredDefinition>;
+  readyCards: Set<string>;
+  analysisComplete: boolean;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 interface WordPopupState {
@@ -196,6 +211,9 @@ function ReaderActivityIndicator({ ariaLabel, testId }: ReaderActivityIndicatorP
   );
 }
 
+const MAX_PRELOAD_PARAGRAPHS = 32;
+const MAX_PRELOAD_CARDS = 64;
+const MAX_PRELOAD_CHARACTERS = 12000;
 const ANALYSIS_TIME_SLICE_MS = 8;
 const ANALYSIS_PUBLISH_INTERVAL_MS = 1000;
 const ANALYSIS_SCROLL_SETTLE_MS = 150;
@@ -755,6 +773,26 @@ function selectDeduplicatedCardTargets(
   return selected;
 }
 
+function deduplicateParagraphCardTargets(
+  analysis: ParagraphAnalysis,
+  paragraphIndex: number,
+  previousAnalyses: ReadonlyMap<number, ParagraphAnalysis>,
+  settings: ReaderSettings,
+): DefinitionTarget[] {
+  const radius = resolveDeduplicationRadius(settings.deduplicationRadius);
+  const suppressedTargetKeys = new Set<string>();
+  for (const [seenIndex, nearbyAnalysis] of previousAnalyses) {
+    if (radius === 0 || Math.abs(seenIndex - paragraphIndex) > radius) continue;
+    for (const target of nearbyAnalysis.cardTargets) suppressedTargetKeys.add(definitionTargetKey(target));
+  }
+  return selectDeduplicatedCardTargets(
+    analysis.tokens,
+    Math.max(1, Math.min(5, settings.maxWordsPerParagraph)),
+    resolveKnowledgeThreshold(settings.knowledgeThreshold),
+    suppressedTargetKeys,
+  );
+}
+
 export default function ReaderPage() {
   const { bookId } = useParams();
   const [, setLocation] = useLocation();
@@ -797,8 +835,14 @@ export default function ReaderPage() {
   const publishedAnalysisParagraphsRef = useRef<Set<number>>(new Set());
   const initialAnalysisFailedRef = useRef(false);
   const readyInitialCardsRef = useRef<Set<string>>(new Set());
+  const preparedChapterOpeningRef = useRef<PreparedChapterOpening | null>(null);
+  const activePreparedOpeningRef = useRef<PreparedChapterOpening | null>(null);
+  const instantChapterTransitionRef = useRef<PreparedChapterOpening | null>(null);
+  const nextChapterPreloadControllerRef = useRef<AbortController | null>(null);
+  const [nextChapterPreloadRevision, setNextChapterPreloadRevision] = useState(0);
 
   const beginReaderLoading = useCallback((): void => {
+    nextChapterPreloadControllerRef.current?.abort();
     analysisRunIdRef.current += 1;
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
@@ -818,8 +862,28 @@ export default function ReaderPage() {
   }, []);
 
   const openReaderChapter = useCallback((nextBook: ImportedBook): void => {
+    const prepared = preparedChapterOpeningRef.current;
+    const profile = getActiveProfile(loadProfileState());
+    const chapter = nextBook.chapters[clampChapterNumber(nextBook, nextBook.currentChapter) - 1];
+    const readyOpening = prepared?.bookId === nextBook.id && prepared.chapter === chapter
+      && prepared.settingsKey === JSON.stringify(settingsRef.current)
+      && prepared.profileKey === JSON.stringify(profile)
+      && prepared.viewportWidth === window.innerWidth && prepared.viewportHeight === window.innerHeight
+      && (prepared.analysisComplete || prepared.analyses.size > 0)
+      && nextBook.currentChapterProgress === 0 && !pendingReaderAnchorRef.current
+      ? prepared : null;
     beginReaderLoading();
-    setChapterAnalysis(buildPlainChapterAnalysis(nextBook));
+    const analyses = buildPlainChapterAnalysis(nextBook);
+    activePreparedOpeningRef.current = readyOpening;
+    instantChapterTransitionRef.current = readyOpening;
+    if (readyOpening) {
+      for (const [index, analysis] of readyOpening.analyses) analyses[index] = analysis;
+      setDefinitionsByLemma(new Map(definitionsByLemmaRef.current));
+      initialReaderLoadPendingRef.current = false;
+      setInitialViewportReady(true);
+      setInitialProgressRestored(true);
+    }
+    setChapterAnalysis(analyses);
     setBook(nextBook);
   }, [beginReaderLoading]);
 
@@ -982,7 +1046,25 @@ export default function ReaderPage() {
       && chapterAnalysisRef.current.length === expectedParagraphCount
       && chapterAnalysisRef.current.every((analysis, index) => analysis.paragraphText === (plainAnalyses[index]?.paragraphText ?? ''))
     );
+    const prepared = preparedChapterOpeningRef.current;
+    const chapter = selectedBook.chapters[clampChapterNumber(selectedBook, selectedBook.currentChapter) - 1];
+    const preparedAnalyses = selectedBook.currentChapterProgress === 0
+      && (anchorParagraphIndex === undefined || anchorParagraphIndex === 0)
+      && prepared?.bookId === selectedBook.id && prepared.chapter === chapter
+      && prepared.settingsKey === JSON.stringify(settingsRef.current)
+      && prepared.profileKey === JSON.stringify(activeProfile)
+      ? prepared.analyses : new Map<number, ParagraphAnalysis>();
     const initialAnalyses = canPreserveExisting ? chapterAnalysisRef.current.slice() : plainAnalyses;
+    if (!canPreserveExisting) {
+      for (const [index, analysis] of preparedAnalyses) initialAnalyses[index] = analysis;
+      if (initialReaderLoadPendingRef.current) {
+        for (const index of preparedAnalyses.keys()) publishedAnalysisParagraphsRef.current.add(index);
+        for (const index of initialViewportParagraphsRef.current ?? []) {
+          if (preparedAnalyses.has(index)) completedInitialAnalysisRef.current.add(index);
+        }
+        setInitialAnalysisRevision((revision) => revision + 1);
+      }
+    }
     if (mode === 'reset' || !canPreserveExisting) {
       setChapterAnalysis(initialAnalyses);
     }
@@ -1007,10 +1089,7 @@ export default function ReaderPage() {
             return;
           }
           const nextAnalyses = initialAnalyses.slice();
-          const processedParagraphIndices = new Set<number>();
-          const deduplicationRadius = resolveDeduplicationRadius(settingsRef.current.deduplicationRadius);
-          const threshold = resolveKnowledgeThreshold(settingsRef.current.knowledgeThreshold);
-          const maxCardsPerParagraph = Math.max(1, Math.min(5, settingsRef.current.maxWordsPerParagraph));
+          const processedAnalyses = new Map(preparedAnalyses);
           const analyzeParagraph = createCachedChapterAnalyzer({
             settings: settingsRef.current,
             model: resources.model,
@@ -1026,7 +1105,7 @@ export default function ReaderPage() {
               expectedParagraphCount,
               selectedBook.currentChapterProgress,
             );
-          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, resolvedAnchorIndex);
+          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, resolvedAnchorIndex).filter((index) => !preparedAnalyses.has(index));
           let pendingParagraphIndices: number[] = [];
           let timeSliceStartedAt = performance.now();
           let lastPublishedAt = timeSliceStartedAt;
@@ -1062,23 +1141,8 @@ export default function ReaderPage() {
                 paragraphIndex,
                 analyzeParagraph,
               );
-              const suppressedTargetKeys = new Set<string>();
-              if (deduplicationRadius > 0) {
-                for (const seenIndex of processedParagraphIndices) {
-                  if (Math.abs(seenIndex - paragraphIndex) > deduplicationRadius) {
-                    continue;
-                  }
-                  const nearbyAnalysis = nextAnalyses[seenIndex];
-                  for (const target of nearbyAnalysis.cardTargets) {
-                    suppressedTargetKeys.add(definitionTargetKey(target));
-                  }
-                }
-              }
-              const deduplicatedCardTargets = selectDeduplicatedCardTargets(
-                analysis.tokens,
-                maxCardsPerParagraph,
-                threshold,
-                suppressedTargetKeys,
+              const deduplicatedCardTargets = deduplicateParagraphCardTargets(
+                analysis, paragraphIndex, processedAnalyses, settingsRef.current,
               );
               const nextAnalysis: ParagraphAnalysis = {
                 ...analysis,
@@ -1089,7 +1153,7 @@ export default function ReaderPage() {
               for (const target of nextAnalysis.cardTargets) {
                 requestAutomaticDefinition(resources, target);
               }
-              processedParagraphIndices.add(paragraphIndex);
+              processedAnalyses.set(paragraphIndex, nextAnalysis);
             } catch (error) {
               console.warn('reader-paragraph-analysis-failed', {
                 error,
@@ -1185,6 +1249,9 @@ export default function ReaderPage() {
 
   const loadReaderState = useCallback(async () => {
     beginReaderLoading();
+    preparedChapterOpeningRef.current = null;
+    activePreparedOpeningRef.current = null;
+    instantChapterTransitionRef.current = null;
     setIsLoading(true);
 
     try {
@@ -1246,6 +1313,7 @@ export default function ReaderPage() {
     } else {
       stopWsdModel();
     }
+    return () => stopWsdModel();
   }, [settings.wsdMode]);
 
   useEffect(() => {
@@ -1263,6 +1331,8 @@ export default function ReaderPage() {
   useEffect(() => {
     void loadReaderState();
     const unsubscribe = listenStateUpdated(() => {
+      nextChapterPreloadControllerRef.current?.abort();
+      setNextChapterPreloadRevision((revision) => revision + 1);
       const resources = resourcesRef.current;
       const currentBook = bookRef.current;
       if (!currentBook || !resources) {
@@ -1280,6 +1350,94 @@ export default function ReaderPage() {
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
   }, []);
+
+  useEffect(() => {
+    const resources = resourcesRef.current;
+    if (!book || !resources || !initialViewportReady || !assistanceEnabled) return;
+    const chapterNumber = clampChapterNumber(book, book.currentChapter);
+    const nextChapterNumber = adjacentReadingChapter(book.chapters, chapterNumber, 1);
+    if (nextChapterNumber === chapterNumber) return;
+    const nextBook: ImportedBook = { ...book, currentChapter: nextChapterNumber, currentChapterProgress: 0 };
+    const chapter = book.chapters[nextChapterNumber - 1];
+    const profile = getActiveProfile(loadProfileState());
+    const prepared: PreparedChapterOpening = {
+      bookId: book.id, chapter, settingsKey: JSON.stringify(settings),
+      profileKey: JSON.stringify(profile), analyses: new Map(), scores: new Map(), readyCards: new Set(),
+      analysisComplete: false, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+    };
+    preparedChapterOpeningRef.current = prepared;
+    const controller = new AbortController();
+    nextChapterPreloadControllerRef.current = controller;
+    const width = document.querySelector('[data-testid="text-column"]')?.getBoundingClientRect().width ?? window.innerWidth;
+    // Cards, images and headings consume space too; two text viewports provide opening overscan.
+    const charactersPerLine = Math.max(1, width / (settings.fontSize * 0.45));
+    const characterBudget = Math.min(MAX_PRELOAD_CHARACTERS, Math.ceil(2 * charactersPerLine
+      * Math.max(1, window.innerHeight / (settings.fontSize * 1.4))));
+    const preloadCard = async (analysis: ParagraphAnalysis, index: number, target: DefinitionTarget): Promise<void> => {
+      requestAutomaticDefinition(resources, target);
+      await automaticDefinitionRequestsRef.current.get(normalizeToken(target.lemma));
+      if (controller.signal.aborted) return;
+      const key = `${index}:${definitionTargetKey(target)}`;
+      const rawDefinition = definitionsByLemmaRef.current.get(normalizeToken(target.lemma));
+      if (!rawDefinition) return; // The dictionary request reports failures through the reader's existing error state.
+      const definition = resolveLexiconEntry(rawDefinition, target);
+      if (settings.wsdMode === 'none' || wordNetGlosses(definition).length <= 1) {
+        prepared.readyCards.add(key);
+        return;
+      }
+      const context = contextForCard(analysis, target);
+      if (!context) throw new Error(`Missing next-chapter WSD context: chapter=${nextChapterNumber} paragraph=${index} lemma=${target.lemma}`);
+      const scoringContext = settings.wsdContextUnit === 'sentence'
+        ? sentenceWindowForWsd(chapter.paragraphs, index, context, settings.wsdContextSize)
+        : paragraphWindowForWsd(chapter.paragraphs, index, context, settings.wsdContextSize);
+      await waitForWsdModelReady(settings.wsdMode, controller.signal);
+      const scores = await scoreWordSenses(settings.wsdMode, scoringContext, definition, 'preload', controller.signal);
+      if (controller.signal.aborted) return;
+      prepared.scores.set(key, { key: JSON.stringify([settings.wsdMode, scoringContext, definition.word, wordNetGlosses(definition)]), scores });
+      prepared.readyCards.add(key);
+    };
+    const handleFailure = (error: unknown): void => {
+      if (controller.signal.aborted) return;
+      console.error('next-chapter-preload-failed', { bookId: book.id, chapter: nextChapterNumber, error });
+    };
+    const refreshViewportPreload = (): void => {
+      controller.abort();
+      setNextChapterPreloadRevision((revision) => revision + 1);
+    };
+    window.addEventListener('resize', refreshViewportPreload);
+    const handle = scheduleDeferredTask(() => {
+      void (async () => {
+        const analyzeParagraph = createCachedChapterAnalyzer({
+          settings, model: resources.model, profile, lemmaDict: resources.lemmaDict, nlp: resources.nlp,
+          maxCardsPerParagraph: 1, includeCards: false,
+        }, resources.lexicalAnalysisCache);
+        let characters = 0;
+        let cardCount = 0;
+        const paragraphLimit = Math.min(MAX_PRELOAD_PARAGRAPHS, chapter.paragraphs.length);
+        for (let index = 0; index < paragraphLimit && characters < characterBudget; index += 1) {
+          if (characters + chapter.paragraphs[index].length > MAX_PRELOAD_CHARACTERS) break;
+          await yieldForAnalysisContinuation();
+          await waitForReaderScrollToSettle();
+          if (controller.signal.aborted) return;
+          const analysis = buildParagraphAnalysisAtIndex(nextBook, index, analyzeParagraph);
+          const selected: ParagraphAnalysis = {
+            ...analysis, cardTargets: deduplicateParagraphCardTargets(analysis, index, prepared.analyses, settings),
+          };
+          if (cardCount + selected.cardTargets.length > MAX_PRELOAD_CARDS) break;
+          prepared.analyses.set(index, selected);
+          cardCount += selected.cardTargets.length;
+          characters += Math.max(charactersPerLine, analysis.paragraphText.length);
+          for (const target of selected.cardTargets) void preloadCard(selected, index, target).catch(handleFailure);
+        }
+        prepared.analysisComplete = true;
+      })().catch(handleFailure);
+    }, 1000);
+    return () => {
+      clearDeferredHandle(handle);
+      controller.abort();
+      window.removeEventListener('resize', refreshViewportPreload);
+    };
+  }, [book, settings, initialViewportReady, assistanceEnabled, nextChapterPreloadRevision, requestAutomaticDefinition, waitForReaderScrollToSettle]);
 
   const markLemma = (lemma: string, known: boolean, sourceParagraphIndex?: number) => {
     if (typeof sourceParagraphIndex === 'number' && Number.isFinite(sourceParagraphIndex)) {
@@ -1371,7 +1529,15 @@ export default function ReaderPage() {
       delayedRestoreTimeoutRef.current = null;
     }
 
-    requestAnimationFrame(() => {
+    if (book.currentChapterProgress === 0 && !pendingReaderAnchorRef.current) {
+      const restoreFrame = requestAnimationFrame(() => {
+        restoreCurrentChapterProgress(book);
+        if (initialReaderLoadPendingRef.current) setInitialProgressRestored(true);
+        isRestoringProgressRef.current = false;
+      });
+      return () => window.cancelAnimationFrame(restoreFrame);
+    }
+    const restoreFrame = requestAnimationFrame(() => {
       restoreCurrentChapterProgress(book);
     });
     delayedRestoreTimeoutRef.current = window.setTimeout(() => {
@@ -1385,6 +1551,13 @@ export default function ReaderPage() {
       pendingReaderAnchorRef.current = null;
       delayedRestoreTimeoutRef.current = null;
     }, 900);
+    return () => {
+      window.cancelAnimationFrame(restoreFrame);
+      if (delayedRestoreTimeoutRef.current !== null) {
+        window.clearTimeout(delayedRestoreTimeoutRef.current);
+        delayedRestoreTimeoutRef.current = null;
+      }
+    };
   }, [book, isLoading, restoreCurrentChapterProgress]);
 
   useEffect(() => {
@@ -1821,6 +1994,20 @@ export default function ReaderPage() {
   }, [closeAllWordPopups, wordPopups.length]);
 
   useLayoutEffect(() => {
+    const opening = instantChapterTransitionRef.current;
+    if (!book || !opening) return;
+    instantChapterTransitionRef.current = null;
+    const chapter = book.chapters[clampChapterNumber(book, book.currentChapter) - 1];
+    const visibleParagraphs = measureVisibleReaderParagraphs(paraRefs.current, chapter.paragraphs.length, window.innerHeight);
+    const visibleCardsReady = visibleParagraphs.every((index) => {
+      const analysis = opening.analyses.get(index);
+      return analysis !== undefined && analysis.cardTargets.every((target) =>
+        opening.readyCards.has(`${index}:${definitionTargetKey(target)}`));
+    });
+    if (!visibleCardsReady) beginReaderLoading();
+  }, [book, beginReaderLoading]);
+
+  useLayoutEffect(() => {
     if (!book || isLoading || !initialReaderLoadPendingRef.current || initialViewportParagraphsRef.current !== null) return;
     const paragraphCount = book.chapters[clampChapterNumber(book, book.currentChapter) - 1]?.paragraphs.length ?? 0;
     let firstFrame = 0;
@@ -2170,6 +2357,9 @@ export default function ReaderPage() {
                         return (
                           <ContextualDefinitionCard
                             key={definitionTargetKey(target)}
+                            preparedScores={activePreparedOpeningRef.current?.chapter === currentChapter
+                              ? activePreparedOpeningRef.current.scores.get(`${sourceIndex}:${definitionTargetKey(target)}`)
+                              : undefined}
                             onReadinessChange={(ready) => recordInitialCardReadiness(sourceIndex, definitionTargetKey(target), ready)}
                             definition={definition}
                             context={contextForCard(analysis, target)}
