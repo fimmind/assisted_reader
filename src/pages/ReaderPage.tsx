@@ -884,6 +884,7 @@ export default function ReaderPage() {
       setInitialProgressRestored(true);
     }
     setChapterAnalysis(analyses);
+    if (nextBook.currentChapterProgress === 0) setHeaderVisible(true);
     setBook(nextBook);
   }, [beginReaderLoading]);
 
@@ -1609,6 +1610,7 @@ export default function ReaderPage() {
       const y = window.scrollY;
       const previousY = lastScrollY.current;
       lastScrollY.current = y;
+      if (y <= 1) setHeaderVisible(true);
       if (isRestoringProgressRef.current) {
         return;
       }
