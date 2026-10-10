@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import { JSDOM } from 'jsdom';
 import { importBookFromFile } from '../src/core/book-parser.js';
+import { getBookById, upsertBook } from '../src/core/books-store.js';
 
 const dom = new JSDOM('');
 globalThis.DOMParser = dom.window.DOMParser;
@@ -54,7 +55,7 @@ test('EPUB missing chapters fail instead of silently importing an incomplete boo
 
 test('EPUB rejects unreadable and invalid archives with an actionable error', async () => {
   await assert.rejects(importBookFromFile(await book({ encrypted: true })), /DRM-protected EPUB/);
-  await assert.rejects(importBookFromFile(await book({ empty: true })), /No readable text could be extracted/);
+  await assert.rejects(importBookFromFile(await book({ empty: true })), /No readable text or supported images could be extracted/);
   await assert.rejects(importBookFromFile(new File(['not a zip'], 'broken.epub')), /Could not import EPUB/);
   const zip = new JSZip().file('META-INF/container.xml', '<broken');
   await assert.rejects(importBookFromFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'bad-xml.epub')), /Invalid EPUB XML/);
@@ -156,14 +157,99 @@ test('EPUB prefers EPUB 3 navigation, but tries NCX when it cannot resolve that 
   assert.equal((await importBookFromFile(await navigationBook(bad, ncx))).chapters[0].title, 'NCX chapter');
 });
 
-test('EPUB missing, malformed, empty, external, partial or unordered TOCs fall back to one complete chapter', async () => {
+test('EPUB missing, malformed or wholly unusable TOCs fall back to one complete chapter', async () => {
   for (const nav of [undefined, '<broken', navDocument(''),
     navDocument('<li><a href="https://example.com/book">External</a></li>'),
-    navDocument('<li><a href="../Text/a.xhtml">Good</a></li><li><a href="../Text/missing.xhtml">Missing</a></li>'),
     navDocument('<li><a href="../Text/a.xhtml#absent">Missing anchor</a></li>'),
-    navDocument('<li><a href="../Text/c.xhtml">Last</a></li><li><a href="../Text/a.xhtml">First</a></li>'),
   ]) {
     const imported = await importBookFromFile(await navigationBook(nav));
     assert.deepEqual(imported.chapters, [{ title: 'Chapter 1', paragraphs: allParagraphs }]);
+  }
+});
+
+test('EPUB keeps readable TOC entries when other links are broken or out of order', async () => {
+  const nav = navDocument('<li><a href="../Text/a.xhtml#one">One</a></li>'
+    + '<li><a>Missing href</a></li>'
+    + '<li><a href="../Text/missing.xhtml">Missing</a></li>'
+    + '<li><a href="../Text/c.xhtml">Last</a></li>'
+    + '<li><a href="../Text/b.xhtml">Backwards</a></li>');
+  const imported = await importBookFromFile(await navigationBook(nav));
+  assert.deepEqual(imported.chapters, [
+    { title: 'Front matter', paragraphs: ['Opening.'] },
+    { title: 'One', paragraphs: allParagraphs.slice(1, 6) },
+    { title: 'Last', paragraphs: ['Last page.'] },
+  ]);
+});
+
+test('EPUB prefers a complete NCX to a partially broken EPUB 3 TOC', async () => {
+  const nav = navDocument('<li><a href="../Text/a.xhtml">Nav chapter</a></li>'
+    + '<li><a href="../Text/missing.xhtml">Missing</a></li>');
+  const ncx = ncxDocument(point('NCX chapter', '../Text/a.xhtml'));
+  const imported = await importBookFromFile(await navigationBook(nav, ncx));
+  assert.equal(imported.chapters[0].title, 'NCX chapter');
+});
+
+test('EPUB inline TOC anchors do not split a paragraph', async () => {
+  const zip = await JSZip.loadAsync(await (await navigationBook(
+    navDocument('<li><a href="../Text/a.xhtml#inside">Inside</a></li>'),
+  )).arrayBuffer());
+  zip.file('OPS/Text/a.xhtml', '<html><body><p>Before <span id="inside">middle</span> after.</p><p>Next.</p></body></html>');
+  const imported = await importBookFromFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'inline.epub'));
+  assert.deepEqual(imported.chapters, [
+    { title: 'Inside', paragraphs: ['Before middle after.', 'Next.', 'Second page.', 'Next chapter.', 'More text.', 'Last page.'] },
+  ]);
+});
+
+test('EPUB imports images in reading order and keeps them with TOC chapters', async () => {
+  const nav = navDocument('<li><a href="../Text/a.xhtml#one">One</a></li><li><a href="../Text/b.xhtml#two%20words">Two</a></li>');
+  const zip = await JSZip.loadAsync(await (await navigationBook(nav)).arrayBuffer());
+  const opf = zip.file('OPS/book.opf')!;
+  zip.file('OPS/book.opf', (await opf.async('string')).replace('<manifest>',
+    '<manifest><item id="picture" href="Images/pic.png" media-type="image/png"/>'));
+  zip.file('OPS/Images/pic.png', Uint8Array.from([1, 2, 3]));
+  zip.file('OPS/Text/a.xhtml', '<html><body><p>Opening.</p><h1 id="one">First heading</h1>'
+    + '<p>Before <img src="../Images/pic.png" alt="First"/> after.</p><p>First page.</p></body></html>');
+  zip.file('OPS/Text/b.xhtml', '<html><body><p>Second page.</p><p id="two words">Next chapter.</p>'
+    + '<img src="../Images/pic.png" alt="Again"/><p>More text.</p></body></html>');
+  const imported = await importBookFromFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'images.epub'));
+  const src = 'data:image/png;base64,AQID';
+  assert.deepEqual(imported.chapters, [
+    { title: 'Front matter', paragraphs: ['Opening.'] },
+    { title: 'One', paragraphs: ['First heading', 'Before', 'after.', 'First page.', 'Second page.'],
+      images: [{ beforeParagraph: 2, src, alt: 'First' }] },
+    { title: 'Two', paragraphs: ['Next chapter.', 'More text.', 'Last page.'],
+      images: [{ beforeParagraph: 1, src, alt: 'Again' }] },
+  ]);
+});
+
+test('EPUB accepts an image-only spine chapter', async () => {
+  const nav = navDocument('<li><a href="../Text/a.xhtml">Cover</a></li><li><a href="../Text/b.xhtml">Text</a></li>');
+  const zip = await JSZip.loadAsync(await (await navigationBook(nav)).arrayBuffer());
+  const opf = zip.file('OPS/book.opf')!;
+  zip.file('OPS/book.opf', (await opf.async('string')).replace('<manifest>',
+    '<manifest><item id="cover-image" href="Images/cover.png" media-type="image/png"/>'));
+  zip.file('OPS/Images/cover.png', Uint8Array.from([1, 2, 3]));
+  zip.file('OPS/Text/a.xhtml', '<html><body><img src="../Images/cover.png" alt="Cover"/></body></html>');
+  const imported = await importBookFromFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'cover.epub'));
+  assert.deepEqual(imported.chapters[0], { title: 'Cover', paragraphs: [],
+    images: [{ beforeParagraph: 0, src: 'data:image/png;base64,AQID', alt: 'Cover' }] });
+  assert.equal(imported.chapters[1].title, 'Text');
+});
+
+test('EPUB images survive book storage normalization', async () => {
+  const browser = new JSDOM('', { url: 'https://reader.test/' });
+  const previousWindow = globalThis.window;
+  const previousStorage = globalThis.localStorage;
+  globalThis.window = browser.window as unknown as Window & typeof globalThis;
+  globalThis.localStorage = browser.window.localStorage;
+  try {
+    const imported = await importBookFromFile(await book());
+    imported.chapters[0].images = [{ beforeParagraph: 1, src: 'data:image/png;base64,AQID', alt: 'Picture' }];
+    await upsertBook(imported);
+    assert.deepEqual((await getBookById(imported.id))?.chapters[0].images, imported.chapters[0].images);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.localStorage = previousStorage;
+    browser.window.close();
   }
 });

@@ -119,7 +119,15 @@ one `Chapter 1`, without guessing chapter boundaries from files or headings.
 Missing actual spine content still fails import instead of losing book text.
 Existing EPUBs must be re-imported to use the new grouping.
 Package title and creators populate book metadata, falling back to the filename
-and Unknown Author. Only ordinary book text and metadata are persisted.
+and Unknown Author. EPUB spine content also retains JPEG, PNG, GIF and WebP
+images declared in the manifest. Image references resolve relative to their
+XHTML file, including SVG `image` references to raster assets. Images are stored
+as data URLs at their reading-order positions between text paragraphs; repeated
+references share the decoded asset during import. Image-only spine chapters are
+kept. Unsupported image types are omitted, while missing declared image files
+and encrypted images fail the import. Individual images are limited to 20 MiB
+and the total decoded image payload to 100 MiB. Existing EPUBs must be
+re-imported to show their images.
 
 ### FB2 import (React reader)
 

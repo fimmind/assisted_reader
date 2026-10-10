@@ -16,6 +16,13 @@ export interface ReaderSettings {
 export interface BookChapter {
   title: string;
   paragraphs: string[];
+  images?: BookImage[];
+}
+
+export interface BookImage {
+  beforeParagraph: number;
+  src: string;
+  alt: string;
 }
 
 export interface ImportedBook {

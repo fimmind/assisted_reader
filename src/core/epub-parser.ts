@@ -2,6 +2,12 @@ import JSZip from 'jszip';
 import type { BookChapter } from './types';
 
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
+const IMAGE_MIME: Record<string, string> = {
+  'image/jpeg': 'image/jpeg', 'image/png': 'image/png', 'image/gif': 'image/gif', 'image/webp': 'image/webp',
+};
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 100 * 1024 * 1024;
+type ContentBlock = { type: 'text'; text: string } | { type: 'image'; href: string; alt: string; src?: string };
 const elements = (node: Document | Element, name: string) =>
   Array.from(node.getElementsByTagNameNS('*', name));
 
@@ -19,7 +25,7 @@ function resolvePath(base: string, href: string): string {
 
 // Walk blocks in document order, retaining lists, headings and div-based prose
 // without duplicating text from nested containers or executing book markup.
-function chapterContent(markup: string, index: number, mediaType: string): { paragraphs: string[]; anchors: Map<string, number> } {
+function chapterContent(markup: string, index: number, mediaType: string): { blocks: ContentBlock[]; anchors: Map<string, number> } {
   let doc: Document;
   if (mediaType === 'application/xhtml+xml') {
     // XHTML permits <title/> and <script/>. HTML parsing treats these as
@@ -37,15 +43,15 @@ function chapterContent(markup: string, index: number, mediaType: string): { par
     .forEach((node) => node.remove());
   const body = elements(doc, 'body')[0];
   if (!body) throw new Error(`EPUB chapter ${index} has no readable body.`);
-  const paragraphs: string[] = [];
+  const blocks: ContentBlock[] = [];
   const anchors = new Map<string, number>();
   let current = '';
   const flush = () => {
     const text = normalize(current);
-    if (text) paragraphs.push(text);
+    if (text) blocks.push({ type: 'text', text });
     current = '';
   };
-  const blocks = new Set(['p', 'div', 'section', 'article', 'blockquote', 'li', 'ul', 'ol',
+  const blockTags = new Set(['p', 'div', 'section', 'article', 'blockquote', 'li', 'ul', 'ol',
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'tr', 'dl', 'dt', 'dd', 'hr']);
   const visit = (node: Node) => {
     if (node.nodeType === 3 || node.nodeType === 4) { current += node.textContent ?? ''; return; }
@@ -55,22 +61,32 @@ function chapterContent(markup: string, index: number, mediaType: string): { par
     const anchor = element.getAttribute('id') || element.getAttribute('xml:id')
       || (tag === 'a' ? element.getAttribute('name') : null);
     if (anchor) {
+      // Inline anchors belong to their containing paragraph. Flushing here
+      // would split its text merely because the TOC links into it.
+      if (blockTags.has(tag)) flush();
+      if (!anchors.has(anchor)) anchors.set(anchor, blocks.length);
+    }
+    if (tag === 'img' || tag === 'image') {
       flush();
-      if (!anchors.has(anchor)) anchors.set(anchor, paragraphs.length);
+      const href = element.getAttribute('src') || element.getAttribute('href')
+        || element.getAttribute('xlink:href');
+      if (href) blocks.push({ type: 'image', href, alt: normalize(element.getAttribute('alt') ?? '') });
+      return;
     }
     if (tag === 'br') { flush(); return; }
-    if (blocks.has(tag)) flush();
+    if (blockTags.has(tag)) flush();
     for (const child of Array.from(node.childNodes)) visit(child);
     if (tag === 'td' || tag === 'th') current += ' ';
-    if (blocks.has(tag)) flush();
+    if (blockTags.has(tag)) flush();
   };
   visit(body);
   flush();
-  return { paragraphs, anchors };
+  return { blocks, anchors };
 }
 
 interface TocEntry { title: string; path: string; fragment: string }
-interface ContentFile { path: string; paragraphs: string[]; anchors: Map<string, number> }
+interface TocTable { entries: TocEntry[]; skippedEntry: boolean }
+interface ContentFile { path: string; blocks: ContentBlock[]; anchors: Map<string, number> }
 
 function tocEntry(base: string, href: string | null, title: string): TocEntry {
   if (!href || !normalize(title)) throw new Error('Invalid table of contents entry.');
@@ -78,8 +94,8 @@ function tocEntry(base: string, href: string | null, title: string): TocEntry {
   return { title: normalize(title), path: resolvePath(base, href), fragment: decodeURIComponent(url.hash.slice(1)) };
 }
 
-async function readTablesOfContents(opf: Document, opfPath: string, manifest: Map<string | null, Element>, read: (path: string) => Promise<string>): Promise<TocEntry[][]> {
-  const tables: TocEntry[][] = [];
+async function readTablesOfContents(opf: Document, opfPath: string, manifest: Map<string | null, Element>, read: (path: string) => Promise<string>): Promise<TocTable[]> {
+  const tables: TocTable[] = [];
   const navItems = [...manifest.values()].filter((item) => (item.getAttribute('properties') ?? '').split(/\s+/).includes('nav'));
   const ncxId = elements(opf, 'spine')[0]?.getAttribute('toc');
   const ncx = manifest.get(ncxId ?? null)
@@ -93,14 +109,27 @@ async function readTablesOfContents(opf: Document, opfPath: string, manifest: Ma
       if (item === ncx) {
         const map = elements(doc, 'navMap')[0];
         if (!map) continue;
-        tables.push(elements(map, 'navPoint').map((point) => {
+        const entries: TocEntry[] = [];
+        let skippedEntry = false;
+        for (const point of elements(map, 'navPoint')) {
           const direct = (name: string) => Array.from(point.children).find((node) => node.localName === name);
-          return tocEntry(path, direct('content')?.getAttribute('src') ?? null, direct('navLabel')?.textContent ?? '');
-        }));
+          try {
+            entries.push(tocEntry(path, direct('content')?.getAttribute('src') ?? null, direct('navLabel')?.textContent ?? ''));
+          } catch { skippedEntry = true; }
+        }
+        tables.push({ entries, skippedEntry });
       } else {
         const toc = elements(doc, 'nav').find((nav) =>
           (nav.getAttributeNS('http://www.idpf.org/2007/ops', 'type') ?? nav.getAttribute('epub:type') ?? '').split(/\s+/).includes('toc'));
-        if (toc) tables.push(elements(toc, 'a').map((link) => tocEntry(path, link.getAttribute('href'), link.textContent ?? '')));
+        if (toc) {
+          const entries: TocEntry[] = [];
+          let skippedEntry = false;
+          for (const link of elements(toc, 'a')) {
+            try { entries.push(tocEntry(path, link.getAttribute('href'), link.textContent ?? '')); }
+            catch { skippedEntry = true; }
+          }
+          tables.push({ entries, skippedEntry });
+        }
       }
     } catch {
       // Broken navigation must not prevent importing otherwise readable text.
@@ -109,36 +138,50 @@ async function readTablesOfContents(opf: Document, opfPath: string, manifest: Ma
   return tables;
 }
 
-function groupChapters(files: ContentFile[], tables: TocEntry[][]): BookChapter[] {
-  const paragraphs: string[] = [];
+function groupChapters(files: ContentFile[], tables: TocTable[]): BookChapter[] {
+  const blocks: ContentBlock[] = [];
   const locations = new Map<string, { offset: number; file: ContentFile }>();
   for (const file of files) {
-    locations.set(file.path, { offset: paragraphs.length, file });
-    for (const paragraph of file.paragraphs) paragraphs.push(paragraph);
+    locations.set(file.path, { offset: blocks.length, file });
+    blocks.push(...file.blocks);
   }
+  const makeChapter = (title: string, start: number, end: number): BookChapter => {
+    const paragraphs: string[] = [];
+    const images: NonNullable<BookChapter['images']> = [];
+    for (const block of blocks.slice(start, end)) {
+      if (block.type === 'text') paragraphs.push(block.text);
+      else if (block.src) images.push({ beforeParagraph: paragraphs.length, src: block.src, alt: block.alt });
+    }
+    return images.length ? { title, paragraphs, images } : { title, paragraphs };
+  };
+  const readable = (chapter: BookChapter) => chapter.paragraphs.length > 0 || !!chapter.images?.length;
+  let partialChapters: BookChapter[] | undefined;
   for (const table of tables) {
     const boundaries: Array<{ title: string; offset: number }> = [];
-    let valid = table.length > 0;
-    for (const entry of table) {
+    let skippedEntry = table.skippedEntry;
+    for (const entry of table.entries) {
       const location = locations.get(entry.path);
       const local = entry.fragment ? location?.file.anchors.get(entry.fragment) : 0;
-      if (!location || local === undefined) { valid = false; break; }
+      if (!location || local === undefined) { skippedEntry = true; continue; }
       const offset = location.offset + local;
       const previous = boundaries[boundaries.length - 1];
-      if (previous && offset < previous.offset) { valid = false; break; }
+      if (previous && offset < previous.offset) { skippedEntry = true; continue; }
       // Parent and child TOC entries can point to the same opening paragraph.
       if (previous?.offset === offset) { previous.title = entry.title; continue; }
       boundaries.push({ title: entry.title, offset });
     }
-    if (!valid || !boundaries.length) continue;
+    if (!boundaries.length) continue;
     if (boundaries[0].offset > 0) boundaries.unshift({ title: 'Front matter', offset: 0 });
-    const chapters = boundaries.map((boundary, index) => ({
-      title: boundary.title,
-      paragraphs: paragraphs.slice(boundary.offset, boundaries[index + 1]?.offset ?? paragraphs.length),
-    })).filter((chapter) => chapter.paragraphs.length > 0);
-    if (chapters.length) return chapters;
+    const chapters = boundaries.map((boundary, index) =>
+      makeChapter(boundary.title, boundary.offset, boundaries[index + 1]?.offset ?? blocks.length))
+      .filter(readable);
+    if (!chapters.length) continue;
+    // Prefer a complete NCX over a damaged EPUB 3 nav, but still use the
+    // readable nav entries if no complete table of contents is available.
+    if (!skippedEntry) return chapters;
+    partialChapters ??= chapters;
   }
-  return [{ title: 'Chapter 1', paragraphs }];
+  return partialChapters ?? [makeChapter('Chapter 1', 0, blocks.length)];
 }
 
 export async function parseEpubBook(buffer: ArrayBuffer): Promise<{
@@ -168,6 +211,41 @@ export async function parseEpubBook(buffer: ArrayBuffer): Promise<{
     const title = normalize(metadata ? elements(metadata, 'title')[0]?.textContent ?? '' : '');
     const author = metadata ? elements(metadata, 'creator').map((node) => normalize(node.textContent ?? '')).filter(Boolean).join(', ') : '';
     const manifest = new Map(elements(opf, 'item').map((item) => [item.getAttribute('id'), item]));
+    const imageMimeByPath = new Map<string, string>();
+    for (const item of manifest.values()) {
+      const href = item.getAttribute('href');
+      const mime = IMAGE_MIME[item.getAttribute('media-type') ?? ''];
+      if (href && mime) {
+        try { imageMimeByPath.set(resolvePath(opfPath, href), mime); }
+        catch { /* External images are not imported. */ }
+      }
+    }
+    const imageCache = new Map<string, string>();
+    let totalImageBytes = 0;
+    const imageSource = async (chapterPath: string, href: string): Promise<string | undefined> => {
+      let path: string;
+      try { path = resolvePath(chapterPath, href); }
+      catch { return undefined; }
+      const mime = imageMimeByPath.get(path);
+      if (!mime) return undefined;
+      if (encryptedPaths.has(path)) throw new Error(`DRM-protected EPUB image is not supported: ${path}`);
+      const cached = imageCache.get(path);
+      if (cached) return cached;
+      const image = zip.file(path);
+      if (!image) throw new Error(`Missing EPUB image: ${path}`);
+      const bytes = await image.async('uint8array');
+      if (bytes.length > MAX_IMAGE_BYTES || totalImageBytes + bytes.length > MAX_TOTAL_IMAGE_BYTES) {
+        throw new Error('EPUB images exceed the supported size limit.');
+      }
+      totalImageBytes += bytes.length;
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 32768) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+      }
+      const src = `data:${mime};base64,${btoa(binary)}`;
+      imageCache.set(path, src);
+      return src;
+    };
     const spineRefs = elements(opf, 'itemref');
     if (!spineRefs.length) throw new Error('Could not read the EPUB chapter list.');
     const tables = await readTablesOfContents(opf, opfPath, manifest, read);
@@ -185,9 +263,14 @@ export async function parseEpubBook(buffer: ArrayBuffer): Promise<{
       const path = resolvePath(opfPath, href);
       if (encryptedPaths.has(path)) throw new Error('DRM-protected EPUB chapters are not supported. Please import an unlocked copy.');
       const content = chapterContent(await read(path), files.length + 1, mediaType);
+      for (const block of content.blocks) {
+        if (block.type === 'image') block.src = await imageSource(path, block.href);
+      }
       files.push({ path, ...content });
     }
-    if (!files.some((file) => file.paragraphs.length)) throw new Error('No readable text could be extracted from this EPUB. This does not necessarily mean the book is image-only or DRM-protected.');
+    if (!files.some((file) => file.blocks.some((block) => block.type === 'text' || !!block.src))) {
+      throw new Error('No readable text or supported images could be extracted from this EPUB.');
+    }
     const chapters = groupChapters(files, tables);
     return { title, author, chapters };
   } catch (error) {

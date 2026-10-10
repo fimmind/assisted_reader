@@ -1629,11 +1629,28 @@ export default function ReaderPage() {
   const activeProfileForRender = getActiveProfile(profileStateForRender);
   const observationLabels = activeProfileForRender.observations;
   const paragraphStartIndex = shouldHideFirstParagraphAsDuplicateTitle(chapterDisplayTitle, chapterParagraphs[0]) ? 1 : 0;
-  const visibleParagraphEntries = chapterParagraphs.slice(paragraphStartIndex).map((paragraphText, visibleIndex) => ({
-    paragraphText,
-    visibleIndex,
-    sourceIndex: visibleIndex + paragraphStartIndex,
-  }));
+  const visibleContentEntries: Array<
+    | { type: 'paragraph'; paragraphText: string; visibleIndex: number; sourceIndex: number }
+    | { type: 'image'; src: string; alt: string; imageIndex: number }
+  > = [];
+  const imagesByParagraph = new Map<number, Array<{ src: string; alt: string; imageIndex: number }>>();
+  currentChapter?.images?.forEach((image, imageIndex) => {
+    const position = Math.max(paragraphStartIndex, image.beforeParagraph);
+    const group = imagesByParagraph.get(position) ?? [];
+    group.push({ src: image.src, alt: image.alt, imageIndex });
+    imagesByParagraph.set(position, group);
+  });
+  for (let sourceIndex = paragraphStartIndex; sourceIndex <= chapterParagraphs.length; sourceIndex += 1) {
+    for (const image of imagesByParagraph.get(sourceIndex) ?? []) {
+      visibleContentEntries.push({ type: 'image', ...image });
+    }
+    if (sourceIndex < chapterParagraphs.length) {
+      visibleContentEntries.push({
+        type: 'paragraph', paragraphText: chapterParagraphs[sourceIndex],
+        visibleIndex: sourceIndex - paragraphStartIndex, sourceIndex,
+      });
+    }
+  }
   const openChapterStudy = (): void => {
     if (!currentChapter || chapterParagraphs.length === 0 || !resourcesRef.current) {
       return;
@@ -1798,7 +1815,10 @@ export default function ReaderPage() {
               style={{ fontSize: `${settings.fontSize}px` }}
               data-testid="text-column"
             >
-              {visibleParagraphEntries.map((entry) => {
+              {visibleContentEntries.map((entry) => {
+                if (entry.type === 'image') {
+                  return <img key={`image-${entry.imageIndex}`} src={entry.src} alt={entry.alt} className="block max-w-full h-auto mx-auto my-6" data-testid={`chapter-image-${entry.imageIndex}`} />;
+                }
                 const analysis = chapterAnalysis[entry.sourceIndex] ?? { paragraphText: entry.paragraphText, tokens: [], cardTargets: [] };
                 return (
                 <div key={entry.sourceIndex} className="mb-2" data-testid={`paragraph-block-${entry.visibleIndex}`}>

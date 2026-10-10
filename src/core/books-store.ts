@@ -54,11 +54,22 @@ function normalizeBook(raw: unknown): ImportedBook | null {
   }
 
   const normalizedChapters = candidate.chapters
-    .map((chapter) => ({
-      title: typeof chapter.title === 'string' && chapter.title.length > 0 ? chapter.title : 'Chapter',
-      paragraphs: Array.isArray(chapter.paragraphs) ? chapter.paragraphs.filter((item): item is string => typeof item === 'string') : [],
-    }))
-    .filter((chapter) => chapter.paragraphs.length > 0);
+    .map((chapter) => {
+      const paragraphs = Array.isArray(chapter.paragraphs)
+        ? chapter.paragraphs.filter((item): item is string => typeof item === 'string') : [];
+      const images = Array.isArray(chapter.images) ? chapter.images.filter((image) =>
+        image && Number.isInteger(image.beforeParagraph)
+        && image.beforeParagraph >= 0 && image.beforeParagraph <= paragraphs.length
+        && typeof image.src === 'string'
+        && /^data:image\/(?:jpeg|png|gif|webp);base64,/.test(image.src)
+        && typeof image.alt === 'string') : [];
+      return {
+        title: typeof chapter.title === 'string' && chapter.title.length > 0 ? chapter.title : 'Chapter',
+        paragraphs,
+        ...(images.length ? { images } : {}),
+      };
+    })
+    .filter((chapter) => chapter.paragraphs.length > 0 || ('images' in chapter && !!chapter.images?.length));
 
   const isSeedHitchhiker = candidate.id === 'seed-hitchhiker';
   const fallbackTitle = isSeedHitchhiker ? "The Hitchhiker's Guide to the Galaxy" : 'Untitled Book';
