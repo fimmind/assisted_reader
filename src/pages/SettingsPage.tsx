@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { ChevronLeft, Trash2, Upload, Download, Plus, RotateCcw, Pencil } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
@@ -10,7 +10,8 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
-import type { UserProfile } from '@/core/types';
+import { estimateKnownWordCount, loadVocabularyModel } from '@/core/model';
+import type { UserProfile, VocabularyModel } from '@/core/types';
 import { getWsdModelStatus, startWsdModel, stopWsdModel, subscribeWsdModelStatus } from '@/core/wsd-runtime';
 import { failedWsdAsset, loadWsdAvailability, uncheckedWsdAvailability } from '@/core/wsd-assets';
 import type { FailedWsdAsset } from '@/core/wsd-assets';
@@ -20,12 +21,27 @@ export default function SettingsPage() {
   const { settings, updateSetting } = useSettings();
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string>('');
+  const [vocabularyModel, setVocabularyModel] = useState<VocabularyModel | null>(null);
+  const [vocabularyUnavailable, setVocabularyUnavailable] = useState(false);
   const [wsdStatus, setWsdStatus] = useState(getWsdModelStatus);
   const [wsdAvailability, setWsdAvailability] = useState(uncheckedWsdAvailability);
   const [failedAsset, setFailedAsset] = useState<FailedWsdAsset | null>(null);
   const selectedWsdAvailable = settings.wsdMode === 'none' || wsdAvailability[settings.wsdMode].available;
 
   useEffect(() => subscribeWsdModelStatus(setWsdStatus), []);
+
+  useEffect(() => {
+    let active = true;
+    void loadVocabularyModel().then((model) => {
+      if (active) setVocabularyModel(model);
+    }).catch((error: unknown) => {
+      if (active) {
+        console.warn('profile-vocabulary-model-load-failed', { error });
+        setVocabularyUnavailable(true);
+      }
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const failed = failedWsdAsset(wsdStatus.mode, wsdStatus.phase, wsdStatus.message);
@@ -116,6 +132,9 @@ export default function SettingsPage() {
   };
 
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
+  const estimatedKnownWords = useMemo(() => new Map<string, number | null>(profiles.map((profile) => [
+    profile.id, vocabularyModel ? Math.round(estimateKnownWordCount(vocabularyModel, profile)) : null,
+  ])), [profiles, vocabularyModel]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -153,6 +172,11 @@ export default function SettingsPage() {
                   <div className="min-w-0">
                     <p className="font-medium break-all">{profile.name}</p>
                     {activeProfileId === profile.id && <span className="text-xs text-primary font-medium">Active</span>}
+                    <p className="text-xs text-muted-foreground">
+                      Estimated known words: {vocabularyModel
+                        ? `~${estimatedKnownWords.get(profile.id)?.toLocaleString('en-US')} of ${vocabularyModel.words.length.toLocaleString('en-US')} in model`
+                        : vocabularyUnavailable ? 'unavailable' : 'loading…'}
+                    </p>
                   </div>
                 </div>
               </button>

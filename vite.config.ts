@@ -44,7 +44,7 @@ function wsdAvailabilityPlugin(): Plugin {
     },
     async generateBundle() {
       const availability = await inspectWsdAssets(path.resolve('public/wsd'));
-      if (Object.values(availability).some((status) => !status.available)) {
+      if (process.env.ALLOW_MISSING_WSD !== '1' && Object.values(availability).some((status) => !status.available)) {
         this.error(`WSD assets are incomplete. Run pnpm ensure:wsd. ${JSON.stringify(availability)}`);
       }
       this.emitFile({ type: 'asset', fileName: 'wsd/availability.json', source: JSON.stringify(availability) });

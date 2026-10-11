@@ -196,6 +196,11 @@ export function predictKnownProbability(model: VocabularyModel, profile: UserPro
   return sigmoid(theta - model.difficulties[idx]);
 }
 
+export function estimateKnownWordCount(model: VocabularyModel, profile: UserProfile): number {
+  const theta = estimateTheta(model, profile);
+  return model.words.reduce((total, word) => total + predictKnownProbability(model, profile, theta, word), 0);
+}
+
 export function predictUncertainty(model: VocabularyModel, profile: UserProfile, theta: number, lemma: string): number {
   const probability = predictKnownProbability(model, profile, theta, lemma);
   return probability * (1 - probability);

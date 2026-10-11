@@ -13,6 +13,7 @@ import {
 } from './lexicon-schema.mjs';
 
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
+const allowMissingWsd = process.env.ALLOW_MISSING_WSD === '1';
 const requiredFiles = [
   'index.html',
   'data/words.csv',
@@ -22,12 +23,14 @@ const requiredFiles = [
   'data/wordnet/index.json',
   'data/wordnet/LICENSE',
   'wsd/availability.json',
-  'wsd/ettin-150m-wsd/manifest.json',
-  'wsd/ettin-150m-wsd/LICENSE',
-  'wsd/ettin-150m-wsd/NOTICE.txt',
-  'wsd/sayedshaun-wsd/manifest.json',
-  'wsd/sayedshaun-wsd/LICENSE',
-  'wsd/sayedshaun-wsd/NOTICE.txt',
+  ...(!allowMissingWsd ? [
+    'wsd/ettin-150m-wsd/manifest.json',
+    'wsd/ettin-150m-wsd/LICENSE',
+    'wsd/ettin-150m-wsd/NOTICE.txt',
+    'wsd/sayedshaun-wsd/manifest.json',
+    'wsd/sayedshaun-wsd/LICENSE',
+    'wsd/sayedshaun-wsd/NOTICE.txt',
+  ] : []),
 ];
 
 async function assertFileExists(relativePath) {
@@ -289,19 +292,27 @@ async function main() {
   }
   const availability = JSON.parse(await readFile(path.join(DIST_DIR, 'wsd/availability.json'), 'utf8'));
   for (const model of ['sayedshaun', 'glite-lens', 'ettin']) {
-    if (availability[model]?.available !== true || availability[model]?.reason !== '') {
+    if (typeof availability[model]?.available !== 'boolean'
+      || typeof availability[model]?.reason !== 'string'
+      || (availability[model].available ? availability[model].reason !== '' : !allowMissingWsd || !availability[model].reason)) {
       throw new Error(`Invalid deployed WSD availability: model=${model}`);
     }
   }
   await verifyLexiconChunks();
   await verifyWordNetAssets(path.join(DIST_DIR, 'data/wordnet'));
   await verifyDictionaryCopies();
-  await verifyWsdAssets('wsd/ettin-150m-wsd', '8751b577199d1bb95b74fa2457da7065d57100ae', ['tokenizer.json', 'tokenizer_config.json', 'answer_letters.json']);
-  await verifyWsdAssets('wsd/sayedshaun-wsd', '54e41c09c61ae8bd60c62e40bf483141c49ce0d3', ['tokenizer.json', 'tokenizer_config.json']);
-  await verifyWsdAssets('wsd/glite-lens', 'glite-lens-seed42-context-int8-v1', ['tokenizer.json', 'tokenizer_config.json']);
-  await verifySenseVectors('wsd/sayedshaun-wsd');
-  await verifySenseVectors('wsd/glite-lens');
-  await verifyWsdRuntime();
+  if (availability.ettin.available) {
+    await verifyWsdAssets('wsd/ettin-150m-wsd', '8751b577199d1bb95b74fa2457da7065d57100ae', ['tokenizer.json', 'tokenizer_config.json', 'answer_letters.json']);
+  }
+  if (availability.sayedshaun.available) {
+    await verifyWsdAssets('wsd/sayedshaun-wsd', '54e41c09c61ae8bd60c62e40bf483141c49ce0d3', ['tokenizer.json', 'tokenizer_config.json']);
+    await verifySenseVectors('wsd/sayedshaun-wsd');
+  }
+  if (availability['glite-lens'].available) {
+    await verifyWsdAssets('wsd/glite-lens', 'glite-lens-seed42-context-int8-v1', ['tokenizer.json', 'tokenizer_config.json']);
+    await verifySenseVectors('wsd/glite-lens');
+  }
+  if (Object.values(availability).some((status) => status.available)) await verifyWsdRuntime();
   console.log('Deploy asset verification passed.');
 }
 

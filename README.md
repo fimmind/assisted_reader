@@ -132,6 +132,8 @@ What deploy does:
 3. Verify required deploy assets (`pnpm run verify:deploy-assets`)
 4. Publish `dist/` to `gh-pages` branch via `gh-pages -d dist --nojekyll`
 
+When WSD generation is unavailable on the build host, `ALLOW_MISSING_WSD=1` lets Vite build and the deploy validator check the other assets while recording missing models in `wsd/availability.json`. Reuse already published WSD files only when their manifests and WordNet data match the current source; publish with `gh-pages --add` so those files remain on the branch.
+
 ## Project structure
 
 Top-level:
