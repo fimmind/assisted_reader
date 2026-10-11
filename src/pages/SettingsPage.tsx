@@ -133,7 +133,7 @@ export default function SettingsPage() {
 
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
   const estimatedKnownWords = useMemo(() => new Map<string, number | null>(profiles.map((profile) => [
-    profile.id, vocabularyModel ? Math.round(estimateKnownWordCount(vocabularyModel, profile)) : null,
+    profile.id, vocabularyModel ? Math.round(estimateKnownWordCount(vocabularyModel, profile) / 100) * 100 : null,
   ])), [profiles, vocabularyModel]);
 
   return (
@@ -171,12 +171,14 @@ export default function SettingsPage() {
                   </div>
                   <div className="min-w-0">
                     <p className="font-medium break-all">{profile.name}</p>
-                    {activeProfileId === profile.id && <span className="text-xs text-primary font-medium">Active</span>}
-                    <p className="text-xs text-muted-foreground">
-                      Estimated known words: {vocabularyModel
-                        ? `~${estimatedKnownWords.get(profile.id)?.toLocaleString('en-US')} of ${vocabularyModel.words.length.toLocaleString('en-US')} in model`
-                        : vocabularyUnavailable ? 'unavailable' : 'loading…'}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-x-2">
+                      {activeProfileId === profile.id && <span className="text-xs text-primary font-medium">Active</span>}
+                      <span className="text-xs text-muted-foreground">
+                        Estimated known words: {vocabularyModel
+                          ? `~${estimatedKnownWords.get(profile.id)?.toLocaleString('en-US')}`
+                          : vocabularyUnavailable ? 'unavailable' : 'loading…'}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </button>
