@@ -48,6 +48,7 @@ Thumbs.db
 .cache/
 .local/
 .agents/
+:memory:.ses
 
 # generated static assets from sync:data
 public/data/
@@ -58,3 +59,8 @@ downloads
 
 # generated lexicon artifacts
 data/lexicon/
+
+# Generated WSD exports and embeddings; retain upstream licenses and attribution.
+public/wsd/*/*
+!public/wsd/*/LICENSE
+!public/wsd/*/NOTICE.txt

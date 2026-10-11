@@ -56,7 +56,7 @@ export async function resolveStudyWsdItem(
   lexicon: LazyLexicon,
   signal: AbortSignal,
 ): Promise<StudyCardItem> {
-  if (!settings.wordSenseDisambiguationEnabled) {
+  if (settings.wsdMode === 'none') {
     return item;
   }
   const rawEntry = await lexicon.lookup(item.lemma);
@@ -72,7 +72,7 @@ export async function resolveStudyWsdItem(
     return item;
   }
   const context = studyWsdContext(item, scope, settings);
-  await waitForWsdModelReady(signal);
-  const scores = await scoreWordSenses(context, glosses, 'visible-card', signal);
-  return studyItemWithWsdScores(item, entry, scores, marginForReductionLevel(settings.wsdReductionLevel));
+  await waitForWsdModelReady(settings.wsdMode, signal);
+  const scores = await scoreWordSenses(settings.wsdMode, context, entry, 'visible-card', signal);
+  return studyItemWithWsdScores(item, entry, scores, marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode));
 }

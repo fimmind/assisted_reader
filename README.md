@@ -17,16 +17,32 @@ order. EPUB 3 navigation or EPUB 2 NCX contents determine chapter titles and
 boundaries, including chapters spread across files and links into a file.
 If neither table of contents is usable, the entire book becomes one chapter.
 Text before the first chapter is retained as front matter. Re-import existing
-EPUBs to apply this grouping. Paragraphs, headings, lists and div-based prose
-are retained. Navigation documents
-and supplementary non-linear spine items are skipped. Missing chapters and
-invalid archives produce an import error. Image-only and DRM-protected books
-are not supported. Only extracted text and metadata are stored.
+EPUBs to apply this grouping and preserve their presentation. The reader keeps
+headings, lists, alignment, emphasis, links, common inline styles, images and
+rules while its font and spacing controls remain adjustable. The normalized
+paragraph text remains the source for vocabulary analysis. Authored chapter titles
+remain in the document with their formatting; navigation labels do not replace
+them or get inserted as extra headings. Visible navigation documents in the spine
+are preserved. Supplementary spine items are accessible through internal links and skipped during sequential
+reading. Image-only chapters are retained. Missing chapters and invalid archives
+produce an import error; DRM-protected content is unsupported.
 
 FB2 import reads uncompressed `.fb2` files locally, including UTF-8, UTF-16,
 and XML-declared encodings such as Windows-1251. It preserves title/author
-metadata, nested sections, paragraphs and verse. The separate notes body and
-embedded images are omitted; malformed or empty books produce an import error.
+metadata, nested sections, paragraphs, verse, emphasis, links and embedded
+images. Multi-paragraph titles, parent section titles, blank lines, stanza spacing,
+and named CSS styles are retained. Plain paragraph text remains the source for
+vocabulary analysis. Notes remain accessible through internal links and are
+skipped during sequential reading; malformed or empty books produce an import error.
+
+These importers implement a common reflowable presentation subset, not full
+format conformance or schema validation. EPUB fixed page layouts, SVG spine
+documents, embedded fonts, scripting, audio/video, media overlays, full CSS,
+and manifest fallback chains are unsupported. Links to EPUB documents outside
+the spine are not imported. Tables in both formats are projected into rows;
+cell spans and complex table layout are not reproduced. FictionBook stylesheets
+other than CSS are not interpreted. Existing rich-text imports need re-importing
+to recover titles and content discarded by earlier importers.
 
 Use **Import Book** in the library to select TXT, EPUB, FB2, or PDF files. PDF text
 is extracted locally in the browser with PDF.js; no file is uploaded and the

@@ -198,9 +198,25 @@
   @apply mb-0;
 }
 
+.reader-list-item::before {
+  content: attr(data-reader-list-marker);
+  display: inline-block;
+  width: 1.5em;
+  margin-inline-start: -1.5em;
+  white-space: nowrap;
+}
+
+.reader-anchor {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  scroll-margin-top: 4rem;
+}
+
 .unknown-word {
   position: relative;
   display: inline-block;
+  text-indent: 0;
   cursor: pointer;
   border-bottom: 2px solid hsl(var(--primary) / 0.4);
   transition: all 0.2s ease;

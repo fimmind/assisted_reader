@@ -6,13 +6,14 @@ import { useSettings } from '../hooks/useSettings';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
 import type { UserProfile } from '@/core/types';
 import { getWsdModelStatus, startWsdModel, stopWsdModel, subscribeWsdModelStatus } from '@/core/wsd-runtime';
+import { failedWsdAsset, loadWsdAvailability, uncheckedWsdAvailability } from '@/core/wsd-assets';
+import type { FailedWsdAsset } from '@/core/wsd-assets';
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -20,16 +21,46 @@ export default function SettingsPage() {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string>('');
   const [wsdStatus, setWsdStatus] = useState(getWsdModelStatus);
+  const [wsdAvailability, setWsdAvailability] = useState(uncheckedWsdAvailability);
+  const [failedAsset, setFailedAsset] = useState<FailedWsdAsset | null>(null);
+  const selectedWsdAvailable = settings.wsdMode === 'none' || wsdAvailability[settings.wsdMode].available;
+
+  useEffect(() => subscribeWsdModelStatus(setWsdStatus), []);
 
   useEffect(() => {
-    const unsubscribe = subscribeWsdModelStatus(setWsdStatus);
-    if (settings.wordSenseDisambiguationEnabled) {
-      startWsdModel();
+    const failed = failedWsdAsset(wsdStatus.mode, wsdStatus.phase, wsdStatus.message);
+    if (failed) setFailedAsset(failed);
+  }, [wsdStatus.mode, wsdStatus.phase, wsdStatus.message]);
+
+  useEffect(() => {
+    let controller: AbortController | null = null;
+    const refresh = (): void => {
+      controller?.abort();
+      const active = new AbortController();
+      controller = active;
+      void loadWsdAvailability(failedAsset, active.signal).then((availability) => {
+        if (!active.signal.aborted) setWsdAvailability(availability);
+      }).catch((error: unknown) => {
+        if (!active.signal.aborted) console.error('wsd-availability-check-failed', { error });
+      });
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    const timer = window.setInterval(refresh, 15_000);
+    return () => {
+      controller?.abort();
+      window.removeEventListener('focus', refresh);
+      window.clearInterval(timer);
+    };
+  }, [failedAsset]);
+
+  useEffect(() => {
+    if (settings.wsdMode !== 'none' && selectedWsdAvailable) {
+      startWsdModel(settings.wsdMode);
     } else {
       stopWsdModel();
     }
-    return unsubscribe;
-  }, [settings.wordSenseDisambiguationEnabled]);
+  }, [settings.wsdMode, selectedWsdAvailable]);
 
   const refreshProfiles = () => {
     const state = loadProfileState();
@@ -249,18 +280,27 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="word-sense-disambiguation">Word Sense Disambiguation</Label>
-                <Switch
-                  id="word-sense-disambiguation"
-                  checked={settings.wordSenseDisambiguationEnabled}
-                  onCheckedChange={(enabled) => updateSetting('wordSenseDisambiguationEnabled', enabled)}
-                />
+              <Label>Word Sense Disambiguation</Label>
+              <div className="flex flex-wrap gap-3" role="group" aria-label="Word Sense Disambiguation">
+                {(['none', 'sayedshaun', 'glite-lens', 'ettin'] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    variant={settings.wsdMode === mode ? 'default' : 'outline'}
+                    aria-pressed={settings.wsdMode === mode}
+                    disabled={mode !== 'none' && !wsdAvailability[mode].available}
+                    title={mode === 'none' ? undefined : wsdAvailability[mode].reason}
+                    onClick={() => updateSetting('wsdMode', mode)}
+                    className="min-w-[100px]"
+                  >
+                    {mode === 'none' ? 'None' : mode === 'sayedshaun' ? 'SayedShaun' : mode === 'glite-lens' ? 'Glite LENS' : 'Ettin'}
+                    {mode !== 'none' && wsdAvailability[mode].checked && !wsdAvailability[mode].available && ' (Unavailable)'}
+                  </Button>
+                ))}
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Use Ettin 150M to hide WordNet definitions that do not fit the context.
+                Hide WordNet definitions that may not fit the context. SayedShaun and Glite LENS use precomputed definition embeddings.
               </p>
-              {settings.wordSenseDisambiguationEnabled && (
+              {settings.wsdMode !== 'none' && wsdAvailability[settings.wsdMode].available && (
                 <div className="space-y-2" role="status" aria-live="polite">
                   <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                     <span>{wsdStatus.phase === 'error' ? `Model error: ${wsdStatus.message}` : wsdStatus.message}</span>
@@ -272,13 +312,17 @@ export default function SettingsPage() {
                     <Progress value={100 * wsdStatus.downloadedBytes / wsdStatus.totalBytes} />
                   )}
                   {wsdStatus.phase === 'error' && (
-                    <Button variant="outline" size="sm" onClick={startWsdModel}>Retry download</Button>
+                    <Button variant="outline" size="sm" onClick={() => {
+                      if (settings.wsdMode !== 'none') {
+                        startWsdModel(settings.wsdMode);
+                      }
+                    }}>Retry download</Button>
                   )}
                 </div>
               )}
             </div>
 
-            {settings.wordSenseDisambiguationEnabled && (
+            {settings.wsdMode !== 'none' && (
               <div className="space-y-2">
                 <Label>Reduction level</Label>
                 <Slider
@@ -292,12 +336,12 @@ export default function SettingsPage() {
                   <span>Retain more</span><span>Hide more</span>
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Zero retained every correct sense in single-sentence calibration. Higher levels target 1–10% misses; actual misses can differ, especially with more context.
+                  Each model has its own single-sentence calibration. Zero retained every correct calibration sense; higher levels target 1–10% misses. Actual misses can differ, especially with more context.
                 </p>
               </div>
             )}
 
-            {settings.wordSenseDisambiguationEnabled && (
+            {settings.wsdMode !== 'none' && (
               <div className="space-y-3">
                 <Label>Context unit</Label>
                 <div className="flex flex-wrap gap-3">

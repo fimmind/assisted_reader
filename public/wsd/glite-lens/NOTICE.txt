@@ -1,0 +1,14 @@
+Glite LENS seed-42 context encoder and precomputed WordNet sense vectors
+Source: https://github.com/GliteTech/research-semcor-relabeling
+Source revision: 5d3e2b640648a27af4dcf185bc373748afee9f9c
+Model asset: tasks/t0034_glite_lens_canonical/assets/model/glite-lens-canonical-modernbert-v1
+Checkpoint SHA-256: 4654117eefbdef5305461ba2d0fc7e7a4087718991f935fca2ae8cf5f64a102a
+Base model: https://huggingface.co/answerdotai/ModernBERT-base
+
+The context encoder was exported to ONNX and dynamically quantized to UINT8.
+Definition vectors were computed from a dynamically quantized ONNX export of
+the released gloss encoder and stored as float16. These adaptations were made
+for Assisted Reader.
+
+The checkpoint weights are licensed CC BY-NC 4.0; see LICENSE. Attribution
+and noncommercial use conditions apply to both the model and derived vectors.

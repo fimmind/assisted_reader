@@ -106,6 +106,7 @@ function studyWsdCacheKey(
     item.example.sentenceIndex,
     item.example.sentence,
     item.example.targetSpans,
+    settings.wsdMode,
     settings.wsdReductionLevel,
     settings.wsdContextUnit,
     settings.wsdContextSize,
@@ -739,7 +740,7 @@ export function StudyFlow({
     : null;
   const currentItemId = currentBatch?.cardSession.orderedItemIds[currentBatch.cardSession.currentPosition];
   const currentItem = currentBatch?.items.find((candidate) => candidate.lexicalItemId === currentItemId);
-  const currentCacheKey = currentItem && currentSession && settings.wordSenseDisambiguationEnabled
+  const currentCacheKey = currentItem && currentSession && settings.wsdMode !== 'none'
     ? studyWsdCacheKey(currentItem, currentSession.id, settings)
     : null;
   const currentWsdKey = currentCacheKey === null ? null : JSON.stringify([currentCacheKey, wsdAttempt]);
@@ -1203,11 +1204,11 @@ export function StudyFlow({
     if (!item || !interaction) {
       return null;
     }
-    const wsdReady = !settings.wordSenseDisambiguationEnabled
+    const wsdReady = settings.wsdMode === 'none'
       || (resolvedWsdItem?.key === currentWsdKey && resolvedWsdItem.item !== null);
-    const visibleItem = settings.wordSenseDisambiguationEnabled && resolvedWsdItem?.key === currentWsdKey
+    const visibleItem = settings.wsdMode !== 'none' && resolvedWsdItem?.key === currentWsdKey
       ? resolvedWsdItem.item
-      : settings.wordSenseDisambiguationEnabled ? null : item;
+      : settings.wsdMode !== 'none' ? null : item;
     const definitions = visibleItem?.definitions ?? (visibleItem ? [visibleItem.definition] : []);
     const pronunciation = formatStudyPronunciations([
       item.preferredTranscription,
@@ -1248,7 +1249,9 @@ export function StudyFlow({
                   <div className="space-y-2 text-sm">
                     <p role="alert">WSD could not prepare this card: {resolvedWsdItem.error}</p>
                     <Button type="button" variant="outline" onClick={() => {
-                      startWsdModel();
+                      if (settings.wsdMode !== 'none') {
+                        startWsdModel(settings.wsdMode);
+                      }
                       setWsdAttempt((attempt) => attempt + 1);
                     }}>Retry WSD</Button>
                   </div>
@@ -1458,7 +1461,7 @@ export function StudyFlow({
                 exportControllerRef.current = controller;
                 try {
                   const resolvedItems = await Promise.all(items.map(async (item): Promise<StudyCardItem> => {
-                    if (!settings.wordSenseDisambiguationEnabled) {
+                    if (settings.wsdMode === 'none') {
                       return item;
                     }
                     const cacheKey = studyWsdCacheKey(item, currentSession.id, settings);

@@ -10,7 +10,7 @@ import {
 } from '../src/core/lexicon.js';
 import type { WordNetEntry } from '../src/core/lexicon.js';
 import type { LexiconEntry } from '../src/core/types.js';
-import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '../src/core/wsd-filter.js';
+import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetDefinitionIds, wordNetGlosses } from '../src/core/wsd-filter.js';
 
 function loadWordNetEntry(word: string): WordNetEntry {
   const fileName = resolveLexiconBucketFileName(word);
@@ -126,6 +126,7 @@ test('identical glosses appear once on cards while distinct synsets remain in th
   assert.ok(combined);
   assert.equal(raw.senses[0].definitions.length, 3);
   assert.deepEqual(combined.senses[0].definitions, ['to a proportionate degree', 'in proportion']);
+  assert.equal(wordNetDefinitionIds(combined).length, wordNetGlosses(combined).length);
   assert.deepEqual(raw, original);
 });
 
@@ -140,6 +141,7 @@ test('contextual filtering changes WordNet definitions but preserves Wiktionary-
   assert.ok(glosses.length > 1);
   const filtered = filterWordNetEntry(combined, glosses.map((_, index) => index === 0 ? 10 : 0), 0);
   assert.deepEqual(wordNetGlosses(filtered), [glosses[0]]);
+  assert.deepEqual(wordNetDefinitionIds(filtered), [wordNetDefinitionIds(combined)[0]]);
   assert.deepEqual(filtered.senses.find((sense) => sense.partOfSpeech === 'interjection')?.definitions, ['A shouted warning.']);
 });
 

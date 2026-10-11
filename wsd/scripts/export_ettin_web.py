@@ -10,6 +10,9 @@ from onnxruntime.quantization import QuantType, quantize_dynamic
 
 from ettin_wsd import WSDModernBertForMaskedLM
 
+from wsd_exports import write_export_receipt
+from wsd_memory import require_memory_scope
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / ".cache" / "models" / "ettin-150m-wsd"
@@ -33,6 +36,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    require_memory_scope()
     if not (SOURCE / "model.safetensors").is_file():
         raise FileNotFoundError(f"Missing Ettin checkpoint at {SOURCE}")
 
@@ -64,6 +68,7 @@ def main() -> None:
         dynamo=False,
     )
     quantize_dynamic(fp32, int8, weight_type=QuantType.QUInt8)
+    write_export_receipt(args.output, "model-export.json", ["model-int8.onnx"], Path(__file__))
     print(f"Exported {int8} ({int8.stat().st_size / 1_000_000:.1f} MB)")
 
 

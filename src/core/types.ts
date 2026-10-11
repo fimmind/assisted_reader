@@ -1,3 +1,5 @@
+export type WsdMode = 'none' | 'sayedshaun' | 'glite-lens' | 'ettin';
+
 export interface ReaderSettings {
   fontSize: number;
   lineSpacing: 'Compact' | 'Normal' | 'Relaxed';
@@ -7,22 +9,126 @@ export interface ReaderSettings {
   deduplicationRadius: number;
   knowledgeThreshold: number;
   englishVariant: 'US' | 'UK';
-  wordSenseDisambiguationEnabled: boolean;
+  wsdMode: WsdMode;
   wsdReductionLevel: number;
   wsdContextUnit: 'sentence' | 'paragraph';
   wsdContextSize: number;
 }
 
+export type ReaderInlineMark = 'strong' | 'emphasis' | 'underline' | 'strike' | 'subscript' | 'superscript' | 'code' | 'mark' | 'small' | 'big';
+
+export interface ReaderContentStyle {
+  fontFamily?: string;
+  fontSize?: string;
+  fontWeight?: string;
+  fontStyle?: string;
+  color?: string;
+  backgroundColor?: string;
+  textDecoration?: string;
+  textTransform?: string;
+  textAlign?: string;
+  textIndent?: string;
+  lineHeight?: string;
+  letterSpacing?: string;
+  wordSpacing?: string;
+  whiteSpace?: string;
+  verticalAlign?: string;
+  direction?: string;
+  marginTop?: string;
+  marginBottom?: string;
+  margin?: string;
+  marginLeft?: string;
+  marginRight?: string;
+  marginInlineStart?: string;
+  marginInlineEnd?: string;
+  paddingTop?: string;
+  paddingBottom?: string;
+  paddingInlineStart?: string;
+  paddingInlineEnd?: string;
+  padding?: string;
+  paddingLeft?: string;
+  paddingRight?: string;
+  display?: string;
+  width?: string;
+  maxWidth?: string;
+  minWidth?: string;
+  height?: string;
+  maxHeight?: string;
+  objectFit?: string;
+  objectPosition?: string;
+  borderTop?: string;
+  borderBottom?: string;
+  borderColor?: string;
+  borderWidth?: string;
+  borderStyle?: string;
+  listStyleType?: string;
+  float?: string;
+  clear?: string;
+}
+
+export interface ReaderTextRun {
+  type: 'text';
+  text: string;
+  marks: ReaderInlineMark[];
+  style?: ReaderContentStyle;
+  href?: string;
+  title?: string;
+  lineBreakBefore?: boolean;
+}
+
+export interface ReaderInlineImage {
+  type: 'image';
+  src: string;
+  alt: string;
+  title?: string;
+  style?: ReaderContentStyle;
+}
+
+export type ReaderInlineContent = ReaderTextRun | ReaderInlineImage;
+
+export interface ReaderParagraphBlock {
+  type: 'paragraph';
+  paragraphIndex: number;
+  blockType: 'paragraph' | 'heading' | 'blockquote' | 'list-item' | 'verse' | 'pre' | 'caption' | 'table-row';
+  level?: number;
+  listMarker?: string;
+  anchorIds?: string[];
+  style?: ReaderContentStyle;
+  content: ReaderInlineContent[];
+}
+
+export interface ReaderImageBlock {
+  type: 'image';
+  anchorIds?: string[];
+  afterParagraphIndex: number;
+  src: string;
+  alt: string;
+  title?: string;
+  style?: ReaderContentStyle;
+}
+
+export interface ReaderRuleBlock {
+  type: 'rule';
+  anchorIds?: string[];
+  afterParagraphIndex: number;
+  style?: ReaderContentStyle;
+}
+
+export interface ReaderSpacerBlock {
+  type: 'spacer';
+  afterParagraphIndex: number;
+  anchorIds?: string[];
+  style?: ReaderContentStyle;
+}
+
+export type ReaderContentBlock = ReaderParagraphBlock | ReaderImageBlock | ReaderRuleBlock | ReaderSpacerBlock;
+
 export interface BookChapter {
   title: string;
   paragraphs: string[];
-  images?: BookImage[];
-}
-
-export interface BookImage {
-  beforeParagraph: number;
-  src: string;
-  alt: string;
+  readerBlocks?: ReaderContentBlock[];
+  titlePresentation?: 'content' | 'generated' | 'continuation';
+  linear?: boolean;
 }
 
 export interface ImportedBook {
@@ -79,6 +185,7 @@ export interface LexiconSense {
   ipaUs?: string;
   ipaUk?: string;
   definitions: string[];
+  definitionIds?: string[];
   source?: 'wordnet';
 }
 

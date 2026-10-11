@@ -97,8 +97,9 @@ EPUB (`parseEpubBook`):
 when importing EPUB. No CDN script or server upload is needed. Namespace-aware
 XML parsing resolves the container, package metadata, manifest and spine. Chapter
 paths resolve relative to the OPF, including parent paths, URL escapes and fragments.
-Navigation documents and `linear="no"` spine entries are skipped. Missing chapter
-files fail the import instead of silently producing an incomplete book.
+Visible navigation documents in the spine are retained. `linear="no"` entries
+are imported as supplementary chapters for internal links; sequential reading
+skips them. Missing chapter files fail the import instead of silently producing an incomplete book.
 
 XHTML chapters are parsed as XML so self-closing elements such as `<title/>`
 cannot swallow chapter text. Invalid legacy XHTML falls back to HTML parsing;
@@ -106,39 +107,55 @@ chapters declared as HTML use HTML parsing directly. Missing spine entries and
 empty extracted text have separate errors; empty text is not treated as proof
 of DRM. An inert document is walked in document order, retaining paragraphs, headings,
 lists and container text without duplicating nested blocks. Scripts, styles,
-navigation and explicitly hidden elements are removed. Headings remain in the
-text. EPUB 3 `nav` with `epub:type="toc"` is preferred; EPUB 2 NCX `navMap`
+and explicitly hidden elements are removed. Visible navigation content and
+headings remain in the text. EPUB 3 `nav` with `epub:type="toc"` is preferred; EPUB 2 NCX `navMap`
 is tried next. Page-list and landmark navigation do not define chapters.
 TOC paths resolve relative to the navigation file, and decoded fragment IDs
-map to text positions within content files. Consecutive text belongs to its
-preceding TOC entry, including across spine file boundaries. Duplicate opening
+map to reader-block positions within content files, preserving media placement
+at chapter boundaries. Consecutive text belongs to its preceding TOC entry, including across spine file boundaries. Duplicate opening
 positions use the last label; text before the first entry is kept as front matter.
-Missing targets, unresolved anchors, malformed navigation or backwards entries
-invalidate that TOC. If no usable TOC remains, all readable spine text becomes
+Individual missing targets, unresolved anchors and backwards entries are skipped.
+A complete EPUB 2 NCX takes precedence over a partially damaged EPUB 3 TOC;
+otherwise valid entries from the partial TOC are retained. If no usable entries remain, all readable spine text becomes
 one `Chapter 1`, without guessing chapter boundaries from files or headings.
 Missing actual spine content still fails import instead of losing book text.
-Existing EPUBs must be re-imported to use the new grouping.
-Package title and creators populate book metadata, falling back to the filename
-and Unknown Author. EPUB spine content also retains JPEG, PNG, GIF and WebP
-images declared in the manifest. Image references resolve relative to their
-XHTML file, including SVG `image` references to raster assets. Images are stored
-as data URLs at their reading-order positions between text paragraphs; repeated
-references share the decoded asset during import. Image-only spine chapters are
-kept. Unsupported image types are omitted, while missing declared image files
-and encrypted images fail the import. Individual images are limited to 20 MiB
-and the total decoded image payload to 100 MiB. Existing EPUBs must be
-re-imported to show their images.
+The importer stores a canonical plain-text paragraph projection for NLP and a
+parallel reader-block stream for presentation. Reader blocks retain semantic
+headings and lists, safe common CSS properties from inline and linked stylesheets,
+emphasis, internal and external links, anchors, inline and standalone images, and horizontal rules.
+Explicit line breaks and nonbreaking spaces remain in the canonical text;
+the rendered text and analysis projection have identical offsets. Local CSS
+imports are resolved in order, with cycles ignored and missing resources reported.
+Authored titles stay in the content, including titles styled as ordinary
+paragraphs. Navigation labels are metadata and are never injected into the
+presentation of new rich imports. No paragraph is removed to eliminate a
+duplicate heading. Legacy plain chapters can still use a generated heading.
+Image assets are embedded as data URIs. Reader font family and line spacing stay
+under the user's reader controls; fixed page layouts, embedded fonts, scripts,
+external assets and advanced CSS layout are not reproduced. Vocabulary cards
+continue to use the canonical paragraph indexes and text offsets. Existing EPUBs
+must be re-imported to preserve presentation. Package title and creators populate
+book metadata, falling back to the filename and Unknown Author.
 
 ### FB2 import (React reader)
 
 `book-parser.ts` lazily loads `fb2-parser.ts` for uncompressed `.fb2` files.
 TextDecoder honors UTF-16 byte order and XML-declared encodings, with UTF-8 as
-the default. DOMParser validates FictionBook XML; DTDs are rejected. Title and
+the default. DOMParser checks FictionBook XML syntax and root identity; DTDs are rejected. Title and
 authors come from `description/title-info`, with filename/Unknown Author
 fallbacks. Body sections are walked in document order, flushing parent prose
-before nested chapters to avoid duplication. Paragraphs, verse, subtitles and
-table row text are retained; images, binary data and the named notes body are
-omitted. The normal book store preserves `sourceType: 'fb2'`.
+before nested chapters to avoid duplication. Multi-paragraph source titles and
+header-only parent sections remain in the content; parent continuations do not
+repeat a synthetic heading. The importer stores canonical
+paragraph text for NLP alongside reader blocks that retain named CSS styles,
+verse, subtitles, table rows, epigraphs, citations, emphasis, links and embedded
+binary images. Empty lines and stanza separators are spacers, not horizontal
+rules. Additional bodies remain link-accessible supplementary chapters and
+are skipped during sequential reading. Image-only sections are retained.
+Vocabulary cards continue to use the canonical
+paragraph indexes and text offsets; the normal book store preserves
+`sourceType: 'fb2'`. Existing FB2 imports must be re-imported to preserve
+presentation.
 
 ### PDF import (React reader)
 
@@ -622,28 +639,34 @@ Each definition lookup fetches the matching bucket from both sources. A
 WordNet POS group supplies the definitions when present. Its transcription
 comes from the corresponding Wiktionary POS group. Wiktionary groups absent
 from WordNet remain available, including when contextual POS inference selects
-one. WordNet sense order is retained unless the optional Word Sense
-Disambiguation setting is enabled. That setting caches a quantized ONNX
-export of `sign/Ettin-150m-WSD` and its WASM runtime in the browser and runs
-inference in a worker. Model parts, metadata, and the WASM runtime load concurrently.
+one. WordNet sense order is retained unless Word Sense Disambiguation is set to
+SayedShaun, Glite LENS, or Ettin. SayedShaun uses a quantized ONNX export of its
+DistilBERT bi-encoder and precomputed WordNet definition vectors; Glite LENS uses a quantized context encoder and
+precomputed WordNet definition vectors from its gloss encoder; Ettin uses the
+quantized `sign/Ettin-150m-WSD` export. Each model runs in a browser worker,
+with its files cached locally. Only the selected worker is active. SayedShaun
+and Glite LENS fetch only the precomputed vector bucket for a requested WordNet
+headword and keep a bounded number of buckets in memory.
 Cards request filtering as soon as their WordNet definitions and the model are
 ready. Opened popups take priority over queued cards, followed by cards near the
 viewport. For each
 card with multiple WordNet glosses, the worker marks the occurrence
 in the selected context, scores the WordNet options, and retains those within
-the selected score margin of the best WordNet option. Context size selects
+the selected model's score margin of the best WordNet option. Context size selects
 1–3 surrounding sentences or paragraphs, defaulting to one sentence.
 Wiktionary-only POS groups remain unchanged. With WSD enabled, cards with
 multiple WordNet definitions appear after inference finishes. During model
 download, those cards remain hidden. If the model or a request fails, cards
 show all dictionary definitions with an error message; errors can be
-retried in Settings. Disabling WSD stops the worker and releases its model.
+retried in Settings. Selecting None stops the worker and releases its model.
 Opened word popups keep their activity indicator visible through dictionary
 lookup and WSD inference.
-Reduction levels 0–10 use margins calibrated on 429
+Reduction levels 0–10 have separate model-specific margins calibrated on 429
 single-sentence SemEval-2007 occurrences for zero observed calibration misses
-and nominal 1–10% miss rates respectively. Calibration used native ONNX
-inference; browser WASM scores and larger context windows may differ.
+and nominal 1–10% miss rates respectively. The SayedShaun margins use browser
+WASM scores; the Glite LENS margins use its quantized gloss vectors and browser
+WASM context scores; the Ettin margins use native ONNX scores. Larger context
+windows and browser runtime differences can change the observed miss rate.
 
 Runtime POS selection:
 

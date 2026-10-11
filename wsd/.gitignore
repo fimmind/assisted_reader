@@ -6,3 +6,4 @@ data/training/
 results/
 __pycache__/
 *.egg-info/
+:memory:.ses
