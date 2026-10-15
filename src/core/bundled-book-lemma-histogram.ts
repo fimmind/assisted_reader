@@ -1,4 +1,5 @@
 import type { BookLemmaHistogram } from './reader-analysis';
+import { LEXICAL_ANALYSIS_VERSION } from './nlp';
 
 const HITCHHIKER_BOOK_ID = 'seed-hitchhiker';
 const HITCHHIKER_HISTOGRAM_PATH = 'data/seed-hitchhiker-lemma-histogram.json';
@@ -10,7 +11,9 @@ function isValidHistogram(value: unknown): value is BookLemmaHistogram {
     return false;
   }
   const typed = value as Partial<BookLemmaHistogram>;
-  if (typeof typed.totalTokenCount !== 'number' || !Number.isFinite(typed.totalTokenCount) || typed.totalTokenCount < 0) {
+  const analysisVersion = (value as { analysisVersion?: unknown }).analysisVersion;
+  if (analysisVersion !== LEXICAL_ANALYSIS_VERSION
+    || typeof typed.totalTokenCount !== 'number' || !Number.isFinite(typed.totalTokenCount) || typed.totalTokenCount < 0) {
     return false;
   }
   if (!typed.nonProperLemmaCounts || typeof typed.nonProperLemmaCounts !== 'object') {

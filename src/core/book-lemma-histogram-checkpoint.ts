@@ -11,7 +11,7 @@ type StoredSegment = BookLemmaHistogramSegment & {
 const DATABASE_NAME = 'easeword-book-lemma-histogram-checkpoints-v1';
 const STORE_NAME = 'segments';
 const COMPLETED_STORE_NAME = 'completed';
-const ANALYSIS_VERSION = 1;
+const ANALYSIS_VERSION = 2;
 
 interface CompletedHistogram {
   bookId: string;

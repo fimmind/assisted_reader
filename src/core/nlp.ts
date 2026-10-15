@@ -73,6 +73,8 @@ const NEGATIVE_CONTRACTION_LEMMA_OVERRIDES: Record<string, string> = {
   were: 'be',
 };
 
+export const LEXICAL_ANALYSIS_VERSION = 2;
+
 const ARTICLES = new Set<string>(['a', 'an', 'the']);
 
 const CALENDAR_TIME_NOUNS = new Set<string>([
@@ -845,19 +847,21 @@ function buildLemmaCandidateCacheKey(
   classes: { verb: boolean; noun: boolean; adjective: boolean },
   lemmaFromDict: string | undefined,
   hasNlp: boolean,
+  contextualPartOfSpeech: PartOfSpeech | null,
 ): string {
   const normalizedLemmaFromDict =
     typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
       ? normalizeToken(lemmaFromDict)
       : '';
-  return `${term.raw}\n${classes.verb ? '1' : '0'}${classes.noun ? '1' : '0'}${classes.adjective ? '1' : '0'}\n${hasNlp ? '1' : '0'}\n${normalizedLemmaFromDict}`;
+  return `${term.raw}\n${classes.verb ? '1' : '0'}${classes.noun ? '1' : '0'}${classes.adjective ? '1' : '0'}\n${contextualPartOfSpeech ?? ''}\n${hasNlp ? '1' : '0'}\n${normalizedLemmaFromDict}`;
 }
 
 export function makeLemmaCandidates(
   term: TaggedTerm,
   lemmaDict: Record<string, string>,
   nlp: NlpLike | null,
-  cache?: Map<string, string[]>,
+  contextualPartOfSpeech: PartOfSpeech | null,
+  cache: Map<string, string[]> | undefined,
 ): string[] {
   const normalized = term.normalized;
   const classes = mapTagsToWordClass(term.tags);
@@ -867,7 +871,13 @@ export function makeLemmaCandidates(
   );
   const lemmaFromDict = hasOwnLemma ? lemmaDict[normalized] : undefined;
   const cacheKey = cache
-    ? buildLemmaCandidateCacheKey(term, classes, lemmaFromDict, nlp !== null)
+    ? buildLemmaCandidateCacheKey(
+      term,
+      classes,
+      lemmaFromDict,
+      nlp !== null,
+      contextualPartOfSpeech,
+    )
     : '';
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -877,10 +887,7 @@ export function makeLemmaCandidates(
   }
 
   const candidates: string[] = [];
-
-  if (typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0) {
-    candidates.push(normalizeToken(lemmaFromDict));
-  }
+  let dictionaryConflictsWithOtherPartOfSpeech = false;
 
   const apostropheCandidates = buildApostropheLemmaCandidates(normalized);
   for (const candidate of apostropheCandidates) {
@@ -889,30 +896,58 @@ export function makeLemmaCandidates(
 
   if (nlp) {
     try {
-      const doc = nlp(term.raw);
+      // Compromise transforms mutate their document, so each candidate must
+      // come from a fresh document and cannot overwrite another POS result.
       const verbInfinitive = normalizeToken(
-        doc.verbs().toInfinitive().out('text'),
+        nlp(term.raw).verbs().toInfinitive().out('text'),
       );
-      const nounSingular = normalizeToken(doc.nouns().toSingular().out('text'));
+      const nounSingular = normalizeToken(
+        nlp(term.raw).nouns().toSingular().out('text'),
+      );
+      const adjective = extractConjugatedAdjective(nlp(term.raw));
+      const contextualCandidate = contextualPartOfSpeech === 'verb'
+        ? verbInfinitive
+        : contextualPartOfSpeech === 'noun'
+          ? nounSingular
+          : contextualPartOfSpeech === 'adjective'
+            ? normalizeToken(adjective)
+            : '';
+      if (contextualCandidate.length > 0 && contextualCandidate !== normalized) {
+        candidates.push(contextualCandidate);
+      }
 
-      if (classes.verb) {
-        candidates.push(verbInfinitive);
-      }
-      if (classes.noun) {
-        candidates.push(nounSingular);
-      }
-      if (classes.adjective) {
-        const adjective = extractConjugatedAdjective(doc);
-        if (adjective.length > 0) {
-          candidates.push(normalizeToken(adjective));
-        }
+      const otherPartOfSpeechCandidates = [
+        contextualPartOfSpeech !== 'verb' ? verbInfinitive : '',
+        contextualPartOfSpeech !== 'noun' ? nounSingular : '',
+        contextualPartOfSpeech !== 'adjective' ? normalizeToken(adjective) : '',
+      ].filter((candidate) => candidate.length > 0 && candidate !== normalized);
+      const dictionaryLemma =
+        typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
+          ? normalizeToken(lemmaFromDict)
+          : '';
+      dictionaryConflictsWithOtherPartOfSpeech =
+        dictionaryLemma.length > 0 &&
+        otherPartOfSpeechCandidates.includes(dictionaryLemma);
+      if (
+        dictionaryLemma.length > 0 &&
+        dictionaryLemma !== normalized &&
+        !dictionaryConflictsWithOtherPartOfSpeech
+      ) {
+        candidates.push(dictionaryLemma);
       }
 
-      candidates.push(verbInfinitive);
-      candidates.push(nounSingular);
+      candidates.push(...otherPartOfSpeechCandidates);
     } catch (error) {
       console.warn('compromise-lemmatization-failed', { raw: term.raw, error });
     }
+  }
+
+  if (
+    typeof lemmaFromDict === 'string' &&
+    lemmaFromDict.length > 0 &&
+    !dictionaryConflictsWithOtherPartOfSpeech
+  ) {
+    candidates.push(normalizeToken(lemmaFromDict));
   }
 
   candidates.push(normalized);
@@ -994,15 +1029,11 @@ export function contextualDeinflectTaggedTerms(
       continue;
     }
 
-    if (dictionaryLemma !== null) {
-      tokens.push(dictionaryLemma);
-      continue;
-    }
-
     const candidates = makeLemmaCandidates(
       term,
       lemmaDict,
       nlp,
+      contextualPartOfSpeech,
       lemmaCandidateCache,
     );
     const selectedFromVocab = candidates.find((candidate) =>

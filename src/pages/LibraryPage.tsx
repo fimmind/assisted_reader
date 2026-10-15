@@ -14,6 +14,7 @@ import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSetti
 import { loadVocabularyModel } from '@/core/model';
 import { withBookReadingProgress } from '@/core/reading-progress-store';
 import { loadLemmaDict } from '@/core/lemma';
+import { LEXICAL_ANALYSIS_VERSION } from '@/core/nlp';
 import { loadCompromise } from '@/core/external';
 import { getCachedBookLemmaHistogram } from '@/core/book-lemma-histogram-cache';
 import {
@@ -222,8 +223,9 @@ export default function LibraryPage() {
       };
     }
     try {
-      const cachedHistogram = getCachedBookLemmaHistogram(book.id, book.createdAt, book.updatedAt, model.modelKey)
-        ?? await loadCompletedBookLemmaHistogram(book.id, book.createdAt, model.modelKey);
+      const analysisModelKey = `${model.modelKey}:lexical-analysis-${LEXICAL_ANALYSIS_VERSION}`;
+      const cachedHistogram = getCachedBookLemmaHistogram(book.id, book.createdAt, book.updatedAt, analysisModelKey)
+        ?? await loadCompletedBookLemmaHistogram(book.id, book.createdAt, analysisModelKey);
       if (cachedHistogram) {
         onProgress(100);
         const cachedStats = calculateBookStatsFromLemmaHistogram(cachedHistogram, settings, model, activeProfile);
@@ -235,7 +237,7 @@ export default function LibraryPage() {
 
       const bundledHistogram = await loadBundledBookLemmaHistogram(book.id);
       if (bundledHistogram) {
-        await completeBookLemmaHistogram(book.id, book.createdAt, model.modelKey, bundledHistogram);
+        await completeBookLemmaHistogram(book.id, book.createdAt, analysisModelKey, bundledHistogram);
         onProgress(100);
         const bundledStats = calculateBookStatsFromLemmaHistogram(bundledHistogram, settings, model, activeProfile);
         return {
@@ -246,7 +248,7 @@ export default function LibraryPage() {
 
       let lastReportedPercent = -1;
       onProgress(0);
-      const savedSegments = await loadBookLemmaHistogramCheckpoints(book.id, book.createdAt, model.modelKey);
+      const savedSegments = await loadBookLemmaHistogramCheckpoints(book.id, book.createdAt, analysisModelKey);
       const histogram = await buildResumableBookLemmaHistogramAsync(
         book,
         model,
@@ -266,14 +268,14 @@ export default function LibraryPage() {
             }
           },
           onYield: yieldToEventLoop,
-          saveSegment: (segment) => saveBookLemmaHistogramCheckpoint(book.id, book.createdAt, model.modelKey, segment),
+          saveSegment: (segment) => saveBookLemmaHistogramCheckpoint(book.id, book.createdAt, analysisModelKey, segment),
           clearTaggedChapter: (chapterIndex) => clearTaggedBookChapterCheckpoints(book.id, chapterIndex),
         },
       );
       if (histogram === null) {
         return null;
       }
-      await completeBookLemmaHistogram(book.id, book.createdAt, model.modelKey, histogram);
+      await completeBookLemmaHistogram(book.id, book.createdAt, analysisModelKey, histogram);
       const stats = calculateBookStatsFromLemmaHistogram(histogram, settings, model, activeProfile);
       return {
         ...stats,
