@@ -640,10 +640,10 @@ WordNet POS group supplies the definitions when present. Its transcription
 comes from the corresponding Wiktionary POS group. Wiktionary groups absent
 from WordNet remain available, including when contextual POS inference selects
 one. WordNet sense order is retained unless Word Sense Disambiguation is set to
-SayedShaun, Glite LENS, or Ettin. SayedShaun uses a quantized ONNX export of its
-DistilBERT bi-encoder and precomputed WordNet definition vectors; Glite LENS uses a quantized context encoder and
-precomputed WordNet definition vectors from its gloss encoder; Ettin uses the
-quantized `sign/Ettin-150m-WSD` export. Each model runs in a browser worker,
+Light or Heavier. Light uses SayedShaun WSD, a quantized DistilBERT bi-encoder
+with precomputed WordNet definition vectors. Heavier uses Glite LENS, a
+quantized context encoder and precomputed WordNet definition vectors from its
+gloss encoder. Each model runs in a browser worker,
 with its files cached locally. Only the selected worker is active. SayedShaun
 and Glite LENS fetch only the precomputed vector bucket for a requested WordNet
 headword and keep a bounded number of buckets in memory.
@@ -665,7 +665,7 @@ Reduction levels 0–10 have separate model-specific margins calibrated on 429
 single-sentence SemEval-2007 occurrences for zero observed calibration misses
 and nominal 1–10% miss rates respectively. The SayedShaun margins use browser
 WASM scores; the Glite LENS margins use its quantized gloss vectors and browser
-WASM context scores; the Ettin margins use native ONNX scores. Larger context
+WASM context scores. Larger context
 windows and browser runtime differences can change the observed miss rate.
 
 Runtime POS selection:

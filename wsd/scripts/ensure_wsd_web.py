@@ -85,7 +85,6 @@ BucketIndex = dict[str, tuple[int, list[str]]]
 REVISIONS: dict[str, str] = {
     "sayedshaun-wsd": "54e41c09c61ae8bd60c62e40bf483141c49ce0d3",
     "glite-lens": "glite-lens-seed42-context-int8-v1",
-    "ettin-150m-wsd": "8751b577199d1bb95b74fa2457da7065d57100ae",
 }
 
 
@@ -135,8 +134,6 @@ def check_package(name: str, source_hash: str, indices: dict[str, BucketIndex]) 
     if manifest["revision"] != REVISIONS[name] or not isinstance(manifest["parts"], list) or not manifest["parts"]:
         raise AssetValidationError(f"Generated model revision/parts mismatch: model={name}")
     expected_metadata = {"tokenizer.json", "tokenizer_config.json"}
-    if name == "ettin-150m-wsd":
-        expected_metadata.add("answer_letters.json")
     if not isinstance(manifest["metadata"], dict) or set(manifest["metadata"]) != expected_metadata:
         raise AssetValidationError(f"Generated model metadata is incomplete: model={name}")
     total = 0
@@ -150,11 +147,9 @@ def check_package(name: str, source_hash: str, indices: dict[str, BucketIndex]) 
     if total != manifest["size"]:
         raise AssetValidationError(f"Generated model size mismatch: model={name}")
     for filename, expected in manifest["metadata"].items():
-        if filename not in ("tokenizer.json", "tokenizer_config.json", "answer_letters.json"):
+        if filename not in ("tokenizer.json", "tokenizer_config.json"):
             raise AssetValidationError(f"Unexpected generated metadata file: model={name} file={filename}")
         check_file(root / filename, expected, None)
-    if name == "ettin-150m-wsd":
-        return
     vectors = manifest["vectors"]
     if (not isinstance(vectors, dict) or vectors["format"] != "float16-le" or vectors["dimensions"] != 768
             or not isinstance(vectors['buckets'], dict)
@@ -263,17 +258,6 @@ def build_glite() -> None:
         python_script("export_glite_lens_gloss.py", ["--output", str(export)])
     ensure_wordnet_corpus()
     python_script("package_glite_lens_web.py", [])
-
-
-def build_ettin() -> None:
-    export = WSD / ".cache" / "exports" / "ettin-150m-wsd"
-    source = WSD / ".cache" / "models" / "ettin-150m-wsd"
-    ready = export_ready(export, 'model-export.json', ['model-int8.onnx'], SCRIPTS / 'export_ettin_web.py')
-    if not all((source / name).is_file() for name in ("tokenizer.json", "tokenizer_config.json", "answer_letters.json")) or not ready:
-        python_script("download_models.py", ["ettin-150m-wsd"])
-    if not ready:
-        python_script("export_ettin_web.py", ["--output", str(export)])
-    python_script("package_ettin_web.py", [])
 
 
 def main() -> None:

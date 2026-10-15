@@ -1,4 +1,4 @@
-export type WsdMode = 'none' | 'sayedshaun' | 'glite-lens' | 'ettin';
+export type WsdMode = 'none' | 'sayedshaun' | 'glite-lens';
 
 export interface ReaderSettings {
   fontSize: number;

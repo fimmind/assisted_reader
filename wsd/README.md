@@ -14,6 +14,9 @@ The current filtering result is a no-launch decision. See
 `WSD-FILTERING-RESULTS-2026-09-08.md` for the benchmark design, model comparison,
 and deployment recommendation.
 
+The two browser options and their measured trade-offs are documented in
+[the model comparison](WSD-MODEL-COMPARISON.md).
+
 ## Phase 1
 
 1. Create an isolated environment: `uv sync`

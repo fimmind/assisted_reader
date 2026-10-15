@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 
 from ensure_wsd_web import (
-    ROOT, REVISIONS, build_ettin, build_glite, build_sayedshaun, check_package,
+    ROOT, REVISIONS, build_glite, build_sayedshaun, check_package,
     ensure_environment, wordnet_inputs,
 )
 from wsd_memory import require_memory_scope
@@ -28,7 +28,7 @@ def main() -> None:
         elif name == "glite-lens":
             build_glite()
         else:
-            build_ettin()
+            raise ValueError(f"Unsupported browser WSD model: model={name}")
         check_package(name, source_hash, indices)
         marker.unlink()
 

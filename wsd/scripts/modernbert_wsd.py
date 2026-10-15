@@ -41,7 +41,7 @@ class WSDModernBertForMaskedLM(ModernBertForMaskedLM):
         return MaskedLMOutput(logits=logits)
 
 
-class EttinWsdRanker(Ranker):
+class ModernBertWsdRanker(Ranker):
     """Use the checkpoint's answer-letter logits to rank the reader's definitions."""
 
     def __init__(self, name: str) -> None:

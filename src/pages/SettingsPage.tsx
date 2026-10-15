@@ -308,7 +308,7 @@ export default function SettingsPage() {
             <div className="space-y-3">
               <Label>Word Sense Disambiguation</Label>
               <div className="flex flex-wrap gap-3" role="group" aria-label="Word Sense Disambiguation">
-                {(['none', 'sayedshaun', 'glite-lens', 'ettin'] as const).map((mode) => (
+                {(['none', 'sayedshaun', 'glite-lens'] as const).map((mode) => (
                   <Button
                     key={mode}
                     variant={settings.wsdMode === mode ? 'default' : 'outline'}
@@ -318,13 +318,13 @@ export default function SettingsPage() {
                     onClick={() => updateSetting('wsdMode', mode)}
                     className="min-w-[100px]"
                   >
-                    {mode === 'none' ? 'None' : mode === 'sayedshaun' ? 'SayedShaun' : mode === 'glite-lens' ? 'Glite LENS' : 'Ettin'}
+                    {mode === 'none' ? 'None' : mode === 'sayedshaun' ? 'Light' : 'Heavier'}
                     {mode !== 'none' && wsdAvailability[mode].checked && !wsdAvailability[mode].available && ' (Unavailable)'}
                   </Button>
                 ))}
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Hide WordNet definitions that may not fit the context. SayedShaun and Glite LENS use precomputed definition embeddings.
+                Light uses SayedShaun WSD (DistilBERT) for faster lookups and a smaller model download. Heavier uses Glite LENS for stronger sense ranking with a larger model download.
               </p>
               {settings.wsdMode !== 'none' && wsdAvailability[settings.wsdMode].available && (
                 <div className="space-y-2" role="status" aria-live="polite">

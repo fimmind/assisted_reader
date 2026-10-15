@@ -755,10 +755,10 @@ def load_ranker(name: str) -> Ranker:
         return OnnxNliRanker(name, name, "model_q4f16.onnx")
     if name == "mobilebert-mnli-q4f16-noncontradiction":
         return OnnxNliNonContradictionRanker(name, "mobilebert-mnli-q4f16", "model_q4f16.onnx")
-    if name in {"ettin-150m-wsd", "modernbert-large-wsd"}:
-        from ettin_wsd import EttinWsdRanker
+    if name == "modernbert-large-wsd":
+        from modernbert_wsd import ModernBertWsdRanker
 
-        return EttinWsdRanker(name)
+        return ModernBertWsdRanker(name)
     if name == "sayedshaun-wsd":
         from sayedshaun_wsd import SayedShaunWsdRanker
 

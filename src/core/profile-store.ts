@@ -226,7 +226,7 @@ export function loadReaderSettings(): ReaderSettings {
 
   try {
     const parsed = JSON.parse(raw) as Omit<Partial<ReaderSettings>, 'wsdMode'> & {
-      wsdMode?: ReaderSettings['wsdMode'] | 'lighter' | 'heavier';
+      wsdMode?: ReaderSettings['wsdMode'] | 'light' | 'lighter' | 'heavier' | 'ettin';
       wordSenseDisambiguationEnabled?: boolean;
     };
     const settings: ReaderSettings = {
@@ -239,9 +239,9 @@ export function loadReaderSettings(): ReaderSettings {
       knowledgeThreshold: sanitizeKnowledgeThreshold(parsed.knowledgeThreshold),
       englishVariant: sanitizeEnglishVariant(parsed.englishVariant),
       wsdMode: parsed.wsdMode === 'none' ? 'none'
-        : parsed.wsdMode === 'sayedshaun' || parsed.wsdMode === 'lighter' ? 'sayedshaun'
-        : parsed.wsdMode === 'glite-lens' ? 'glite-lens'
-        : parsed.wsdMode === 'ettin' || parsed.wsdMode === 'heavier' || parsed.wordSenseDisambiguationEnabled === true ? 'ettin'
+        : parsed.wsdMode === 'sayedshaun' || parsed.wsdMode === 'light' || parsed.wsdMode === 'lighter' ? 'sayedshaun'
+        : parsed.wsdMode === 'glite-lens' || parsed.wsdMode === 'heavier' || parsed.wsdMode === 'ettin'
+          || parsed.wordSenseDisambiguationEnabled === true ? 'glite-lens'
         : 'none',
       wsdReductionLevel: Math.round(sanitizeNumeric(parsed.wsdReductionLevel, DEFAULT_READER_SETTINGS.wsdReductionLevel, 0, 10)),
       wsdContextUnit: parsed.wsdContextUnit === 'paragraph' ? 'paragraph' : 'sentence',

@@ -23,7 +23,7 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   knowledgeThreshold: 0.5,
   englishVariant: 'US',
   wsdMode: 'none',
-  wsdReductionLevel: 5,
+  wsdReductionLevel: 10,
   wsdContextUnit: 'sentence',
   wsdContextSize: 1,
 };

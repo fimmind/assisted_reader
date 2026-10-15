@@ -24,12 +24,12 @@ const requiredFiles = [
   'data/wordnet/LICENSE',
   'wsd/availability.json',
   ...(!allowMissingWsd ? [
-    'wsd/ettin-150m-wsd/manifest.json',
-    'wsd/ettin-150m-wsd/LICENSE',
-    'wsd/ettin-150m-wsd/NOTICE.txt',
     'wsd/sayedshaun-wsd/manifest.json',
     'wsd/sayedshaun-wsd/LICENSE',
     'wsd/sayedshaun-wsd/NOTICE.txt',
+    'wsd/glite-lens/manifest.json',
+    'wsd/glite-lens/LICENSE',
+    'wsd/glite-lens/NOTICE.txt',
   ] : []),
 ];
 
@@ -183,7 +183,7 @@ async function verifyWsdAssets(relativeRoot, revision, metadataFiles) {
   ];
   let totalModelBytes = 0;
   for (const asset of assets) {
-    if (typeof asset.name !== 'string' || !/^(model\.part\d{2}|tokenizer\.json|tokenizer_config\.json|answer_letters\.json|LICENSE|NOTICE\.txt)$/.test(asset.name)
+    if (typeof asset.name !== 'string' || !/^(model\.part\d{2}|tokenizer\.json|tokenizer_config\.json|LICENSE|NOTICE\.txt)$/.test(asset.name)
       || (asset.sha256 !== null && (typeof asset.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(asset.sha256)))) {
       throw new Error(`Invalid WSD asset declaration: name=${String(asset.name)}`);
     }
@@ -270,7 +270,6 @@ async function verifyWsdRuntime() {
     throw new Error('Deployed WSD runtime binary differs from installed ONNX Runtime.');
   }
   for (const [name, model] of [
-    ['ettin-wsd', 'ettin-150m-wsd'],
     ['sayedshaun-wsd', 'sayedshaun-wsd'],
     ['glite-lens', 'glite-lens'],
   ]) {
@@ -291,7 +290,7 @@ async function main() {
     await assertFileExists(file);
   }
   const availability = JSON.parse(await readFile(path.join(DIST_DIR, 'wsd/availability.json'), 'utf8'));
-  for (const model of ['sayedshaun', 'glite-lens', 'ettin']) {
+  for (const model of ['sayedshaun', 'glite-lens']) {
     if (typeof availability[model]?.available !== 'boolean'
       || typeof availability[model]?.reason !== 'string'
       || (availability[model].available ? availability[model].reason !== '' : !allowMissingWsd || !availability[model].reason)) {
@@ -301,9 +300,6 @@ async function main() {
   await verifyLexiconChunks();
   await verifyWordNetAssets(path.join(DIST_DIR, 'data/wordnet'));
   await verifyDictionaryCopies();
-  if (availability.ettin.available) {
-    await verifyWsdAssets('wsd/ettin-150m-wsd', '8751b577199d1bb95b74fa2457da7065d57100ae', ['tokenizer.json', 'tokenizer_config.json', 'answer_letters.json']);
-  }
   if (availability.sayedshaun.available) {
     await verifyWsdAssets('wsd/sayedshaun-wsd', '54e41c09c61ae8bd60c62e40bf483141c49ce0d3', ['tokenizer.json', 'tokenizer_config.json']);
     await verifySenseVectors('wsd/sayedshaun-wsd');

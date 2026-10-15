@@ -12,7 +12,7 @@ from rankers import BenchmarkScores, Ranker, model_revision
 
 PACKAGE_NAMES = ("numpy", "onnxruntime", "sentence-transformers", "torch", "transformers")
 RANKER_SOURCE = Path(__file__).with_name("rankers.py")
-ETTIN_SOURCE = Path(__file__).with_name("ettin_wsd.py")
+MODERNBERT_SOURCE = Path(__file__).with_name("modernbert_wsd.py")
 SAYEDSHAUN_SOURCE = Path(__file__).with_name("sayedshaun_wsd.py")
 GLITE_LENS_SOURCE = Path(__file__).with_name("glite_lens.py")
 
@@ -37,7 +37,7 @@ def runtime_versions() -> str:
 
 
 def ranker_implementation_sha256() -> str:
-    return files_digest([RANKER_SOURCE, ETTIN_SOURCE, SAYEDSHAUN_SOURCE, GLITE_LENS_SOURCE])
+    return files_digest([RANKER_SOURCE, MODERNBERT_SOURCE, SAYEDSHAUN_SOURCE, GLITE_LENS_SOURCE])
 
 
 def native_thread_settings() -> str:

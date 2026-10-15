@@ -4,7 +4,6 @@ import path from 'node:path';
 export const WSD_MODELS = [
   { mode: 'sayedshaun', directory: 'sayedshaun-wsd', revision: '54e41c09c61ae8bd60c62e40bf483141c49ce0d3', vectors: true },
   { mode: 'glite-lens', directory: 'glite-lens', revision: 'glite-lens-seed42-context-int8-v1', vectors: true },
-  { mode: 'ettin', directory: 'ettin-150m-wsd', revision: '8751b577199d1bb95b74fa2457da7065d57100ae', vectors: false },
 ];
 
 /** Check every declared file without loading models or downloading embeddings. */
@@ -34,9 +33,7 @@ export async function inspectWsdModel(root, model) {
       size += part.size;
     }
     if (size !== manifest.size) throw new TypeError('Model part sizes disagree with manifest.');
-    const metadata = model.mode === 'ettin'
-      ? ['tokenizer.json', 'tokenizer_config.json', 'answer_letters.json']
-      : ['tokenizer.json', 'tokenizer_config.json'];
+    const metadata = ['tokenizer.json', 'tokenizer_config.json'];
     for (const name of metadata) {
       if (!/^[a-f0-9]{64}$/.test(manifest.metadata?.[name] ?? '')) throw new TypeError('Missing model metadata declaration.');
       assets.push({ name, size: null });

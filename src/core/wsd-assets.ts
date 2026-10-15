@@ -10,14 +10,13 @@ export type WsdAvailability = Record<ActiveWsdMode, WsdAssetAvailability>;
 export interface FailedWsdAsset { mode: ActiveWsdMode; url: string }
 
 const DIRECTORIES: Record<ActiveWsdMode, string> = {
-  sayedshaun: 'sayedshaun-wsd', 'glite-lens': 'glite-lens', ettin: 'ettin-150m-wsd',
+  sayedshaun: 'sayedshaun-wsd', 'glite-lens': 'glite-lens',
 };
 
 export function uncheckedWsdAvailability(): WsdAvailability {
   return {
     sayedshaun: { checked: false, available: false, reason: 'Checking model assets' },
     'glite-lens': { checked: false, available: false, reason: 'Checking model assets' },
-    ettin: { checked: false, available: false, reason: 'Checking model assets' },
   };
 }
 
@@ -32,7 +31,7 @@ async function inspectModelAssets(mode: ActiveWsdMode, serverStatus: WsdAssetAva
     if (!Array.isArray(payload.parts) || payload.parts.length < 1 || payload.parts.length > 20
       || !payload.parts.every((part, index) => part.name === `model.part${String(index).padStart(2, '0')}`)
       || !payload.metadata || !Object.keys(payload.metadata).every((name) =>
-        ['tokenizer.json', 'tokenizer_config.json', 'answer_letters.json'].includes(name))) {
+        ['tokenizer.json', 'tokenizer_config.json'].includes(name))) {
       throw new TypeError('Invalid model manifest.');
     }
     const urls = [...payload.parts.map((part) => `${root}${part.name}`),
@@ -63,12 +62,12 @@ export async function loadWsdAvailability(failed: FailedWsdAsset | null, signal:
       }
     }
     const results = await Promise.all(modes.map((mode) => inspectModelAssets(mode, payload[mode], failed, requestSignal)));
-    return { sayedshaun: results[0], 'glite-lens': results[1], ettin: results[2] };
+    return { sayedshaun: results[0], 'glite-lens': results[1] };
   } catch (error) {
     if (signal.aborted) throw signal.reason;
     const unavailable: WsdAssetAvailability = { checked: true, available: false,
       reason: error instanceof Error ? error.message : String(error) };
-    return { sayedshaun: unavailable, 'glite-lens': unavailable, ettin: unavailable };
+    return { sayedshaun: unavailable, 'glite-lens': unavailable };
   }
 }
 

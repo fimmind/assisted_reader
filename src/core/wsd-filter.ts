@@ -55,20 +55,6 @@ interface SentenceSegment {
   end: number;
 }
 
-export const ETTIN_MARGIN_BY_REDUCTION_LEVEL: readonly number[] = [
-  5.83791184425354,
-  4.99607515335083,
-  4.563767194747925,
-  4.335683822631836,
-  4.04623556137085,
-  3.89186429977417,
-  3.6085147857666016,
-  3.5189156532287598,
-  3.2664849758148193,
-  3.125387668609619,
-  2.8481526374816895,
-];
-
 export const SAYEDSHAUN_MARGIN_BY_REDUCTION_LEVEL: readonly number[] = [
   8.013749546077884,
   7.150079341920595,
@@ -102,7 +88,7 @@ export function marginForReductionLevel(level: number, mode: WsdMode): number {
     throw new RangeError(`WSD reduction margin requires an enabled model: mode=${mode}`);
   }
   const margins = mode === 'sayedshaun' ? SAYEDSHAUN_MARGIN_BY_REDUCTION_LEVEL
-    : mode === 'glite-lens' ? GLITE_LENS_MARGIN_BY_REDUCTION_LEVEL : ETTIN_MARGIN_BY_REDUCTION_LEVEL;
+    : GLITE_LENS_MARGIN_BY_REDUCTION_LEVEL;
   const margin = margins[level];
   if (!Number.isInteger(level) || margin === undefined) {
     throw new RangeError(`Invalid WSD reduction level: level=${level}`);
@@ -196,20 +182,6 @@ export function wordNetDefinitionIds(entry: LexiconEntry): string[] {
     }
     return sense.definitionIds;
   });
-}
-
-export function buildWsdPrompt(context: WsdContext, glosses: string[], letters: string[]): string {
-  if (glosses.length < 2 || glosses.length > 127 || letters.length !== 128) {
-    throw new RangeError(`Invalid WSD candidate count: candidates=${glosses.length} letters=${letters.length}`);
-  }
-  if (context.start < 0 || context.end <= context.start || context.end > context.text.length) {
-    throw new RangeError(`Invalid WSD target span: start=${context.start} end=${context.end} length=${context.text.length}`);
-  }
-  const escaped = context.text.replaceAll('*', '∗');
-  const marked = `${escaped.slice(0, context.start)}*${escaped.slice(context.start, context.end)}*${escaped.slice(context.end)}`;
-  const options = glosses.map((gloss, index) => `${letters[index]}. ${gloss}`);
-  options.push(`${letters[127]}. none of the above`);
-  return `${marked}\n${options.join('\n')}\n[unused0] [MASK]`;
 }
 
 export function filterWordNetEntry(entry: LexiconEntry, scores: number[], margin: number): LexiconEntry {

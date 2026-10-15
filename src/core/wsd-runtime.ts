@@ -205,9 +205,7 @@ function getWorker(mode: ActiveWsdMode): Worker {
   }
   const created = mode === 'sayedshaun'
     ? new Worker(new URL('../workers/sayedshaun-wsd.worker.ts', import.meta.url), { type: 'module' })
-    : mode === 'glite-lens'
-      ? new Worker(new URL('../workers/glite-lens.worker.ts', import.meta.url), { type: 'module' })
-      : new Worker(new URL('../workers/ettin-wsd.worker.ts', import.meta.url), { type: 'module' });
+    : new Worker(new URL('../workers/glite-lens.worker.ts', import.meta.url), { type: 'module' });
   created.onmessage = (event: MessageEvent<unknown>): void => {
     if (worker !== created) {
       return;
@@ -354,7 +352,7 @@ export function scoreWordSenses(
     return Promise.reject(new Error(`WSD model is not ready: mode=${mode} active=${status.mode} phase=${status.phase} message=${status.message}`));
   }
   const glosses = wordNetGlosses(entry);
-  const senseIds = mode === 'glite-lens' || mode === 'sayedshaun' ? wordNetDefinitionIds(entry) : [];
+  const senseIds = wordNetDefinitionIds(entry);
   const key = JSON.stringify([context, entry.word, glosses]);
   const cache = preloadedScoreCache.has(key) ? preloadedScoreCache : scoreCache;
   const cached = cache.get(key);
