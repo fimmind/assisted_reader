@@ -58,6 +58,16 @@ export interface LexicalAnalysisCache {
   lemmaCandidateCache: Map<string, string[]>;
 }
 
+interface SessionBookLexicalCache {
+  bookId: string;
+  contentKey: string;
+  modelKey: string;
+  nlp: ChapterAnalysisInput['nlp'];
+  cache: LexicalAnalysisCache;
+}
+
+let sessionBookLexicalCache: SessionBookLexicalCache | null = null;
+
 type AnalysisContext = {
   theta: number;
   knownProbabilityCache: Map<string, number>;
@@ -417,6 +427,22 @@ export function createLexicalAnalysisCache(): LexicalAnalysisCache {
     taggedSentencesByText: new Map<string, TaggedSentence[]>(),
     lemmaCandidateCache: new Map<string, string[]>(),
   };
+}
+
+export function getSessionBookLexicalCache(
+  bookId: string,
+  contentKey: string,
+  modelKey: string,
+  nlp: ChapterAnalysisInput['nlp'],
+): LexicalAnalysisCache {
+  const saved = sessionBookLexicalCache;
+  if (saved?.bookId === bookId && saved.contentKey === contentKey
+    && saved.modelKey === modelKey && saved.nlp === nlp) {
+    return saved.cache;
+  }
+  const cache = createLexicalAnalysisCache();
+  sessionBookLexicalCache = { bookId, contentKey, modelKey, nlp, cache };
+  return cache;
 }
 
 function createAnalysisContext(

@@ -41,12 +41,16 @@ interface CachedBookStatsEntry {
   stats: BookStats;
   observationFingerprint: string;
   bookUpdatedAt: string;
-  currentChapter: number;
+  knowledgeThreshold: number;
 }
 
 type CachedBookStatsMap = Record<string, CachedBookStatsEntry>;
 
-const BOOK_STATS_CACHE_KEY = 'easeword-book-stats-cache-v1';
+const BOOK_STATS_CACHE_KEY = `easeword-book-stats-cache-v2-lexical-${LEXICAL_ANALYSIS_VERSION}`;
+
+function statsCacheKey(profileId: string, bookId: string): string {
+  return JSON.stringify([profileId, bookId]);
+}
 
 function clearDeferredHandle(handle: DeferredHandle | null): void {
   if (!handle) {
@@ -140,7 +144,7 @@ function isValidCachedBookStatsMap(value: unknown): value is CachedBookStatsMap 
     if (typeof typed.bookUpdatedAt !== 'string') {
       return false;
     }
-    if (typeof typed.currentChapter !== 'number' || !Number.isFinite(typed.currentChapter)) {
+    if (typeof typed.knowledgeThreshold !== 'number' || !Number.isFinite(typed.knowledgeThreshold)) {
       return false;
     }
     if (
@@ -204,11 +208,9 @@ export default function LibraryPage() {
     progressPercent: 0,
   }), []);
 
-  const calculateBookStatsSafe = async (
+  const calculateBookStats = async (
     book: ImportedBook,
     model: Awaited<ReturnType<typeof loadVocabularyModel>>,
-    lemmaDict: Awaited<ReturnType<typeof loadLemmaDict>>,
-    nlp: Awaited<ReturnType<typeof loadCompromise>>,
     runId: number,
     activeProfile: ReturnType<typeof getActiveProfile>,
     settings: ReturnType<typeof loadReaderSettings>,
@@ -227,7 +229,6 @@ export default function LibraryPage() {
       const cachedHistogram = getCachedBookLemmaHistogram(book.id, book.createdAt, book.updatedAt, analysisModelKey)
         ?? await loadCompletedBookLemmaHistogram(book.id, book.createdAt, analysisModelKey);
       if (cachedHistogram) {
-        onProgress(100);
         const cachedStats = calculateBookStatsFromLemmaHistogram(cachedHistogram, settings, model, activeProfile);
         return {
           ...cachedStats,
@@ -238,7 +239,6 @@ export default function LibraryPage() {
       const bundledHistogram = await loadBundledBookLemmaHistogram(book.id);
       if (bundledHistogram) {
         await completeBookLemmaHistogram(book.id, book.createdAt, analysisModelKey, bundledHistogram);
-        onProgress(100);
         const bundledStats = calculateBookStatsFromLemmaHistogram(bundledHistogram, settings, model, activeProfile);
         return {
           ...bundledStats,
@@ -246,6 +246,8 @@ export default function LibraryPage() {
         };
       }
 
+      const [lemmaDict, nlp] = await Promise.all([loadLemmaDict(), loadCompromise()]);
+      if (refreshRunIdRef.current !== runId) return null;
       let lastReportedPercent = -1;
       onProgress(0);
       const savedSegments = await loadBookLemmaHistogramCheckpoints(book.id, book.createdAt, analysisModelKey);
@@ -282,11 +284,7 @@ export default function LibraryPage() {
         progressPercent,
       };
     } catch (error) {
-      console.warn('library-book-stats-failed', { bookId: book.id, hasNlp: nlp !== null, error });
-      return {
-        ...fallbackStats,
-        progressPercent,
-      };
+      throw new Error(`Book statistics could not be calculated: bookId=${book.id}`, { cause: error });
     }
   };
 
@@ -334,55 +332,22 @@ export default function LibraryPage() {
       setBooks(loadedBooks);
       const booksNeedingRefresh: ImportedBook[] = [];
       const cachedStatsByBookId: Record<string, BookStats> = {};
-      const progressByBookId: Record<string, number> = {};
       for (const book of loadedBooks) {
-        const cached = cacheMap[book.id];
+        const cached = cacheMap[statsCacheKey(activeProfile.id, book.id)];
         const progressPercent = calculateProgressPercent(book);
-        progressByBookId[book.id] = progressPercent;
-
-        if (cached) {
-          cachedStatsByBookId[book.id] = {
-            ...cached.stats,
-            progressPercent,
-          };
-        }
-
         const isFresh = (
           !!cached
           && cached.observationFingerprint === observationFingerprint
           && cached.bookUpdatedAt === book.updatedAt
-          && cached.currentChapter === book.currentChapter
+          && cached.knowledgeThreshold === settings.knowledgeThreshold
         );
-
-        if (!isFresh) {
+        if (isFresh) {
+          cachedStatsByBookId[book.id] = { ...cached.stats, progressPercent };
+        } else {
           booksNeedingRefresh.push(book);
         }
       }
-      setStatsByBookId((previous) => {
-        const next: Record<string, BookStats> = {};
-        for (const book of loadedBooks) {
-          const bookId = book.id;
-          const progressPercent = progressByBookId[bookId] ?? 0;
-          const cachedStats = cachedStatsByBookId[bookId];
-          if (cachedStats) {
-            next[bookId] = cachedStats;
-            continue;
-          }
-          const previousStats = previous[bookId];
-          if (previousStats) {
-            next[bookId] = {
-              ...previousStats,
-              progressPercent,
-            };
-            continue;
-          }
-          next[bookId] = {
-            ...fallbackStats,
-            progressPercent,
-          };
-        }
-        return next;
-      });
+      setStatsByBookId(cachedStatsByBookId);
       setIsLoading(false);
       hasLoadedOnceRef.current = true;
 
@@ -407,22 +372,10 @@ export default function LibraryPage() {
         return;
       }
 
-      setAnalyzingBookProgressById(() => {
-        const next: Record<string, number> = {};
-        for (const book of booksNeedingRefresh) {
-          next[book.id] = 0;
-        }
-        return next;
-      });
-
       fastStatsHandleRef.current = scheduleDeferredTask(() => {
         void (async () => {
           try {
-            const [model, lemmaDict, nlp] = await Promise.all([
-              loadVocabularyModel(),
-              loadLemmaDict(),
-              loadCompromise(),
-            ]);
+            const model = await loadVocabularyModel();
             if (refreshRunIdRef.current !== runId) {
               return;
             }
@@ -436,11 +389,9 @@ export default function LibraryPage() {
                 return;
               }
 
-              const stat = await calculateBookStatsSafe(
+              const stat = await calculateBookStats(
                 book,
                 model,
-                lemmaDict,
-                nlp,
                 runId,
                 activeProfile,
                 settings,
@@ -449,9 +400,6 @@ export default function LibraryPage() {
                     return;
                   }
                   setAnalyzingBookProgressById((previous) => {
-                    if (previous[book.id] === undefined) {
-                      return previous;
-                    }
                     if (previous[book.id] === percent) {
                       return previous;
                     }
@@ -471,11 +419,11 @@ export default function LibraryPage() {
                 delete next[book.id];
                 return next;
               });
-              cacheMap[book.id] = {
+              cacheMap[statsCacheKey(activeProfile.id, book.id)] = {
                 stats: stat,
                 observationFingerprint,
                 bookUpdatedAt: book.updatedAt,
-                currentChapter: book.currentChapter,
+                knowledgeThreshold: settings.knowledgeThreshold,
               };
               saveCachedBookStatsMap(cacheMap);
               await yieldToEventLoop();
@@ -503,7 +451,6 @@ export default function LibraryPage() {
   };
 
   useEffect(() => {
-    void loadCompromise();
     void refreshBooksAndStats();
     const unsubscribe = listenStateUpdated(() => {
       void refreshBooksAndStats();
@@ -626,7 +573,7 @@ export default function LibraryPage() {
               <BookCard
                 key={book.id}
                 book={book}
-                stats={statsByBookId[book.id] ?? fallbackStats}
+                stats={statsByBookId[book.id] ?? null}
                 isAnalyzing={analyzingBookProgressById[book.id] !== undefined}
                 analysisProgressPercent={analyzingBookProgressById[book.id] ?? 0}
                 onOpen={stopBackgroundAnalysis}

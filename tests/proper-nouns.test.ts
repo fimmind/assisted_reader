@@ -14,7 +14,7 @@ import {
   buildBookLemmaHistogramAsync,
   buildResumableBookLemmaHistogramAsync,
   createCachedChapterAnalyzer,
-  createLexicalAnalysisCache,
+  getSessionBookLexicalCache,
   rankParagraphCardTargets,
 } from '../src/core/reader-analysis.js';
 import {
@@ -1825,7 +1825,7 @@ test('reader ranking excludes for in the reported passage', () => {
     .every((target) => target.lemma !== 'for'));
 });
 
-test('cached chapter analysis preserves output and reuses lexical work across refreshes', () => {
+test('cached chapter analysis reuses lexical work across profile changes', () => {
   const model: VocabularyModel = {
     modelKey: 'cached-analysis-test',
     modelName: 'cached-analysis-test',
@@ -1880,8 +1880,8 @@ test('cached chapter analysis preserves output and reuses lexical work across re
     nlpCallCount += 1;
     return nlp(text);
   }) as NonNullable<Parameters<typeof analyzeChapter>[0]['nlp']>;
-  const lexicalCache = createLexicalAnalysisCache();
-  const createAnalyzer = () =>
+  const lexicalCache = getSessionBookLexicalCache('cached-book', 'content-1', model.modelKey, countingNlp);
+  const createAnalyzer = (cache: typeof lexicalCache) =>
     createCachedChapterAnalyzer(
       {
         settings,
@@ -1892,25 +1892,50 @@ test('cached chapter analysis preserves output and reuses lexical work across re
         maxCardsPerParagraph: 2,
         includeCards: false,
       },
-      lexicalCache,
+      cache,
     );
 
-  const firstAnalyzer = createAnalyzer();
+  const firstAnalyzer = createAnalyzer(lexicalCache);
   const first = paragraphs.map(
     (paragraph) =>
       firstAnalyzer({ title: 'Cached', paragraphs: [paragraph] })[0],
   );
   const callsAfterFirstPass = nlpCallCount;
-  const secondAnalyzer = createAnalyzer();
+  const cacheAfterReaderRemount = getSessionBookLexicalCache('cached-book', 'content-1', model.modelKey, countingNlp);
+  assert.strictEqual(cacheAfterReaderRemount, lexicalCache);
+  const secondAnalyzer = createAnalyzer(cacheAfterReaderRemount);
   const second = paragraphs.map(
     (paragraph) =>
       secondAnalyzer({ title: 'Cached', paragraphs: [paragraph] })[0],
+  );
+  const otherProfile: UserProfile = {
+    ...profile,
+    id: 'other-cached-analysis-profile',
+    observations: { record: 0, room: 0, night: 0 },
+  };
+  const switchedProfileAnalyzer = createCachedChapterAnalyzer(
+    {
+      settings,
+      model,
+      profile: otherProfile,
+      lemmaDict: {},
+      nlp: countingNlp,
+      maxCardsPerParagraph: 2,
+      includeCards: false,
+    },
+    cacheAfterReaderRemount,
+  );
+  const switchedProfile = paragraphs.map(
+    (paragraph) =>
+      switchedProfileAnalyzer({ title: 'Cached', paragraphs: [paragraph] })[0],
   );
 
   assert.deepEqual(first, expected);
   assert.deepEqual(second, expected);
   assert.ok(callsAfterFirstPass > 0);
   assert.equal(nlpCallCount, callsAfterFirstPass);
+  assert.notEqual(switchedProfile[0].tokens[1]?.pKnown, second[0].tokens[1]?.pKnown);
+  assert.notStrictEqual(getSessionBookLexicalCache('another-book', 'content-1', model.modelKey, countingNlp), lexicalCache);
 });
 
 test('async book analysis yields while tagging a single large chapter', async () => {

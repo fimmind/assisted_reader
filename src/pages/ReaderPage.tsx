@@ -35,7 +35,7 @@ import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
-import { analyzeChapter, createCachedChapterAnalyzer, createLexicalAnalysisCache, rankParagraphCardTargets } from '@/core/reader-analysis';
+import { analyzeChapter, createCachedChapterAnalyzer, getSessionBookLexicalCache, rankParagraphCardTargets } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
 import type { LazyLexicon } from '@/core/lexicon';
 import type { DefinitionLookupCandidate } from '@/core/definition-target';
@@ -1313,12 +1313,19 @@ export default function ReaderPage() {
       ]);
       if (readerLoadRunIdRef.current !== loadRunId) return;
 
+      const lexicalAnalysisCache = getSessionBookLexicalCache(
+        selectedBook.id,
+        selectedBook.createdAt,
+        model.modelKey,
+        nlp,
+      );
+
       const resources: ReaderResources = {
         model,
         lemmaDict,
         lexicon: loadLexicon(),
         nlp,
-        lexicalAnalysisCache: createLexicalAnalysisCache(),
+        lexicalAnalysisCache,
       };
       resourcesRef.current = resources;
 
