@@ -13,6 +13,7 @@ import { useSettings } from '@/hooks/useSettings';
 import { ContextualDefinitionCard } from '@/components/ContextualDefinitionCard';
 import type { ScoredDefinition } from '@/components/ContextualDefinitionCard';
 import { StudyFlow } from '@/components/StudyFlow';
+import { ReaderVocabularyTestOnboarding } from '@/components/ReaderVocabularyTestOnboarding';
 import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
 import { marginForReductionLevel, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
@@ -2558,6 +2559,7 @@ export default function ReaderPage() {
         />
       )}
     </div>
+    <ReaderVocabularyTestOnboarding readerReady={initialViewportReady} />
     {!initialViewportReady && (
       <div
         className="fixed inset-0 z-[100] flex min-h-screen items-center justify-center overscroll-none bg-background p-6 text-foreground"

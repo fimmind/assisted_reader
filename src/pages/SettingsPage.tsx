@@ -4,6 +4,7 @@ import { ChevronLeft, Trash2, Upload, Download, Plus, RotateCcw, Pencil } from '
 import { useTheme } from '../components/ThemeProvider';
 import { useSettings } from '../hooks/useSettings';
 import { Button } from '@/components/ui/button';
+import { VocabularyTestOnboarding } from '@/components/VocabularyTestOnboarding';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Progress } from '@/components/ui/progress';
@@ -21,6 +22,7 @@ export default function SettingsPage() {
   const { settings, updateSetting } = useSettings();
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string>('');
+  const [quizOpen, setQuizOpen] = useState(false);
   const [vocabularyModel, setVocabularyModel] = useState<VocabularyModel | null>(null);
   const [vocabularyUnavailable, setVocabularyUnavailable] = useState(false);
   const [wsdStatus, setWsdStatus] = useState(getWsdModelStatus);
@@ -156,6 +158,8 @@ export default function SettingsPage() {
             <h2 className="text-xl font-serif font-medium">Profiles</h2>
             <p className="text-sm text-muted-foreground mt-1">Manage who is reading and their progress.</p>
           </div>
+
+          <VocabularyTestOnboarding quizOpen={quizOpen} onQuizOpenChange={setQuizOpen} />
 
           <div className="space-y-4">
             {profiles.map((profile) => (

@@ -29,6 +29,8 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
 };
 
 export const DEFAULT_PROFILE_NAME = 'Default Reader';
+export const DEFAULT_QUIZ_TOTAL_WORDS = 60;
+export const DEFAULT_QUIZ_BATCH_SIZE = 20;
 
 export const CALENDAR_EXCLUSIONS = new Set<string>([
   'monday',

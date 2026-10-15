@@ -5,7 +5,7 @@ import { Moon, Sun, Settings, Upload, GraduationCap } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { Button } from '../components/ui/button';
 import { BookCard } from '../components/BookCard';
-import { QuizModal } from '../components/QuizModal';
+import { VocabularyTestOnboarding, VocabularyTestReminder } from '../components/VocabularyTestOnboarding';
 import { importBookFromFile } from '@/core/book-parser';
 import { deleteBookById, listBooks, seedBooksIfEmpty, upsertBook } from '@/core/books-store';
 import { createSeedBook } from '@/core/seed-book';
@@ -611,6 +611,9 @@ export default function LibraryPage() {
           onChange={onImportFiles}
         />
 
+        <VocabularyTestOnboarding quizOpen={quizOpen} onQuizOpenChange={setQuizOpen} />
+        <VocabularyTestReminder />
+
         {isLoading ? (
           <div className="text-sm text-muted-foreground">Loading library...</div>
         ) : (
@@ -630,8 +633,6 @@ export default function LibraryPage() {
           </div>
         )}
       </main>
-
-      <QuizModal open={quizOpen} onOpenChange={setQuizOpen} />
     </div>
   );
 }

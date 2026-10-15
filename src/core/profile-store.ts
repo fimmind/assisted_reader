@@ -58,6 +58,7 @@ function createDefaultProfile(): UserProfile {
     name: DEFAULT_PROFILE_NAME,
     observations: {},
     createdAt: new Date().toISOString(),
+    vocabularyTestStatus: 'pending',
   };
 }
 
@@ -144,6 +145,27 @@ export function upsertObservationsBatch(observations: Record<string, 0 | 1>): vo
   saveProfileState(state);
 }
 
+function updateVocabularyTestStatus(profileId: string, status: NonNullable<UserProfile['vocabularyTestStatus']>): void {
+  const state = loadProfileState();
+  if (!state.profiles.some((profile) => profile.id === profileId)) {
+    throw new Error(`Cannot update vocabulary test status. Missing profile id=${profileId}`);
+  }
+  saveProfileState({
+    ...state,
+    profiles: state.profiles.map((profile) => profile.id === profileId
+      ? { ...profile, vocabularyTestStatus: status }
+      : profile),
+  });
+}
+
+export function deferVocabularyTest(profileId: string): void {
+  updateVocabularyTestStatus(profileId, 'deferred');
+}
+
+export function completeVocabularyTest(profileId: string): void {
+  updateVocabularyTestStatus(profileId, 'completed');
+}
+
 export function createProfile(name: string): void {
   const trimmedName = name.trim();
   if (trimmedName.length === 0) {
@@ -156,6 +178,7 @@ export function createProfile(name: string): void {
     name: trimmedName,
     observations: {},
     createdAt: new Date().toISOString(),
+    vocabularyTestStatus: 'pending',
   };
   state.profiles.push(profile);
   state.activeProfileId = profile.id;
@@ -213,6 +236,7 @@ export function resetProfileObservations(profileId: string): void {
     throw new Error(`Cannot reset profile. Missing id=${profileId}`);
   }
   profile.observations = {};
+  profile.vocabularyTestStatus = 'pending';
   clearStudyDataForProfile(profileId);
   saveProfileState(state);
 }

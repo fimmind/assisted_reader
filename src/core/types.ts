@@ -204,6 +204,7 @@ export interface UserProfile {
   name: string;
   observations: Record<string, 0 | 1>;
   createdAt: string;
+  vocabularyTestStatus?: 'pending' | 'deferred' | 'completed';
 }
 
 export interface ProfileState {

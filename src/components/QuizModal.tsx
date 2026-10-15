@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { getActiveProfile, loadProfileState, upsertObservationsBatch } from '@/core/profile-store';
+import { completeVocabularyTest, getActiveProfile, loadProfileState, upsertObservationsBatch } from '@/core/profile-store';
+import { DEFAULT_QUIZ_BATCH_SIZE, DEFAULT_QUIZ_TOTAL_WORDS } from '@/core/constants';
 import { loadVocabularyModel } from '@/core/model';
 import { selectAdaptiveBatchWords } from '@/core/quiz';
 import { yieldToBrowser } from '@/lib/browser';
@@ -12,9 +13,11 @@ import { yieldToBrowser } from '@/lib/browser';
 interface QuizModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onComplete: (profileId: string) => void;
 }
 
 interface ActiveQuiz {
+  profileId: string;
   seed: number;
   totalWords: number;
   batchSize: number;
@@ -28,9 +31,9 @@ function getTotalBatches(totalWords: number, batchSize: number): number {
   return Math.ceil(totalWords / safeBatchSize);
 }
 
-export function QuizModal({ open, onOpenChange }: QuizModalProps) {
-  const DEFAULT_TOTAL_WORDS = '60';
-  const DEFAULT_BATCH_SIZE = '20';
+export function QuizModal({ open, onOpenChange, onComplete }: QuizModalProps) {
+  const DEFAULT_TOTAL_WORDS = String(DEFAULT_QUIZ_TOTAL_WORDS);
+  const DEFAULT_BATCH_SIZE = String(DEFAULT_QUIZ_BATCH_SIZE);
   const [step, setStep] = useState<'setup' | 'quiz'>('setup');
   const [totalWordsInput, setTotalWordsInput] = useState(DEFAULT_TOTAL_WORDS);
   const [batchSizeInput, setBatchSizeInput] = useState(DEFAULT_BATCH_SIZE);
@@ -90,6 +93,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
       }
 
       setActiveQuiz({
+        profileId: profile.id,
         seed,
         totalWords: normalizedTotalWords,
         batchSize: normalizedBatchSize,
@@ -131,6 +135,10 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
     await yieldToBrowser();
 
     try {
+      const currentProfile = getActiveProfile(loadProfileState());
+      if (currentProfile.id !== activeQuiz.profileId) {
+        throw new Error('The active profile changed. Close this quiz and start a new test for the selected profile.');
+      }
       const observationUpdates: Record<string, 0 | 1> = {};
       for (const word of activeQuiz.currentWords) {
         const known = checkedWords.has(word);
@@ -140,6 +148,8 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
 
       const queriedCount = activeQuiz.queried.length;
       if (queriedCount >= activeQuiz.totalWords) {
+        completeVocabularyTest(activeQuiz.profileId);
+        onComplete(activeQuiz.profileId);
         resetQuizState();
         onOpenChange(false);
         return;
@@ -154,9 +164,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
       const nextWords = selectAdaptiveBatchWords(model, profile, activeQuiz.queried, nextSeed, nextCount);
 
       if (nextWords.length === 0) {
-        resetQuizState();
-        onOpenChange(false);
-        return;
+        throw new Error('There are no untested words left to finish this quiz. Your submitted answers have been saved. Close this quiz and choose a smaller total.');
       }
 
       setActiveQuiz({
@@ -226,7 +234,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
           <>
             <DialogHeader>
               <DialogTitle className="font-serif text-2xl">Vocabulary Quiz</DialogTitle>
-              <DialogDescription>Test your current vocabulary knowledge.</DialogDescription>
+              <DialogDescription>Estimate which words you know so Easeword can personalize vocabulary assistance.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-6 py-4">
               <div className="grid grid-cols-4 items-center gap-4">
@@ -296,6 +304,7 @@ export function QuizModal({ open, onOpenChange }: QuizModalProps) {
               <DialogTitle className="font-serif text-2xl">
                 Batch {activeQuiz?.currentBatch ?? 1} of {getTotalBatches(activeQuiz?.totalWords ?? 1, activeQuiz?.batchSize ?? 1)}
               </DialogTitle>
+              <DialogDescription>Check the words whose meaning you know. Leave unfamiliar words unchecked.</DialogDescription>
             </DialogHeader>
             <div className="py-4">
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
