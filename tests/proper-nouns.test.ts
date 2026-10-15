@@ -532,14 +532,30 @@ test('contextual POS beats conflicting dictionary lemmas for homographs', () => 
 });
 
 test('sentence spans retain abbreviations, decimals, and exact source offsets', () => {
-  const text = '“Dr. Smith reached the U.S. embassy. It reopened at 3.15 p.m. today.”';
-  const spans = splitSentenceSpans(text);
-  assert.deepEqual(spans.map((span) => span.text), [
-    '“Dr. Smith reached the U.S. embassy.',
-    'It reopened at 3.15 p.m. today.”',
-  ]);
-  for (const span of spans) {
-    assert.equal(text.slice(span.start, span.end), span.text);
+  const cases = [
+    {
+      text: '“Dr. Smith reached the U.S. embassy. It reopened at 3.15 p.m. today.”',
+      expected: ['“Dr. Smith reached the U.S. embassy.', 'It reopened at 3.15 p.m. today.”'],
+    },
+    {
+      text: 'The U.S. Army arrived. It left.',
+      expected: ['The U.S. Army arrived.', 'It left.'],
+    },
+    {
+      text: 'He lived in the U.S. He left.',
+      expected: ['He lived in the U.S.', 'He left.'],
+    },
+    {
+      text: 'She wrote “e.g.” and moved on. Then stopped.',
+      expected: ['She wrote “e.g.” and moved on.', 'Then stopped.'],
+    },
+  ];
+  for (const sample of cases) {
+    const spans = splitSentenceSpans(sample.text);
+    assert.deepEqual(spans.map((span) => span.text), sample.expected);
+    for (const span of spans) {
+      assert.equal(sample.text.slice(span.start, span.end), span.text);
+    }
   }
 });
 

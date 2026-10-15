@@ -27,6 +27,12 @@ const SENTENCE_ABBREVIATIONS = new Set<string>([
   'e.g', 'i.e', 'etc', 'vs', 'p.m', 'a.m', 'u.s', 'u.k',
 ]);
 
+const SENTENCE_START_WORDS = new Set<string>([
+  'a', 'an', 'he', 'her', 'his', 'i', 'it', 'its', 'she', 'the', 'their',
+  'there', 'these', 'they', 'this', 'those', 'we', 'you',
+  'however', 'meanwhile', 'then', 'today', 'tomorrow', 'yesterday',
+]);
+
 type CompromiseTags = string[] | Record<string, unknown>;
 type CompromiseTermNode = {
   text?: string;
@@ -258,15 +264,16 @@ export function splitSentenceSpans(text: string): SentenceSpan[] {
       continue;
     }
 
-    let punctuationEnd = index + 1;
-    while (punctuationEnd < text.length && /[.!?]/.test(text[punctuationEnd])) {
-      punctuationEnd += 1;
+    let punctuationMarkEnd = index + 1;
+    while (punctuationMarkEnd < text.length && /[.!?]/.test(text[punctuationMarkEnd])) {
+      punctuationMarkEnd += 1;
     }
+    let punctuationEnd = punctuationMarkEnd;
     while (punctuationEnd < text.length && /["'”’)}\]]/.test(text[punctuationEnd])) {
       punctuationEnd += 1;
     }
 
-    if (isSentenceTerminator(text, index, punctuationEnd)) {
+    if (isSentenceTerminator(text, index, punctuationMarkEnd, punctuationEnd)) {
       appendSentenceSpan(text, sentenceStart, punctuationEnd, sentences);
       sentenceStart = punctuationEnd;
     }
@@ -293,8 +300,8 @@ function appendSentenceSpan(
   sentences.push({ text: chunk, start: sentenceStart, end: sentenceStart + chunk.length });
 }
 
-function isSentenceTerminator(text: string, index: number, punctuationEnd: number): boolean {
-  const punctuation = text.slice(index, punctuationEnd);
+function isSentenceTerminator(text: string, index: number, punctuationMarkEnd: number, punctuationEnd: number): boolean {
+  const punctuation = text.slice(index, punctuationMarkEnd);
   if (punctuation.includes('!') || punctuation.includes('?') || punctuation.length > 1) {
     return true;
   }
@@ -306,15 +313,19 @@ function isSentenceTerminator(text: string, index: number, punctuationEnd: numbe
     return false;
   }
 
-  const precedingToken = text.slice(0, index).match(/((?:[A-Za-z]+\.)*[A-Za-z]+)$/)?.[1]?.toLowerCase() ?? '';
+  const precedingToken = text.slice(0, index).match(/((?:[A-Za-z]+\.)*[A-Za-z]+)$/)?.[1] ?? '';
   const nextWord = text.slice(punctuationEnd).match(/^\s*([A-Za-z]+)/)?.[1] ?? '';
-  if (SENTENCE_TITLE_ABBREVIATIONS.has(precedingToken)) {
+  if (SENTENCE_TITLE_ABBREVIATIONS.has(precedingToken.toLowerCase())) {
     return false;
   }
   if (precedingToken.length === 1 && /^[A-Z]/.test(nextWord)) {
     return false;
   }
-  if (SENTENCE_ABBREVIATIONS.has(precedingToken) && /^[a-z]/.test(nextWord)) {
+  if (SENTENCE_ABBREVIATIONS.has(precedingToken.toLowerCase()) && /^[a-z]/.test(nextWord)) {
+    return false;
+  }
+  if (/^(?:[A-Z]\.)+[A-Z]$/.test(precedingToken) && nextWord.length > 0
+    && (!/^[A-Z]/.test(nextWord) || !SENTENCE_START_WORDS.has(nextWord.toLowerCase()))) {
     return false;
   }
   return true;

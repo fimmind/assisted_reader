@@ -185,6 +185,17 @@ test('WSD sentence windows retain abbreviation context and target offsets', () =
     'Dr. Smith reached the U.S. embassy.',
     'Then he left.',
   ]);
+
+  const capitalizedParagraph = 'The U.S. Army arrived. It left.';
+  const armyStart = capitalizedParagraph.indexOf('Army');
+  const armyWindow = sentenceWindowForWsd(
+    [capitalizedParagraph],
+    0,
+    { text: capitalizedParagraph, start: armyStart, end: armyStart + 'Army'.length },
+    1,
+  );
+  assert.equal(armyWindow.text, 'The U.S. Army arrived.');
+  assert.equal(armyWindow.text.slice(armyWindow.start, armyWindow.end), 'Army');
 });
 
 test('nested WSD preserves passage and parent order, retaining nearest parents within the budget', () => {
