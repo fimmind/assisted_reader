@@ -2,6 +2,7 @@ import { Tokenizer } from '@huggingface/tokenizers';
 import * as ort from 'onnxruntime-web/wasm';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm?url';
 import type { WsdContext } from '../core/wsd-filter';
+import { fitNestedWsdContext } from '../core/wsd-filter';
 
 interface ModelPart {
   name: string;
@@ -336,7 +337,11 @@ async function score(request: ScoreRequest): Promise<number[]> {
   const item = bucket.index[request.word];
   if (!item) throw new Error(`SayedShaun vectors are missing for WordNet word: word=${request.word}`);
   const [first, ids] = item;
-  const context = (await encodeTexts([markedContext(request.context)]))[0];
+  if (!tokenizer) throw new Error('SayedShaun WSD tokenizer is not loaded');
+  const activeTokenizer = tokenizer;
+  const fitted = fitNestedWsdContext(request.context, (candidate) =>
+    activeTokenizer.encode(markedContext(candidate), { add_special_tokens: true }).ids.length <= MAX_TOKENS);
+  const context = (await encodeTexts([markedContext(fitted)]))[0];
   return request.senseIds.map((id) => {
     const position = ids.indexOf(id);
     if (position < 0) throw new Error(`SayedShaun vector is missing for WordNet sense: word=${request.word} id=${id}`);

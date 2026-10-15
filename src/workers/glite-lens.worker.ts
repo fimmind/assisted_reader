@@ -2,6 +2,7 @@ import { Tokenizer } from '@huggingface/tokenizers';
 import * as ort from 'onnxruntime-web/wasm';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm?url';
 import type { WsdContext } from '../core/wsd-filter';
+import { fitNestedWsdContext } from '../core/wsd-filter';
 
 interface ModelPart { name: string; size: number; sha256: string }
 interface VectorPart { count: number; metadataSha256: string; vectorsSha256: string; bytes: number }
@@ -299,7 +300,11 @@ async function score(request: ScoreRequest): Promise<number[]> {
   const item = bucket.index[request.word];
   if (!item) throw new Error(`Glite LENS vectors are missing for WordNet word: word=${request.word}`);
   const [first, ids] = item;
-  const context = await encodeContext(request.context);
+  if (!tokenizer) throw new Error('Glite LENS tokenizer is not loaded');
+  const activeTokenizer = tokenizer;
+  const fitted = fitNestedWsdContext(request.context, (candidate) =>
+    activeTokenizer.encode(candidate.text, { add_special_tokens: false }).ids.length <= CONTEXT_MAX_TOKENS - 2);
+  const context = await encodeContext(fitted);
   return request.senseIds.map((id) => {
     const position = ids.indexOf(id);
     if (position < 0) throw new Error(`Glite LENS vector is missing for WordNet sense: word=${request.word} id=${id}`);

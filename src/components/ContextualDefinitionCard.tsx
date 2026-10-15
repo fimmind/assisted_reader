@@ -8,6 +8,7 @@ import { WordDefinitionCard } from './WordDefinitionCard';
 
 interface ContextualDefinitionCardProps extends ComponentProps<typeof WordDefinitionCard> {
   context: WsdContext | null;
+  outerContexts?: readonly string[];
   contextParagraphs: readonly string[];
   contextParagraphIndex: number;
   wsdMode: ReaderSettings['wsdMode'];
@@ -42,6 +43,7 @@ function contextForScoring(
 
 export function ContextualDefinitionCard({
   context,
+  outerContexts,
   contextParagraphs,
   contextParagraphIndex,
   wsdMode,
@@ -82,6 +84,9 @@ export function ContextualDefinitionCard({
     } else {
       try {
         scoringContext = contextForScoring(contextParagraphs, contextParagraphIndex, context, wsdContextUnit, wsdContextSize);
+        if (outerContexts !== undefined) {
+          scoringContext = { ...scoringContext, outerContexts };
+        }
       } catch (failure) {
         if (!(failure instanceof RangeError)) {
           throw failure;

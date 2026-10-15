@@ -1,7 +1,7 @@
 import { Tokenizer } from '@huggingface/tokenizers';
 import * as ort from 'onnxruntime-web/wasm';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm?url';
-import { buildWsdPrompt } from '../core/wsd-filter';
+import { buildWsdPrompt, fitNestedWsdContext } from '../core/wsd-filter';
 import type { WsdContext } from '../core/wsd-filter';
 
 interface ModelPart {
@@ -440,7 +440,11 @@ async function score(request: ScoreRequest): Promise<void> {
   if (!session || !tokenizer || !letters) {
     throw new Error('WSD model is not initialized after preparation.');
   }
-  const prompt = buildWsdPrompt(request.context, request.glosses, letters);
+  const activeTokenizer = tokenizer;
+  const answerLetters = letters;
+  const context = fitNestedWsdContext(request.context, (candidate) =>
+    activeTokenizer.encode(buildWsdPrompt(candidate, request.glosses, answerLetters), { add_special_tokens: true }).ids.length <= MAX_TOKENS);
+  const prompt = buildWsdPrompt(context, request.glosses, letters);
   const ids = tokenizer.encode(prompt, { add_special_tokens: true }).ids;
   if (ids.length > MAX_TOKENS) {
     throw new RangeError(`WSD prompt exceeds model context: tokens=${ids.length} maximum=${MAX_TOKENS}`);

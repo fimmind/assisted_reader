@@ -10,7 +10,8 @@ import {
 } from '../src/core/lexicon.js';
 import type { WordNetEntry } from '../src/core/lexicon.js';
 import type { LexiconEntry } from '../src/core/types.js';
-import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetDefinitionIds, wordNetGlosses } from '../src/core/wsd-filter.js';
+import { filterWordNetEntry, fitNestedWsdContext, paragraphWindowForWsd, sentenceWindowForWsd, wordNetDefinitionIds, wordNetGlosses } from '../src/core/wsd-filter.js';
+import type { WsdContext } from '../src/core/wsd-filter.js';
 
 function loadWordNetEntry(word: string): WordNetEntry {
   const fileName = resolveLexiconBucketFileName(word);
@@ -165,6 +166,34 @@ test('WSD context windows include nearby sentences or paragraphs and preserve th
   assert.equal(paragraph.text, paragraphs[1]);
   assert.ok(threeParagraphs.text.includes(paragraphs[0]));
   assert.ok(threeParagraphs.text.includes(paragraphs[2]));
+});
+
+test('nested WSD preserves passage and parent order, retaining nearest parents within the budget', () => {
+  const paragraphs = ['Earlier passage.', 'She sat beside the river bank. Another sentence.'];
+  const rootStart = paragraphs[1].indexOf('bank');
+  const passage = sentenceWindowForWsd(paragraphs, 1, { text: paragraphs[1], start: rootStart, end: rootStart + 4 }, 1);
+  const context: WsdContext = {
+    text: 'A body of water.', start: 2, end: 6,
+    outerContexts: ['Sloping land beside a body of water.', passage.text],
+  };
+  const complete = fitNestedWsdContext(context, (candidate) => candidate.text.length <= 200);
+  assert.equal(complete.text, `${passage.text}\n\n${context.outerContexts?.[0]}\n\n${context.text}`);
+  assert.equal(complete.text.slice(complete.start, complete.end), 'body');
+  assert.ok(!complete.text.includes('Another sentence'));
+  const limited = fitNestedWsdContext(context, (candidate) => candidate.text.length <= 60);
+  assert.equal(limited.text, `${context.outerContexts?.[0]}\n\n${context.text}`);
+  assert.equal(limited.text.slice(limited.start, limited.end), 'body');
+  assert.equal(context.start, 2);
+});
+
+test('nested WSD keeps a late target when its own definition exceeds the budget', () => {
+  const text = `${'long definition '.repeat(100)}body of water`;
+  const start = text.indexOf('body');
+  const context: WsdContext = { text, start, end: start + 4, outerContexts: ['Outer passage.'] };
+  const fitted = fitNestedWsdContext(context, (candidate) => candidate.text.length <= 40);
+  assert.ok(fitted.text.length <= 40);
+  assert.equal(fitted.text.slice(fitted.start, fitted.end), 'body');
+  assert.throws(() => fitNestedWsdContext(context, (candidate) => candidate.text.length <= 3), /target exceeds model context/);
 });
 
 interface Reply {

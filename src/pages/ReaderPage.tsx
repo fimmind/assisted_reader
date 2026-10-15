@@ -142,6 +142,8 @@ interface WordPopupState {
   contextStart: number;
   contextEnd: number;
   contextIsBookParagraph: boolean;
+  originalContext: WsdContext | null;
+  parentContexts: readonly string[];
 }
 
 type DefinitionLoadStatus = 'loading' | 'ready' | 'error';
@@ -1739,6 +1741,10 @@ export default function ReaderPage() {
       contextStart: initialCandidate.selectionStart,
       contextEnd: initialCandidate.selectionEnd,
       contextIsBookParagraph: triggerDefinitionText === null,
+      originalContext: triggerDefinitionText === null
+        ? { text: contextText, start: initialCandidate.selectionStart, end: initialCandidate.selectionEnd }
+        : null,
+      parentContexts: [],
     };
   }, []);
 
@@ -1778,6 +1784,11 @@ export default function ReaderPage() {
             lookupWord: normalizeToken(resolvedCandidate.lookupWord),
             contextStart: resolvedCandidate.selectionStart,
             contextEnd: resolvedCandidate.selectionEnd,
+            originalContext: popupCandidate.contextIsBookParagraph ? {
+              text: popupCandidate.contextText,
+              start: resolvedCandidate.selectionStart,
+              end: resolvedCandidate.selectionEnd,
+            } : popupCandidate.originalContext,
             triggerSelection: popupCandidate.triggerSelection === null ? null : {
               definitionText: popupCandidate.triggerSelection.definitionText,
               end: resolvedCandidate.selectionEnd,
@@ -1891,6 +1902,7 @@ export default function ReaderPage() {
     parentPopupIndex: number | null,
     click: DefinitionWordClick,
     sourceParagraphIndex: number,
+    originalContext: WsdContext | null,
   ) => {
     const target = resolveDefinitionWordTarget(click);
     const lookupCandidates = buildDefinitionLookupCandidates(
@@ -1899,12 +1911,26 @@ export default function ReaderPage() {
       click.end,
       target,
     );
-    const popup = createWordPopupFromElement(
+    const createdPopup = createWordPopupFromElement(
       click.element,
       lookupCandidates,
       sourceParagraphIndex,
       click.definitionText,
     );
+    const parent = parentPopupIndex === null ? null : wordPopups[parentPopupIndex];
+    if (parentPopupIndex !== null && !parent) {
+      throw new RangeError(`Missing parent word popup: index=${parentPopupIndex}`);
+    }
+    if (!parent && originalContext === null) {
+      throw new Error(`Missing original passage for definition lookup: word=${target.lemma} paragraph=${sourceParagraphIndex}`);
+    }
+    const popup: WordPopupState = {
+      ...createdPopup,
+      originalContext: parent ? parent.originalContext : originalContext,
+      parentContexts: parent && !parent.contextIsBookParagraph
+        ? [parent.contextText, ...parent.parentContexts]
+        : [],
+    };
     setWordPopups((previous) => {
       const ancestors = parentPopupIndex === null
         ? []
@@ -1912,7 +1938,7 @@ export default function ReaderPage() {
       return [...ancestors, popup];
     });
     requestPopupDefinition(popup);
-  }, [createWordPopupFromElement, requestPopupDefinition, resolveDefinitionWordTarget]);
+  }, [createWordPopupFromElement, requestPopupDefinition, resolveDefinitionWordTarget, wordPopups]);
 
   const closeAllWordPopups = useCallback(() => {
     setWordPopups([]);
@@ -2378,7 +2404,7 @@ export default function ReaderPage() {
                             fontSize={settings.fontSize}
                             definitionStatus={definitionStatus}
                             onDefinitionWordClick={(click) => {
-                              openDefinitionWordPopup(null, click, sourceIndex);
+                              openDefinitionWordPopup(null, click, sourceIndex, contextForCard(analysis, target));
                             }}
                             onMarkKnown={() => markLemma(target.lemma, true, sourceIndex)}
                             onMarkUnknown={() => markLemma(target.lemma, false, sourceIndex)}
@@ -2464,6 +2490,12 @@ export default function ReaderPage() {
           ?? createFallbackLexiconEntry(popup.lookupWord || popup.target.lemma);
         const definition = resolveLexiconEntry(rawDefinition, popup.target);
         const observation = observationLabels[popup.target.lemma];
+        const originalContext = popup.contextIsBookParagraph || popup.originalContext === null ? null
+          : settings.wsdContextUnit === 'sentence'
+            ? sentenceWindowForWsd(chapterParagraphs, popup.sourceParagraphIndex, popup.originalContext, settings.wsdContextSize)
+            : paragraphWindowForWsd(chapterParagraphs, popup.sourceParagraphIndex, popup.originalContext, settings.wsdContextSize);
+        const outerContexts = popup.contextIsBookParagraph ? undefined
+          : [...popup.parentContexts, ...(originalContext === null ? [] : [originalContext.text])];
         return (
           <div
             key={popup.id}
@@ -2478,6 +2510,7 @@ export default function ReaderPage() {
             <ContextualDefinitionCard
               definition={definition}
               context={{ text: popup.contextText, start: popup.contextStart, end: popup.contextEnd }}
+              outerContexts={outerContexts}
               contextParagraphs={popup.contextIsBookParagraph ? chapterParagraphs : [popup.contextText]}
               contextParagraphIndex={popup.contextIsBookParagraph ? popup.sourceParagraphIndex : 0}
               wsdMode={settings.wsdMode}
@@ -2491,7 +2524,7 @@ export default function ReaderPage() {
               fontSize={settings.fontSize}
               definitionStatus={popup.definitionStatus}
               onDefinitionWordClick={(click) => {
-                openDefinitionWordPopup(popupIndex, click, popup.sourceParagraphIndex);
+                openDefinitionWordPopup(popupIndex, click, popup.sourceParagraphIndex, null);
               }}
               onMarkKnown={() => {
                 markLemma(popup.target.lemma, true, popup.sourceParagraphIndex);

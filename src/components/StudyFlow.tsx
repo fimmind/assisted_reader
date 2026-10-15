@@ -77,7 +77,7 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CardSessionScreen } from "@/components/CardSessionScreen";
 import { StudyDefinitionText } from "@/components/StudyDefinitionText";
-import { resolveStudyWsdItem } from "@/core/study-wsd";
+import { resolveStudyWsdItem, studyWsdContext } from "@/core/study-wsd";
 import { startWsdModel } from "@/core/wsd-runtime";
 import { yieldToBrowser } from "@/lib/browser";
 
@@ -1262,6 +1262,7 @@ export function StudyFlow({
                 <StudyDefinitionText
                   key={`${currentBatch.id}-${item.lexicalItemId}-${currentBatch.cardSession.currentPosition}`}
                   definitions={definitions}
+                  originalContext={studyWsdContext(item, currentSession.textScope, settings)}
                   settings={settings}
                   model={model}
                   lemmaDict={lemmaDict}

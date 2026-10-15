@@ -5,6 +5,7 @@ import { createFallbackLexiconEntry, resolveLexiconEntry } from '@/core/lexicon'
 import type { LazyLexicon } from '@/core/lexicon';
 import { getActiveProfile, loadProfileState } from '@/core/profile-store';
 import { marginForReductionLevel } from '@/core/wsd-filter';
+import type { WsdContext } from '@/core/wsd-filter';
 import type { ChapterAnalysisInput } from '@/core/reader-analysis';
 import type { DefinitionTarget, LexiconEntry, ReaderSettings, VocabularyModel } from '@/core/types';
 import { ContextualDefinitionCard } from './ContextualDefinitionCard';
@@ -13,6 +14,7 @@ import type { DefinitionTextSelection, DefinitionWordClick } from './WordDefinit
 
 interface StudyDefinitionTextProps {
   definitions: string[];
+  originalContext: WsdContext;
   settings: ReaderSettings;
   model: VocabularyModel;
   lemmaDict: Record<string, string>;
@@ -25,6 +27,7 @@ interface LookupPopup {
   id: number;
   anchor: DOMRect;
   context: string;
+  parentContexts: readonly string[];
   selection: DefinitionTextSelection;
   target: DefinitionTarget;
   entry: LexiconEntry | null;
@@ -49,6 +52,7 @@ function popupPosition(anchor: DOMRect, width: number, height: number): { top: n
 
 export function StudyDefinitionText({
   definitions,
+  originalContext,
   settings,
   model,
   lemmaDict,
@@ -84,10 +88,15 @@ export function StudyDefinitionText({
     const anchor = click.element.getBoundingClientRect();
     const position = popupPosition(anchor, 270, 250);
     const id = nextPopupId.current++;
+    const parent = parentIndex === null ? null : popups[parentIndex];
+    if (parentIndex !== null && !parent) {
+      throw new RangeError(`Missing parent study popup: index=${parentIndex}`);
+    }
     const popup: LookupPopup = {
       id,
       anchor,
       context: click.definitionText,
+      parentContexts: parent ? [parent.context, ...parent.parentContexts] : [],
       selection: { definitionText: click.definitionText, start: initial.selectionStart, end: initial.selectionEnd },
       target: initial.target,
       entry: null,
@@ -192,6 +201,7 @@ export function StudyDefinitionText({
                 definition={definition}
                 definitionStatus={popup.status}
                 context={{ text: popup.context, start: popup.selection.start, end: popup.selection.end }}
+                outerContexts={[...popup.parentContexts, originalContext.text]}
                 contextParagraphs={[popup.context]}
                 contextParagraphIndex={0}
                 wsdMode={settings.wsdMode}

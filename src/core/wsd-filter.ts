@@ -5,6 +5,47 @@ export interface WsdContext {
   text: string;
   start: number;
   end: number;
+  /** Ancestor definitions from nearest to furthest, followed by the original passage. */
+  outerContexts?: readonly string[];
+}
+
+/** Fit nested lookups using the model tokenizer, adding whole ancestors until one exceeds the budget. */
+export function fitNestedWsdContext(context: WsdContext, fits: (candidate: WsdContext) => boolean): WsdContext {
+  if (context.outerContexts === undefined) {
+    return context;
+  }
+  validateContextSource([context.text], 0, context);
+  let selected: WsdContext = { text: context.text, start: context.start, end: context.end };
+  if (!fits(selected)) {
+    const target = context.text.slice(context.start, context.end);
+    selected = { text: target, start: 0, end: target.length };
+    if (!fits(selected)) {
+      throw new RangeError(`WSD target exceeds model context: target=${target}`);
+    }
+    let low = 0;
+    let high = Math.max(context.start, context.text.length - context.end);
+    while (low < high) {
+      const radius = Math.ceil((low + high) / 2);
+      const start = Math.max(0, context.start - radius);
+      const end = Math.min(context.text.length, context.end + radius);
+      const candidate = { text: context.text.slice(start, end), start: context.start - start, end: context.end - start };
+      if (fits(candidate)) {
+        selected = candidate;
+        low = radius;
+      } else {
+        high = radius - 1;
+      }
+    }
+  }
+  for (const outer of context.outerContexts) {
+    const prefix = `${outer}\n\n`;
+    const candidate = { text: prefix + selected.text, start: prefix.length + selected.start, end: prefix.length + selected.end };
+    if (!fits(candidate)) {
+      break;
+    }
+    selected = candidate;
+  }
+  return selected;
 }
 
 interface SentenceSegment {
