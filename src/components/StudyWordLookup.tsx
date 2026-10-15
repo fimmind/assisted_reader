@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import type { StudyCardItem } from '@/core/study';
 import { analyzeChapter } from '@/core/reader-analysis';
 import { buildDefinitionLookupCandidates, createDefinitionTarget, lookupFirstAvailableDefinition } from '@/core/definition-target';
 import { createFallbackLexiconEntry, resolveLexiconEntry } from '@/core/lexicon';
@@ -12,8 +14,14 @@ import { ContextualDefinitionCard } from './ContextualDefinitionCard';
 import { renderClickableDefinition } from './WordDefinitionCard';
 import type { DefinitionTextSelection, DefinitionWordClick } from './WordDefinitionCard';
 
-interface StudyDefinitionTextProps {
-  definitions: string[];
+interface StudyWordLookupContent {
+  renderText: (text: string) => ReactNode;
+  renderSentence: (item: StudyCardItem) => ReactNode;
+  popups: ReactNode;
+}
+
+interface StudyWordLookupProps {
+  children: (content: StudyWordLookupContent) => ReactNode;
   originalContext: WsdContext;
   settings: ReaderSettings;
   model: VocabularyModel;
@@ -27,7 +35,7 @@ interface LookupPopup {
   id: number;
   anchor: DOMRect;
   context: string;
-  parentContexts: readonly string[];
+  outerContexts: readonly string[];
   selection: DefinitionTextSelection;
   target: DefinitionTarget;
   entry: LexiconEntry | null;
@@ -50,8 +58,8 @@ function popupPosition(anchor: DOMRect, width: number, height: number): { top: n
   };
 }
 
-export function StudyDefinitionText({
-  definitions,
+export function StudyWordLookup({
+  children,
   originalContext,
   settings,
   model,
@@ -59,7 +67,7 @@ export function StudyDefinitionText({
   lexicon,
   nlp,
   onMarkWord,
-}: StudyDefinitionTextProps) {
+}: StudyWordLookupProps) {
   const [popups, setPopups] = useState<LookupPopup[]>([]);
   const nextPopupId = useRef(0);
   const popupElements = useRef<Array<HTMLDivElement | null>>([]);
@@ -83,7 +91,7 @@ export function StudyDefinitionText({
     const candidates = buildDefinitionLookupCandidates(click.definitionText, click.start, click.end, target);
     const initial = candidates[0];
     if (!initial) {
-      return;
+      throw new RangeError('Cannot open a study word popup without lookup candidates.');
     }
     const anchor = click.element.getBoundingClientRect();
     const position = popupPosition(anchor, 270, 250);
@@ -96,7 +104,8 @@ export function StudyDefinitionText({
       id,
       anchor,
       context: click.definitionText,
-      parentContexts: parent ? [parent.context, ...parent.parentContexts] : [],
+      outerContexts: parent ? [parent.context, ...parent.outerContexts]
+        : click.definitionText === originalContext.text ? [] : [originalContext.text],
       selection: { definitionText: click.definitionText, start: initial.selectionStart, end: initial.selectionEnd },
       target: initial.target,
       entry: null,
@@ -143,7 +152,7 @@ export function StudyDefinitionText({
       if (popupElement) {
         const index = Number(popupElement.dataset.studyPopupIndex);
         setPopups((current) => current.slice(0, index + 1));
-      } else if (!target?.closest('[data-word-popup-trigger="true"]')) {
+      } else {
         setPopups([]);
       }
     };
@@ -161,27 +170,54 @@ export function StudyDefinitionText({
       }
     };
     document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('scroll', onScroll, true);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('scroll', onScroll, true);
     };
   }, [popups.length]);
 
   const selectedRoot = popups[0]?.selection;
-  return (
+  const renderText = (text: string): ReactNode => renderClickableDefinition(text, selectedRoot, (click) => openWord(click, null));
+  const renderSentence = (item: StudyCardItem): ReactNode => {
+    const target = item.example.targetSpans[0];
+    if (!target) {
+      throw new RangeError(`Study example has no target span: word=${item.lemma}`);
+    }
+    const sentenceOffset = originalContext.start - target.start;
+    if (originalContext.text.slice(sentenceOffset, sentenceOffset + item.example.sentence.length) !== item.example.sentence) {
+      throw new RangeError(`Study example does not match lookup context: word=${item.lemma}`);
+    }
+    const renderRange = (start: number, end: number): ReactNode => {
+      const offset = sentenceOffset + start;
+      const selection = selectedRoot?.definitionText === originalContext.text
+        ? { definitionText: item.example.sentence.slice(start, end), start: selectedRoot.start - offset, end: selectedRoot.end - offset }
+        : undefined;
+      return renderClickableDefinition(item.example.sentence.slice(start, end), selection, (click) => openWord({
+        ...click,
+        definitionText: originalContext.text,
+        start: offset + click.start,
+        end: offset + click.end,
+      }, null));
+    };
+    const nodes: ReactNode[] = [];
+    let cursor = 0;
+    for (const span of [...item.example.targetSpans].sort((left, right) => left.start - right.start)) {
+      nodes.push(<Fragment key={`before-${span.start}`}>{renderRange(cursor, span.start)}</Fragment>);
+      nodes.push(
+        <mark key={`${span.start}-${span.end}`} className="rounded-sm bg-primary/15 px-0.5 text-inherit">
+          {renderRange(span.start, span.end)}
+        </mark>,
+      );
+      cursor = span.end;
+    }
+    nodes.push(<Fragment key="after">{renderRange(cursor, item.example.sentence.length)}</Fragment>);
+    return <>{nodes}</>;
+  };
+  const popupContent = (
     <>
-      {definitions.length === 1 ? (
-        <p className="leading-relaxed">{renderClickableDefinition(definitions[0], selectedRoot, (click) => openWord(click, null))}</p>
-      ) : (
-        <ol className="list-inside list-decimal space-y-2 leading-relaxed">
-          {definitions.map((definition) => (
-            <li key={definition}>{renderClickableDefinition(definition, selectedRoot, (click) => openWord(click, null))}</li>
-          ))}
-        </ol>
-      )}
       {popups.map((popup, index) => {
         const entry = popup.entry ?? createFallbackLexiconEntry(popup.target.lemma);
         const definition = resolveLexiconEntry(entry, popup.target);
@@ -191,7 +227,7 @@ export function StudyDefinitionText({
             key={popup.id}
             ref={(element) => { popupElements.current[index] = element; }}
             data-study-popup-index={index}
-            className="fixed z-[60]"
+            className="fixed z-[60] w-[270px] max-w-[calc(100vw-16px)]"
             style={{ top: popup.top, left: popup.left }}
           >
             {popup.status === 'loading' ? (
@@ -201,7 +237,7 @@ export function StudyDefinitionText({
                 definition={definition}
                 definitionStatus={popup.status}
                 context={{ text: popup.context, start: popup.selection.start, end: popup.selection.end }}
-                outerContexts={[...popup.parentContexts, originalContext.text]}
+                outerContexts={popup.outerContexts}
                 contextParagraphs={[popup.context]}
                 contextParagraphIndex={0}
                 wsdMode={settings.wsdMode}
@@ -227,4 +263,5 @@ export function StudyDefinitionText({
       })}
     </>
   );
+  return children({ renderText, renderSentence, popups: popupContent });
 }

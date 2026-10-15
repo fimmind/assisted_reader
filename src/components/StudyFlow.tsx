@@ -76,7 +76,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CardSessionScreen } from "@/components/CardSessionScreen";
-import { StudyDefinitionText } from "@/components/StudyDefinitionText";
+import { StudyWordLookup } from "@/components/StudyWordLookup";
 import { resolveStudyWsdItem, studyWsdContext } from "@/core/study-wsd";
 import { startWsdModel } from "@/core/wsd-runtime";
 import { yieldToBrowser } from "@/lib/browser";
@@ -175,27 +175,6 @@ function formatPartOfSpeech(value: StudyCardItem["partOfSpeech"]): string {
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function renderHighlightedSentence(item: StudyCardItem): ReactNode {
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-  for (const span of [...item.example.targetSpans].sort(
-    (left, right) => left.start - right.start,
-  )) {
-    nodes.push(item.example.sentence.slice(cursor, span.start));
-    nodes.push(
-      <mark
-        key={`${span.start}-${span.end}`}
-        className="rounded-sm bg-primary/15 px-0.5 text-inherit"
-      >
-        {item.example.sentence.slice(span.start, span.end)}
-      </mark>,
-    );
-    cursor = span.end;
-  }
-  nodes.push(item.example.sentence.slice(cursor));
-  return <>{nodes}</>;
 }
 
 function replaceProfile(
@@ -1215,72 +1194,82 @@ export function StudyFlow({
       ...item.alternativeTranscriptions,
     ]);
     return (
-      <CardSessionScreen
-        title={currentBatch.kind === "first-pass" ? "Study" : "Review missed"}
-        position={currentBatch.cardSession.currentPosition}
-        total={currentBatch.items.length}
-        interaction={interaction}
-        canRespond={wsdReady}
-        frontContent={
-          <div className="space-y-6 text-center">
-            <div>
-              <h1 className="font-serif text-3xl font-medium sm:text-4xl">
-                {item.spelling}
-              </h1>
-              <p className="mt-2 text-[0.75em] font-medium uppercase tracking-wide text-primary">
-                {formatPartOfSpeech(item.partOfSpeech)}
-              </p>
-            </div>
-            <p className="font-serif text-base leading-relaxed text-foreground/70 sm:text-lg">
-              {renderHighlightedSentence(item)}
-            </p>
-          </div>
-        }
-        revealContent={
-          <div className="space-y-2 text-left">
-            {pronunciation.length > 0 && (
-              <div className="text-center text-muted-foreground">
-                <p className="text-base">{pronunciation}</p>
+      <StudyWordLookup
+        key={`${currentBatch.id}-${item.lexicalItemId}-${currentBatch.cardSession.currentPosition}`}
+        originalContext={studyWsdContext(item, currentSession.textScope, settings)}
+        settings={settings}
+        model={model}
+        lemmaDict={lemmaDict}
+        lexicon={lexicon}
+        nlp={nlp}
+        onMarkWord={onMarkWord}
+      >
+        {({ renderText, renderSentence, popups }) => (
+          <CardSessionScreen
+            title={currentBatch.kind === "first-pass" ? "Study" : "Review missed"}
+            position={currentBatch.cardSession.currentPosition}
+            total={currentBatch.items.length}
+            interaction={interaction}
+            canRespond={wsdReady}
+            frontContent={
+              <div className="space-y-6 text-center">
+                <div>
+                  <h1 className="font-serif text-3xl font-medium sm:text-4xl">
+                    {renderText(item.spelling)}
+                  </h1>
+                  <p className="mt-2 text-[0.75em] font-medium uppercase tracking-wide text-primary">
+                    {renderText(formatPartOfSpeech(item.partOfSpeech))}
+                  </p>
+                </div>
+                <p className="font-serif text-base leading-relaxed text-foreground/70 sm:text-lg">
+                  {renderSentence(item)}
+                </p>
+                {popups}
               </div>
-            )}
-            <div className="mx-auto w-full max-w-prose text-center">
-              {visibleItem === null ? (
-                resolvedWsdItem?.key === currentWsdKey && resolvedWsdItem.error ? (
-                  <div className="space-y-2 text-sm">
-                    <p role="alert">WSD could not prepare this card: {resolvedWsdItem.error}</p>
-                    <Button type="button" variant="outline" onClick={() => {
-                      if (settings.wsdMode !== 'none') {
-                        startWsdModel(settings.wsdMode);
-                      }
-                      setWsdAttempt((attempt) => attempt + 1);
-                    }}>Retry WSD</Button>
+            }
+            revealContent={
+              <div className="space-y-2 text-left">
+                {pronunciation.length > 0 && (
+                  <div className="text-center text-muted-foreground">
+                    <p className="text-base">{pronunciation}</p>
                   </div>
-                ) : (
-                  <p role="status" className="text-sm text-muted-foreground">Disambiguating definitions...</p>
-                )
-              ) : (
-                <StudyDefinitionText
-                  key={`${currentBatch.id}-${item.lexicalItemId}-${currentBatch.cardSession.currentPosition}`}
-                  definitions={definitions}
-                  originalContext={studyWsdContext(item, currentSession.textScope, settings)}
-                  settings={settings}
-                  model={model}
-                  lemmaDict={lemmaDict}
-                  lexicon={lexicon}
-                  nlp={nlp}
-                  onMarkWord={onMarkWord}
-                />
-              )}
-            </div>
-          </div>
-        }
-        canUndo={currentSession.lastUndo !== null}
-        errorMessage={errorMessage}
-        onExit={() => onOpenChange(false)}
-        onReveal={revealCard}
-        onRespond={respondAndFinalize}
-        onUndo={undo}
-      />
+                )}
+                <div className="mx-auto w-full max-w-prose text-center">
+                  {visibleItem === null ? (
+                    resolvedWsdItem?.key === currentWsdKey && resolvedWsdItem.error ? (
+                      <div className="space-y-2 text-sm">
+                        <p role="alert">WSD could not prepare this card: {resolvedWsdItem.error}</p>
+                        <Button type="button" variant="outline" onClick={() => {
+                          if (settings.wsdMode !== 'none') {
+                            startWsdModel(settings.wsdMode);
+                          }
+                          setWsdAttempt((attempt) => attempt + 1);
+                        }}>Retry WSD</Button>
+                      </div>
+                    ) : (
+                      <p role="status" className="text-sm text-muted-foreground">Disambiguating definitions...</p>
+                    )
+                  ) : (
+                    definitions.length === 1 ? (
+                      <p className="leading-relaxed">{renderText(definitions[0])}</p>
+                    ) : (
+                      <ol className="list-inside list-decimal space-y-2 leading-relaxed">
+                        {definitions.map((definition) => <li key={definition}>{renderText(definition)}</li>)}
+                      </ol>
+                    )
+                  )}
+                </div>
+              </div>
+            }
+            canUndo={currentSession.lastUndo !== null}
+            errorMessage={errorMessage}
+            onExit={() => onOpenChange(false)}
+            onReveal={revealCard}
+            onRespond={respondAndFinalize}
+            onUndo={undo}
+          />
+        )}
+      </StudyWordLookup>
     );
   }
 
@@ -1375,10 +1364,25 @@ export function StudyFlow({
                     key={item.lexicalItemId}
                     className="flex items-baseline justify-between gap-4 py-3"
                   >
-                    <span className="font-medium">{item.spelling}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatPartOfSpeech(item.partOfSpeech)}
-                    </span>
+                    <StudyWordLookup
+                      originalContext={studyWsdContext(item, currentSession.textScope, settings)}
+                      settings={settings}
+                      model={model}
+                      lemmaDict={lemmaDict}
+                      lexicon={lexicon}
+                      nlp={nlp}
+                      onMarkWord={onMarkWord}
+                    >
+                      {({ renderText, popups }) => (
+                        <>
+                          <span className="font-medium">{renderText(item.spelling)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {renderText(formatPartOfSpeech(item.partOfSpeech))}
+                          </span>
+                          {popups}
+                        </>
+                      )}
+                    </StudyWordLookup>
                   </li>
                 ))}
               </ul>
@@ -1396,10 +1400,25 @@ export function StudyFlow({
                     key={item.lexicalItemId}
                     className="flex items-baseline justify-between gap-4 py-3"
                   >
-                    <span className="font-medium">{item.spelling}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatPartOfSpeech(item.partOfSpeech)}
-                    </span>
+                    <StudyWordLookup
+                      originalContext={studyWsdContext(item, currentSession.textScope, settings)}
+                      settings={settings}
+                      model={model}
+                      lemmaDict={lemmaDict}
+                      lexicon={lexicon}
+                      nlp={nlp}
+                      onMarkWord={onMarkWord}
+                    >
+                      {({ renderText, popups }) => (
+                        <>
+                          <span className="font-medium">{renderText(item.spelling)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {renderText(formatPartOfSpeech(item.partOfSpeech))}
+                          </span>
+                          {popups}
+                        </>
+                      )}
+                    </StudyWordLookup>
                   </li>
                 ))}
               </ul>
