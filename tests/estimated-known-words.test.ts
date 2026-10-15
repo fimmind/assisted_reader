@@ -89,4 +89,5 @@ test('adaptive quiz keeps seeded order while removing each selected candidate', 
   assert.deepEqual(selectAdaptiveBatchWords(quizModel, profile, ['alpha'], 42, 2), [
     'beta', 'gamma',
   ]);
+  assert.deepEqual(selectAdaptiveBatchWords(quizModel, profile, [], 42, 0), []);
 });

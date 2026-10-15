@@ -58,6 +58,9 @@ export function selectAdaptiveBatchWords(
   seed: number,
   count: number,
 ): string[] {
+  if (!Number.isFinite(count) || count <= 0) {
+    return [];
+  }
   const queriedSet = new Set<string>(alreadyQueried.map((word) => word.toLowerCase()));
   const rng = createRng(seed);
   const output: string[] = [];
