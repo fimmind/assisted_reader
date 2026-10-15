@@ -11,9 +11,6 @@ export interface WsdContext {
 
 /** Fit nested lookups using the model tokenizer, adding whole ancestors until one exceeds the budget. */
 export function fitNestedWsdContext(context: WsdContext, fits: (candidate: WsdContext) => boolean): WsdContext {
-  if (context.outerContexts === undefined) {
-    return context;
-  }
   validateContextSource([context.text], 0, context);
   let selected: WsdContext = { text: context.text, start: context.start, end: context.end };
   if (!fits(selected)) {
@@ -22,22 +19,25 @@ export function fitNestedWsdContext(context: WsdContext, fits: (candidate: WsdCo
     if (!fits(selected)) {
       throw new RangeError(`WSD target exceeds model context: target=${target}`);
     }
-    let low = 0;
+    let low = 1;
     let high = Math.max(context.start, context.text.length - context.end);
-    while (low < high) {
-      const radius = Math.ceil((low + high) / 2);
+    while (low <= high) {
+      const radius = Math.floor((low + high) / 2);
       const start = Math.max(0, context.start - radius);
       const end = Math.min(context.text.length, context.end + radius);
       const candidate = { text: context.text.slice(start, end), start: context.start - start, end: context.end - start };
       if (fits(candidate)) {
         selected = candidate;
-        low = radius;
+        low = radius + 1;
       } else {
         high = radius - 1;
       }
     }
   }
-  for (const outer of context.outerContexts) {
+  if (!fits(selected)) {
+    throw new RangeError(`Fitted WSD context exceeds model budget: start=${selected.start} end=${selected.end} length=${selected.text.length}`);
+  }
+  for (const outer of context.outerContexts ?? []) {
     const prefix = `${outer}\n\n`;
     const candidate = { text: prefix + selected.text, start: prefix.length + selected.start, end: prefix.length + selected.end };
     if (!fits(candidate)) {

@@ -294,7 +294,10 @@ function tokenIds(text: string): number[] {
     throw new Error('SayedShaun WSD tokenizer is not loaded');
   }
   const ids = tokenizer.encode(text, { add_special_tokens: true }).ids;
-  return ids.length <= MAX_TOKENS ? ids : [...ids.slice(0, MAX_TOKENS - 1), 102];
+  if (ids.length > MAX_TOKENS) {
+    throw new RangeError(`SayedShaun WSD input exceeds token budget: tokens=${ids.length} maximum=${MAX_TOKENS}`);
+  }
+  return ids;
 }
 
 async function encodeTexts(texts: string[]): Promise<Float32Array[]> {
@@ -341,7 +344,15 @@ async function score(request: ScoreRequest): Promise<number[]> {
   const activeTokenizer = tokenizer;
   const fitted = fitNestedWsdContext(request.context, (candidate) =>
     activeTokenizer.encode(markedContext(candidate), { add_special_tokens: true }).ids.length <= MAX_TOKENS);
-  const context = (await encodeTexts([markedContext(fitted)]))[0];
+  const fittedText = markedContext(fitted);
+  const fittedIds = activeTokenizer.encode(fittedText, { add_special_tokens: true }).ids;
+  if (fittedIds.length > MAX_TOKENS
+    || fittedIds.filter((id) => id === 30522).length !== 1
+    || fittedIds.filter((id) => id === 30523).length !== 1
+    || fittedIds.indexOf(30522) >= fittedIds.indexOf(30523)) {
+    throw new Error(`SayedShaun WSD fitted context lost target markers: word=${request.word} tokens=${fittedIds.length}`);
+  }
+  const context = (await encodeTexts([fittedText]))[0];
   return request.senseIds.map((id) => {
     const position = ids.indexOf(id);
     if (position < 0) throw new Error(`SayedShaun vector is missing for WordNet sense: word=${request.word} id=${id}`);
