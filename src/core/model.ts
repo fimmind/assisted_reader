@@ -132,10 +132,9 @@ export async function loadVocabularyModel(): Promise<VocabularyModel> {
 
 export function estimateTheta(model: VocabularyModel, profile: UserProfile): number {
   const priorVariance = 25.0;
-  let theta = 0;
   const observedEntries = Object.entries(profile.observations);
   if (observedEntries.length === 0) {
-    return theta;
+    return 0;
   }
 
   const observations: Array<{ idx: number; label: 0 | 1 }> = [];
@@ -148,34 +147,77 @@ export function estimateTheta(model: VocabularyModel, profile: UserProfile): num
   }
 
   if (observations.length === 0) {
-    return theta;
+    return 0;
   }
 
-  for (let step = 0; step < 20; step += 1) {
+  const gradientAt = (theta: number): number => {
     let grad = 0;
-    let hess = 0;
-
     for (const observation of observations) {
       const difficulty = model.difficulties[observation.idx];
       const probability = sigmoid(theta - difficulty);
       grad += observation.label - probability;
-      hess -= probability * (1 - probability);
     }
-
     grad -= theta / priorVariance;
-    hess -= 1 / priorVariance;
+    return grad;
+  };
 
-    if (Math.abs(hess) < 1e-8) {
-      break;
-    }
-
-    const nextTheta = theta - grad / hess;
-    if (!Number.isFinite(nextTheta)) {
-      break;
-    }
-    theta = nextTheta;
+  const initialGradient = gradientAt(0);
+  if (Math.abs(initialGradient) < 1e-10) {
+    return 0;
   }
 
+  let lower: number;
+  let upper: number;
+  if (initialGradient > 0) {
+    lower = 0;
+    upper = 1;
+    for (let expansion = 0; gradientAt(upper) > 0 && expansion < 64; expansion += 1) {
+      upper *= 2;
+    }
+    if (gradientAt(upper) > 0) {
+      throw new RangeError(`Could not bracket vocabulary ability above zero: observations=${observations.length}`);
+    }
+  } else {
+    upper = 0;
+    lower = -1;
+    for (let expansion = 0; gradientAt(lower) < 0 && expansion < 64; expansion += 1) {
+      lower *= 2;
+    }
+    if (gradientAt(lower) < 0) {
+      throw new RangeError(`Could not bracket vocabulary ability below zero: observations=${observations.length}`);
+    }
+  }
+
+  let theta = 0;
+  for (let step = 0; step < 100; step += 1) {
+    let gradient = 0;
+    let hessian = -1 / priorVariance;
+    for (const observation of observations) {
+      const probability = sigmoid(theta - model.difficulties[observation.idx]);
+      gradient += observation.label - probability;
+      hessian -= probability * (1 - probability);
+    }
+    gradient -= theta / priorVariance;
+    if (Math.abs(gradient) < 1e-9) {
+      return theta;
+    }
+
+    if (gradient > 0) {
+      lower = theta;
+    } else {
+      upper = theta;
+    }
+
+    const newtonTheta = theta - gradient / hessian;
+    theta = Number.isFinite(newtonTheta) && newtonTheta > lower && newtonTheta < upper
+      ? newtonTheta
+      : lower + ((upper - lower) / 2);
+  }
+
+  const finalGradient = gradientAt(theta);
+  if (Math.abs(finalGradient) >= 1e-7) {
+    throw new Error(`Vocabulary ability estimation did not converge: observations=${observations.length} theta=${theta} gradient=${finalGradient}`);
+  }
   return theta;
 }
 
