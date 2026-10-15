@@ -19,7 +19,8 @@ import { marginForReductionLevel, paragraphWindowForWsd, sentenceWindowForWsd, w
 import type { WsdContext } from '@/core/wsd-filter';
 import { scoreWordSenses, startWsdModel, stopWsdModel, waitForWsdModelReady } from '@/core/wsd-runtime';
 import { cn } from '@/lib/utils';
-import { deleteBookById, getBookById, listBooks, upsertBook } from '@/core/books-store';
+import { deleteBookById, getBookById, listBooks } from '@/core/books-store';
+import { saveBookReadingProgress, withBookReadingProgress } from '@/core/reading-progress-store';
 import { WORD_RE } from '@/core/constants';
 import { createFallbackLexiconEntry, loadLexicon, resolveLexiconEntry } from '@/core/lexicon';
 import {
@@ -820,6 +821,8 @@ export default function ReaderPage() {
   const [studyScope, setStudyScope] = useState<StudyTextScope | null>(null);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
+  const readerProfileIdRef = useRef<string | null>(null);
+  const readerLoadRunIdRef = useRef(0);
   const chapterAnalysisRef = useRef<ParagraphAnalysis[]>([]);
   const definitionsByLemmaRef = useRef<Map<string, LexiconEntry>>(new Map());
   const automaticDefinitionRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
@@ -875,6 +878,7 @@ export default function ReaderPage() {
       && (prepared.analysisComplete || prepared.analyses.size > 0)
       && nextBook.currentChapterProgress === 0 && !pendingReaderAnchorRef.current
       ? prepared : null;
+    bookRef.current = nextBook;
     beginReaderLoading();
     const analyses = buildPlainChapterAnalysis(nextBook);
     activePreparedOpeningRef.current = readyOpening;
@@ -1251,29 +1255,63 @@ export default function ReaderPage() {
     }, 700);
   }, [requestAutomaticDefinition, resolveAnalysisAnchorIndex]);
 
+  const saveReaderBookProgress = useCallback((nextBook: ImportedBook): void => {
+    const profileId = readerProfileIdRef.current;
+    if (!profileId) throw new Error(`Cannot save reading progress without a loaded profile for book=${nextBook.id}.`);
+    saveBookReadingProgress(profileId, nextBook.id, {
+      currentChapter: nextBook.currentChapter,
+      currentChapterProgress: nextBook.currentChapterProgress,
+    });
+  }, []);
+
+  const persistCurrentChapterProgress = useCallback((force: boolean): void => {
+    const currentBook = bookRef.current;
+    if (!currentBook || isRestoringProgressRef.current || initialReaderLoadPendingRef.current) return;
+
+    const progress = calculateScrollProgressFromDocument();
+    if (!force && Math.abs(progress - lastPersistedChapterProgressRef.current) < 0.01) return;
+    const nextBook: ImportedBook = { ...currentBook, currentChapterProgress: progress };
+    saveReaderBookProgress(nextBook);
+    lastPersistedChapterProgressRef.current = progress;
+    bookRef.current = nextBook;
+  }, [saveReaderBookProgress]);
+
+  useLayoutEffect(() => () => persistCurrentChapterProgress(true), [persistCurrentChapterProgress]);
+
   const loadReaderState = useCallback(async () => {
+    const profileId = getActiveProfile(loadProfileState()).id;
+    const loadRunId = readerLoadRunIdRef.current + 1;
+    readerLoadRunIdRef.current = loadRunId;
+    readerProfileIdRef.current = profileId;
+    bookRef.current = null;
     beginReaderLoading();
     preparedChapterOpeningRef.current = null;
     activePreparedOpeningRef.current = null;
     instantChapterTransitionRef.current = null;
     setIsLoading(true);
+    setStudyOpen(false);
+    setWordPopups([]);
+    pendingReaderAnchorRef.current = null;
 
     try {
       const preferredBook = bookId ? await getBookById(bookId) : null;
-      const selectedBook = preferredBook ?? (await listBooks())[0] ?? null;
-      if (!selectedBook) {
+      const storedBook = preferredBook ?? (await listBooks())[0] ?? null;
+      if (readerLoadRunIdRef.current !== loadRunId) return;
+      if (!storedBook) {
         setBook(null);
         setChapterAnalysis([]);
         setDefinitionsByLemma(new Map());
         resourcesRef.current = null;
         return;
       }
+      const selectedBook = withBookReadingProgress(storedBook, profileId);
 
       const [model, lemmaDict, nlp] = await Promise.all([
         loadVocabularyModel(),
         loadLemmaDict(),
         loadCompromise(),
       ]);
+      if (readerLoadRunIdRef.current !== loadRunId) return;
 
       const resources: ReaderResources = {
         model,
@@ -1284,14 +1322,16 @@ export default function ReaderPage() {
       };
       resourcesRef.current = resources;
 
+      bookRef.current = selectedBook;
       setBook(selectedBook);
       recomputeVisibleAnalysis(selectedBook, resources, 'reset');
     } catch (error) {
+      if (readerLoadRunIdRef.current !== loadRunId) return;
       console.error('reader-load-failed', { error, bookId });
       initialReaderLoadPendingRef.current = false;
       setInitialViewportReady(true);
     } finally {
-      setIsLoading(false);
+      if (readerLoadRunIdRef.current === loadRunId) setIsLoading(false);
     }
   }, [beginReaderLoading, bookId, recomputeVisibleAnalysis]);
 
@@ -1335,6 +1375,18 @@ export default function ReaderPage() {
   useEffect(() => {
     void loadReaderState();
     const unsubscribe = listenStateUpdated(() => {
+      const profileState = loadProfileState();
+      if (readerProfileIdRef.current !== profileState.activeProfileId) {
+        if (progressPersistTimeoutRef.current !== null) {
+          window.clearTimeout(progressPersistTimeoutRef.current);
+          progressPersistTimeoutRef.current = null;
+        }
+        if (profileState.profiles.some((profile) => profile.id === readerProfileIdRef.current)) {
+          persistCurrentChapterProgress(true);
+        }
+        void loadReaderState();
+        return;
+      }
       nextChapterPreloadControllerRef.current?.abort();
       setNextChapterPreloadRevision((revision) => revision + 1);
       const resources = resourcesRef.current;
@@ -1347,8 +1399,12 @@ export default function ReaderPage() {
       pendingAnalysisAnchorIndexRef.current = null;
       recomputeVisibleAnalysis(currentBook, resources, 'preserve', anchorParagraphIndex ?? undefined);
     });
-    return unsubscribe;
-  }, [loadReaderState, recomputeVisibleAnalysis]);
+    return () => {
+      readerLoadRunIdRef.current += 1;
+      bookRef.current = null;
+      unsubscribe();
+    };
+  }, [loadReaderState, persistCurrentChapterProgress, recomputeVisibleAnalysis]);
 
   useEffect(() => () => {
     clearDeferredHandle(deferredAnalysisHandleRef.current);
@@ -1452,31 +1508,6 @@ export default function ReaderPage() {
     upsertObservation(lemma, known);
   };
 
-  const persistCurrentChapterProgress = useCallback((force: boolean) => {
-    const currentBook = bookRef.current;
-    if (!currentBook) {
-      return;
-    }
-    if (!force && isRestoringProgressRef.current) {
-      return;
-    }
-
-    const progress = calculateScrollProgressFromDocument();
-    if (!force && Math.abs(progress - lastPersistedChapterProgressRef.current) < 0.01) {
-      return;
-    }
-    lastPersistedChapterProgressRef.current = progress;
-
-    const nextBook: ImportedBook = {
-      ...currentBook,
-      currentChapterProgress: progress,
-    };
-    bookRef.current = nextBook;
-    void upsertBook(nextBook).catch((error) => {
-      console.warn('reader-scroll-progress-save-failed', { bookId: nextBook.id, chapter: nextBook.currentChapter, progress, error });
-    });
-  }, []);
-
   const scheduleChapterProgressPersist = useCallback(() => {
     if (progressPersistTimeoutRef.current !== null) {
       window.clearTimeout(progressPersistTimeoutRef.current);
@@ -1513,13 +1544,10 @@ export default function ReaderPage() {
       ...book,
       currentChapter: nextChapter,
       currentChapterProgress: 0,
-      updatedAt: new Date().toISOString(),
     };
+    saveReaderBookProgress(nextBook);
     openReaderChapter(nextBook);
     window.scrollTo({ top: 0, behavior: 'auto' });
-    void upsertBook(nextBook).catch((error) => {
-      console.warn('reader-chapter-progress-save-failed', { bookId: nextBook.id, chapter: nextBook.currentChapter, error });
-    });
   };
 
   useEffect(() => {
@@ -1694,6 +1722,7 @@ export default function ReaderPage() {
     persistCurrentChapterProgress(true);
     try {
       await deleteBookById(book.id);
+      bookRef.current = null;
       setLocation('/');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to delete book.';
@@ -2331,9 +2360,9 @@ export default function ReaderPage() {
                 }
                 persistCurrentChapterProgress(true);
                 pendingReaderAnchorRef.current = anchor;
-                const nextBook: ImportedBook = { ...book, currentChapter: targetChapter, currentChapterProgress: 0, updatedAt: new Date().toISOString() };
+                const nextBook: ImportedBook = { ...book, currentChapter: targetChapter, currentChapterProgress: 0 };
+                saveReaderBookProgress(nextBook);
                 openReaderChapter(nextBook);
-                void upsertBook(nextBook).catch((error) => console.warn('reader-link-progress-save-failed', { bookId: book.id, targetChapter, error }));
               }}
             >
               {chapterReaderBlocks.map((block, blockIndex) => {

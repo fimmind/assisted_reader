@@ -12,6 +12,7 @@ import { createSeedBook } from '@/core/seed-book';
 import { buildResumableBookLemmaHistogramAsync, calculateBookStatsFromLemmaHistogram } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
+import { withBookReadingProgress } from '@/core/reading-progress-store';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
 import { getCachedBookLemmaHistogram } from '@/core/book-lemma-histogram-cache';
@@ -306,6 +307,7 @@ export default function LibraryPage() {
       }
       const profileState = loadProfileState();
       const activeProfile = getActiveProfile(profileState);
+      loadedBooks = loadedBooks.map((book) => withBookReadingProgress(book, activeProfile.id));
       const settings = loadReaderSettings();
       const observationFingerprint = computeObservationFingerprint(activeProfile.observations);
       const cacheMap = loadCachedBookStatsMap();

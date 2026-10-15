@@ -1,4 +1,5 @@
 import { BOOKS_DB_NAME, BOOKS_DB_VERSION, BOOKS_FALLBACK_STORAGE_KEY, BOOKS_STORE_NAME } from './constants';
+import { clearReadingProgressForBook } from './reading-progress-store.js';
 import type {
   ImportedBook,
   ReaderContentBlock,
@@ -349,6 +350,7 @@ export async function deleteBookById(id: string): Promise<void> {
     if (id === 'seed-hitchhiker') {
       localStorage.setItem(DISMISSED_SEED_BOOK_KEY, 'true');
     }
+    clearReadingProgressForBook(id);
     return;
   }
 
@@ -366,6 +368,7 @@ export async function deleteBookById(id: string): Promise<void> {
   if (id === 'seed-hitchhiker') {
     localStorage.setItem(DISMISSED_SEED_BOOK_KEY, 'true');
   }
+  clearReadingProgressForBook(id);
 }
 
 export async function seedBooksIfEmpty(seedBooks: ImportedBook[]): Promise<void> {

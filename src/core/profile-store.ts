@@ -1,6 +1,7 @@
 import { DEFAULT_PROFILE_NAME, DEFAULT_READER_SETTINGS, PROFILE_STORAGE_KEY, SETTINGS_STORAGE_KEY } from './constants';
 import { createId } from './math';
 import { clearStudyDataForProfile } from './study-store';
+import { clearReadingProgressForProfile, initializeReadingProgress } from './reading-progress-store.js';
 import type { ProfileState, ReaderSettings, UserProfile } from './types';
 
 const STATE_EVENT = 'easeword-state-updated';
@@ -85,7 +86,7 @@ export function listenStateUpdated(callback: () => void): () => void {
   return () => window.removeEventListener(STATE_EVENT, callback);
 }
 
-export function loadProfileState(): ProfileState {
+function readProfileState(): ProfileState {
   const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
   if (!raw) {
     const state = ensureProfileState(null);
@@ -109,6 +110,12 @@ export function loadProfileState(): ProfileState {
     persistProfileStateWithoutEvent(state);
     return state;
   }
+}
+
+export function loadProfileState(): ProfileState {
+  const state = readProfileState();
+  initializeReadingProgress(state.activeProfileId);
+  return state;
 }
 
 export function saveProfileState(state: ProfileState): void {
@@ -226,6 +233,7 @@ export function deleteProfile(profileId: string): void {
     state.activeProfileId = nextProfiles[0].id;
   }
   clearStudyDataForProfile(profileId);
+  clearReadingProgressForProfile(profileId);
   saveProfileState(state);
 }
 

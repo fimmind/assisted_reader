@@ -1,6 +1,7 @@
 import type { ReaderSettings } from './types';
 
 export const PROFILE_STORAGE_KEY = 'easeword-profiles-v1';
+export const READING_PROGRESS_STORAGE_KEY = 'easeword-reading-progress-v1';
 export const SETTINGS_STORAGE_KEY = 'easeword-settings-v1';
 export const STUDY_STORAGE_KEY = 'easeword-study-v1';
 export const BOOKS_FALLBACK_STORAGE_KEY = 'easeword-books-fallback-v1';

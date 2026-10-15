@@ -131,15 +131,18 @@ export interface BookChapter {
   linear?: boolean;
 }
 
-export interface ImportedBook {
+export interface BookReadingProgress {
+  currentChapter: number;
+  currentChapterProgress: number;
+}
+
+export interface ImportedBook extends BookReadingProgress {
   id: string;
   title: string;
   author: string;
   sourceType: 'txt' | 'epub' | 'fb2' | 'pdf';
   createdAt: string;
   updatedAt: string;
-  currentChapter: number;
-  currentChapterProgress: number;
   chapters: BookChapter[];
 }
 
