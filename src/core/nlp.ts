@@ -978,7 +978,7 @@ export function makeLemmaCandidates(
           : contextualPartOfSpeech === 'adjective'
             ? normalizeToken(adjective)
             : '';
-      if (contextualCandidate.length > 0 && contextualCandidate !== normalized) {
+      if (contextualCandidate.length > 0) {
         candidates.push(contextualCandidate);
       }
 

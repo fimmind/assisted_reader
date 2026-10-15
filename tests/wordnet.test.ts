@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { Tokenizer } from '@huggingface/tokenizers';
 import {
   combineDictionaryEntries, createLazyWordNet, createLazyWiktionaryLexicon, createLexicon,
   resolveLexiconBucketFileName, resolveLexiconEntry, resolveLexiconPronunciations,
@@ -12,6 +13,7 @@ import type { WordNetEntry } from '../src/core/lexicon.js';
 import type { LexiconEntry } from '../src/core/types.js';
 import { filterWordNetEntry, fitNestedWsdContext, paragraphWindowForWsd, sentenceWindowForWsd, wordNetDefinitionIds, wordNetGlosses } from '../src/core/wsd-filter.js';
 import type { WsdContext } from '../src/core/wsd-filter.js';
+import { splitSentenceSpans } from '../src/core/nlp.js';
 
 function loadWordNetEntry(word: string): WordNetEntry {
   const fileName = resolveLexiconBucketFileName(word);
@@ -168,6 +170,23 @@ test('WSD context windows include nearby sentences or paragraphs and preserve th
   assert.ok(threeParagraphs.text.includes(paragraphs[2]));
 });
 
+test('WSD sentence windows retain abbreviation context and target offsets', () => {
+  const paragraph = 'Dr. Smith reached the U.S. embassy. Then he left.';
+  const start = paragraph.indexOf('embassy');
+  const window = sentenceWindowForWsd(
+    [paragraph],
+    0,
+    { text: paragraph, start, end: start + 'embassy'.length },
+    1,
+  );
+  assert.ok(window.text.includes('U.S.'));
+  assert.equal(window.text.slice(window.start, window.end), 'embassy');
+  assert.deepEqual(splitSentenceSpans(paragraph).map((span) => span.text), [
+    'Dr. Smith reached the U.S. embassy.',
+    'Then he left.',
+  ]);
+});
+
 test('nested WSD preserves passage and parent order, retaining nearest parents within the budget', () => {
   const paragraphs = ['Earlier passage.', 'She sat beside the river bank. Another sentence.'];
   const rootStart = paragraphs[1].indexOf('bank');
@@ -194,6 +213,28 @@ test('nested WSD keeps a late target when its own definition exceeds the budget'
   assert.ok(fitted.text.length <= 40);
   assert.equal(fitted.text.slice(fitted.start, fitted.end), 'body');
   assert.throws(() => fitNestedWsdContext(context, (candidate) => candidate.text.length <= 3), /target exceeds model context/);
+});
+
+test('model-tokenizer WSD fitting preserves a late target and both markers', () => {
+  const tokenizer = new Tokenizer(
+    JSON.parse(readFileSync('public/wsd/sayedshaun-wsd/tokenizer.json', 'utf8')) as object,
+    JSON.parse(readFileSync('public/wsd/sayedshaun-wsd/tokenizer_config.json', 'utf8')) as object,
+  );
+  const text = `${'He walked along the quiet road and watched the trees '.repeat(35)}before reaching the bank.`;
+  const start = text.lastIndexOf('bank');
+  const context: WsdContext = { text, start, end: start + 'bank'.length };
+  const markTarget = (candidate: WsdContext): string =>
+    `${candidate.text.slice(0, candidate.start)}<classify>${candidate.text.slice(candidate.start, candidate.end)}</classify>${candidate.text.slice(candidate.end)}`;
+  const fits = (candidate: WsdContext): boolean =>
+    tokenizer.encode(markTarget(candidate), { add_special_tokens: true }).ids.length <= 256;
+  const fitted = fitNestedWsdContext(context, fits);
+  const ids = tokenizer.encode(markTarget(fitted), { add_special_tokens: true }).ids;
+
+  assert.equal(fitted.text.slice(fitted.start, fitted.end), 'bank');
+  assert.ok(ids.length <= 256);
+  assert.equal(ids.filter((id) => id === 30522).length, 1);
+  assert.equal(ids.filter((id) => id === 30523).length, 1);
+  assert.ok(ids.indexOf(30522) < ids.indexOf(30523));
 });
 
 interface Reply {

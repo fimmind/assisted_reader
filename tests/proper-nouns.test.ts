@@ -6,6 +6,7 @@ import {
   buildHighConfidenceProperNounLexicon,
   contextualDeinflectTaggedTerms,
   inferPartsOfSpeech,
+  splitSentenceSpans,
   tagSentenceTerms,
 } from '../src/core/nlp.js';
 import {
@@ -467,6 +468,79 @@ test('contextual deinflection corrects slung to sling as a verb', () => {
   assert.notEqual(slungIndex, -1);
   assert.equal(result.tokens[slungIndex], 'sling');
   assert.equal(result.partsOfSpeech[slungIndex], 'verb');
+});
+
+test('contextual POS beats conflicting dictionary lemmas for homographs', () => {
+  const cases: Array<{
+    sentence: string;
+    dictionary: Record<string, string>;
+    expected: Array<{ token: string; occurrence: number; lemma: string }>;
+  }> = [
+    {
+      sentence: 'He lives here.',
+      dictionary: { lives: 'life' },
+      expected: [{ token: 'lives', occurrence: 0, lemma: 'live' }],
+    },
+    {
+      sentence: 'The lives of others.',
+      dictionary: { lives: 'life' },
+      expected: [{ token: 'lives', occurrence: 0, lemma: 'life' }],
+    },
+    {
+      sentence: 'They saw a saw.',
+      dictionary: { saw: 'see' },
+      expected: [
+        { token: 'saw', occurrence: 0, lemma: 'see' },
+        { token: 'saw', occurrence: 1, lemma: 'saw' },
+      ],
+    },
+    {
+      sentence: 'It was a better book.',
+      dictionary: { better: 'well' },
+      expected: [{ token: 'better', occurrence: 0, lemma: 'good' }],
+    },
+    {
+      sentence: 'She turned left.',
+      dictionary: { left: 'leave' },
+      expected: [{ token: 'left', occurrence: 0, lemma: 'left' }],
+    },
+  ];
+
+  for (const sample of cases) {
+    const terms = tagSentenceTerms(sample.sentence, nlp);
+    const candidates = [
+      ...terms.map((term) => term.normalized),
+      'live', 'life', 'see', 'saw', 'good', 'well', 'leave', 'left',
+    ];
+    const lowerToIdx = new Map(candidates.map((word, index) => [word, index]));
+    const result = contextualDeinflectTaggedTerms(
+      terms,
+      sample.dictionary,
+      lowerToIdx,
+      new Set<string>(),
+      false,
+      nlp,
+    );
+    for (const expected of sample.expected) {
+      const tokenIndices = terms.flatMap((term, index) =>
+        term.normalized === expected.token ? [index] : []);
+      const tokenIndex = tokenIndices[expected.occurrence];
+      assert.notEqual(tokenIndex, undefined, `Missing ${expected.token}: ${sample.sentence}`);
+      assert.equal(result.tokens[tokenIndex], expected.lemma, sample.sentence);
+    }
+  }
+});
+
+test('sentence spans retain abbreviations, decimals, and exact source offsets', () => {
+  const text = '“Dr. Smith reached the U.S. embassy. It reopened at 3.15 p.m. today.”';
+  const spans = splitSentenceSpans(text);
+  assert.deepEqual(spans.map((span) => span.text), [
+    '“Dr. Smith reached the U.S. embassy.',
+    'It reopened at 3.15 p.m. today.”',
+  ]);
+  for (const span of spans) {
+    assert.equal(text.slice(span.start, span.end), span.text);
+  }
 });
 
 test('contextual POS inference preserves genuine verb and noun ambiguity', () => {
