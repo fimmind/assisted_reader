@@ -953,6 +953,7 @@ export function makeLemmaCandidates(
 
   const candidates: string[] = [];
   let dictionaryConflictsWithOtherPartOfSpeech = false;
+  let nlpCandidatesResolved = false;
 
   const apostropheCandidates = buildApostropheLemmaCandidates(normalized);
   for (const candidate of apostropheCandidates) {
@@ -993,6 +994,7 @@ export function makeLemmaCandidates(
       dictionaryConflictsWithOtherPartOfSpeech =
         dictionaryLemma.length > 0 &&
         otherPartOfSpeechCandidates.includes(dictionaryLemma);
+      nlpCandidatesResolved = true;
       if (
         dictionaryLemma.length > 0 &&
         dictionaryLemma !== normalized &&
@@ -1001,13 +1003,16 @@ export function makeLemmaCandidates(
         candidates.push(dictionaryLemma);
       }
 
-      candidates.push(...otherPartOfSpeechCandidates);
+      if (contextualPartOfSpeech === null) {
+        candidates.push(...otherPartOfSpeechCandidates);
+      }
     } catch (error) {
       console.warn('compromise-lemmatization-failed', { raw: term.raw, error });
     }
   }
 
   if (
+    !nlpCandidatesResolved &&
     typeof lemmaFromDict === 'string' &&
     lemmaFromDict.length > 0 &&
     !dictionaryConflictsWithOtherPartOfSpeech
