@@ -1,4 +1,4 @@
-import { SENTENCE_RE } from './constants';
+import { splitSentenceSpans } from './nlp';
 import type { LexiconEntry, LexiconSense, WsdMode } from './types';
 
 export interface WsdContext {
@@ -140,15 +140,13 @@ export function sentenceWindowForWsd(
   validateContextSource(paragraphs, paragraphIndex, context);
   const segments: SentenceSegment[] = [];
   for (let index = Math.max(0, paragraphIndex - 2); index < Math.min(paragraphs.length, paragraphIndex + 3); index += 1) {
-    const matcher = new RegExp(SENTENCE_RE.source, SENTENCE_RE.flags);
-    for (const match of paragraphs[index].matchAll(matcher)) {
-      const text = match[0].trim();
-      if (text.length === 0) {
-        continue;
-      }
-      const leadingWhitespace = match[0].length - match[0].trimStart().length;
-      const start = match.index + leadingWhitespace;
-      segments.push({ text, paragraphIndex: index, start, end: start + text.length });
+    for (const sentence of splitSentenceSpans(paragraphs[index])) {
+      segments.push({
+        text: sentence.text,
+        paragraphIndex: index,
+        start: sentence.start,
+        end: sentence.end,
+      });
     }
   }
   const targetIndex = segments.findIndex((segment) =>
