@@ -61,28 +61,24 @@ export function selectAdaptiveBatchWords(
   const queriedSet = new Set<string>(alreadyQueried.map((word) => word.toLowerCase()));
   const rng = createRng(seed);
   const output: string[] = [];
+  const theta = estimateTheta(model, profile);
+  const pool = model.candidatePool.filter((word) => !queriedSet.has(word.toLowerCase()));
+  const uncertainties = new Map<string, number>();
+  for (const word of pool) {
+    const uncertainty = predictUncertainty(model, profile, theta, word.toLowerCase());
+    uncertainties.set(word, uncertainty);
+  }
+  const ranked = stableSortByUncertainty(pool, uncertainties, model.candidatePositions);
 
-  for (let i = 0; i < count; i += 1) {
-    const theta = estimateTheta(model, profile);
-    const pool = model.candidatePool.filter((word) => {
-      const normalized = word.toLowerCase();
-      return !queriedSet.has(normalized);
-    });
-
-    if (pool.length === 0) {
-      break;
-    }
-
-    const uncertainties = new Map<string, number>();
-    for (const word of pool) {
-      const uncertainty = predictUncertainty(model, profile, theta, word.toLowerCase());
-      uncertainties.set(word, uncertainty);
-    }
-
-    const ranked = stableSortByUncertainty(pool, uncertainties, model.candidatePositions);
+  for (let i = 0; i < count && ranked.length > 0; i += 1) {
     const selected = sampleTopK(ranked, uncertainties, rng);
     output.push(selected);
     queriedSet.add(selected.toLowerCase());
+    const selectedIndex = ranked.indexOf(selected);
+    if (selectedIndex < 0) {
+      throw new Error(`Adaptive quiz selected a word outside the ranked candidates: word=${selected}`);
+    }
+    ranked.splice(selectedIndex, 1);
   }
 
   return output;
