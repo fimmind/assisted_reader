@@ -3,13 +3,14 @@ import {
 } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
-import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2 } from 'lucide-react';
+import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2, List, BookmarkPlus, CornerUpLeft } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
+import { useTheme } from '@/components/ThemeProvider';
 import { ContextualDefinitionCard } from '@/components/ContextualDefinitionCard';
 import type { ScoredDefinition } from '@/components/ContextualDefinitionCard';
 import { StudyFlow } from '@/components/StudyFlow';
@@ -21,6 +22,17 @@ import { scoreWordSenses, startWsdModel, stopWsdModel, waitForWsdModelReady } fr
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks } from '@/core/books-store';
 import { saveBookReadingProgress, withBookReadingProgress } from '@/core/reading-progress-store';
+import { createReaderBookmark, deleteReaderBookmark, listReaderBookmarks } from '@/core/reader-bookmarks';
+import {
+  bookProgressAtLocation,
+  captureVisibleReaderLocation,
+  chapterProgressAtLocation,
+  readerLocationAtBookProgress,
+  readerLocationFromLegacyProgress,
+  resolveReaderLocation,
+  restoreReaderLocation,
+} from '@/core/reader-location';
+import { ReaderNavigationSheet } from '@/components/ReaderNavigationSheet';
 import { WORD_RE } from '@/core/constants';
 import { createFallbackLexiconEntry, loadLexicon, resolveLexiconEntry } from '@/core/lexicon';
 import {
@@ -49,7 +61,9 @@ import type {
   ParagraphAnalysis,
   PartOfSpeech,
   ReaderInlineMark,
+  ReaderBookmark,
   ReaderParagraphBlock,
+  ReaderLocation,
   ReaderSettings,
   ReaderTextRun,
   UserProfile,
@@ -81,6 +95,44 @@ function clampChapterProgress(progress: number | undefined): number {
     return 1;
   }
   return progress;
+}
+
+function readerLocationsEqual(left: ReaderLocation | null, right: ReaderLocation | null): boolean {
+  return left !== null && right !== null
+    && left.chapterIndex === right.chapterIndex
+    && left.blockIndex === right.blockIndex
+    && left.textOffset === right.textOffset;
+}
+
+function lastLinearReaderLocation(book: ImportedBook): ReaderLocation {
+  let chapterIndex = book.chapters.findLastIndex((chapter) => chapter.linear !== false);
+  if (chapterIndex < 0) chapterIndex = 0;
+  const chapter = book.chapters[chapterIndex];
+  if (!chapter) return { chapterIndex: 0, blockIndex: 0, textOffset: 0 };
+  const blocks = readerBlocksForChapter(chapter.paragraphs, chapter.readerBlocks);
+  for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
+    const block = blocks[blockIndex];
+    if (block.type === 'paragraph') {
+      return {
+        chapterIndex,
+        blockIndex,
+        textOffset: chapter.paragraphs[block.paragraphIndex]?.length ?? 0,
+      };
+    }
+  }
+  return { chapterIndex, blockIndex: Math.max(0, blocks.length - 1), textOffset: 0 };
+}
+
+function bookmarkLabelAtLocation(book: ImportedBook, location: ReaderLocation): string {
+  const chapter = book.chapters[location.chapterIndex];
+  if (!chapter) return `Chapter ${location.chapterIndex + 1}`;
+  const block = readerBlocksForChapter(chapter.paragraphs, chapter.readerBlocks)[location.blockIndex];
+  if (block?.type !== 'paragraph') return chapter.title || `Chapter ${location.chapterIndex + 1}`;
+  const text = chapter.paragraphs[block.paragraphIndex] ?? '';
+  if (!text) return chapter.title || `Chapter ${location.chapterIndex + 1}`;
+  const start = Math.max(0, location.textOffset - 28);
+  const snippet = text.slice(start, start + 64).replace(/\s+/g, ' ').trim();
+  return `${start > 0 ? '…' : ''}${snippet}${start + 64 < text.length ? '…' : ''}`;
 }
 
 function measureVisibleReaderParagraphs(
@@ -574,6 +626,7 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
           className: blockClass,
           style: blockStyle,
           'data-testid': `paragraph-${visibleParagraphIndex}`,
+          'data-reader-text-block': '',
           'data-reader-list-marker': block.listMarker,
           onClick: (event: ReactMouseEvent<HTMLElement>) => {
             const clickedTrigger = event.target instanceof Element
@@ -801,11 +854,19 @@ export default function ReaderPage() {
   const { bookId } = useParams();
   const [, setLocation] = useLocation();
   const { settings, updateSetting } = useSettings();
+  const { theme, setTheme } = useTheme();
 
   const [book, setBook] = useState<ImportedBook | null>(null);
   const [assistanceEnabled, setAssistanceEnabled] = useState(true);
   const [headerVisible, setHeaderVisible] = useState(true);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const [navigationSearchRequested, setNavigationSearchRequested] = useState(false);
+  const [bookmarks, setBookmarks] = useState<ReaderBookmark[]>([]);
+  const [bookmarkFeedback, setBookmarkFeedback] = useState('');
+  const [currentLocation, setCurrentLocation] = useState<ReaderLocation>({ chapterIndex: 0, blockIndex: 0, textOffset: 0 });
+  const [readingProgressPercent, setReadingProgressPercent] = useState(0);
+  const [returnLocation, setReturnLocation] = useState<ReaderLocation | null>(null);
   const [chapterAnalysis, setChapterAnalysis] = useState<ParagraphAnalysis[]>([]);
   const [definitionsByLemma, setDefinitionsByLemma] = useState<Map<string, LexiconEntry>>(new Map());
   const [loadingDefinitionLemmas, setLoadingDefinitionLemmas] = useState<Set<string>>(new Set());
@@ -832,9 +893,25 @@ export default function ReaderPage() {
   const analysisRunIdRef = useRef(0);
   const deferredAnalysisHandleRef = useRef<DeferredHandle | null>(null);
   const progressPersistTimeoutRef = useRef<number | null>(null);
+  const bookmarkFeedbackTimeoutRef = useRef<number | null>(null);
+  const layoutRestoreTimeoutRef = useRef<number | null>(null);
   const delayedRestoreTimeoutRef = useRef<number | null>(null);
   const isRestoringProgressRef = useRef(false);
-  const lastPersistedChapterProgressRef = useRef(0);
+  const readerRootRef = useRef<HTMLDivElement | null>(null);
+  const currentLocationRef = useRef<ReaderLocation | null>(null);
+  const lastStableLocationRef = useRef<ReaderLocation | null>(null);
+  const isBookFinishedRef = useRef(false);
+  const canonicalAnchorCapturedRef = useRef(false);
+  const previousLayoutKeyRef = useRef(JSON.stringify([
+    settings.fontChoice,
+    settings.fontSize,
+    settings.lineSpacing,
+    settings.pageWidth,
+    assistanceEnabled,
+  ]));
+  const returnLocationRef = useRef<ReaderLocation | null>(null);
+  const navigationHistoryRef = useRef<ReaderLocation[]>([]);
+  const pendingReaderAnchorRef = useRef<string | null>(null);
   const initialReaderLoadPendingRef = useRef(false);
   const initialViewportParagraphsRef = useRef<number[] | null>(null);
   const completedInitialAnalysisRef = useRef<Set<number>>(new Set());
@@ -1255,12 +1332,28 @@ export default function ReaderPage() {
     }, 700);
   }, [requestAutomaticDefinition, resolveAnalysisAnchorIndex]);
 
+  const captureCurrentReaderLocation = useCallback((): ReaderLocation | null => {
+    const currentBook = bookRef.current;
+    if (!currentBook) return null;
+    const location = readerRootRef.current
+      ? captureVisibleReaderLocation(readerRootRef.current, currentBook.currentChapter - 1, 72, window.innerHeight)
+      : null;
+    if (location) {
+      currentLocationRef.current = location;
+      lastStableLocationRef.current = location;
+      canonicalAnchorCapturedRef.current = true;
+      return location;
+    }
+    return currentLocationRef.current;
+  }, []);
+
   const saveReaderBookProgress = useCallback((nextBook: ImportedBook): void => {
     const profileId = readerProfileIdRef.current;
     if (!profileId) throw new Error(`Cannot save reading progress without a loaded profile for book=${nextBook.id}.`);
     saveBookReadingProgress(profileId, nextBook.id, {
       currentChapter: nextBook.currentChapter,
       currentChapterProgress: nextBook.currentChapterProgress,
+      ...(nextBook.location ? { location: nextBook.location } : {}),
     });
   }, []);
 
@@ -1268,13 +1361,31 @@ export default function ReaderPage() {
     const currentBook = bookRef.current;
     if (!currentBook || isRestoringProgressRef.current || initialReaderLoadPendingRef.current) return;
 
-    const progress = calculateScrollProgressFromDocument();
-    if (!force && Math.abs(progress - lastPersistedChapterProgressRef.current) < 0.01) return;
-    const nextBook: ImportedBook = { ...currentBook, currentChapterProgress: progress };
+    const location = isBookFinishedRef.current
+      ? currentBook.location ?? currentLocationRef.current
+      : captureCurrentReaderLocation() ?? currentBook.location ?? currentLocationRef.current;
+    if (!location) return;
+    const chapter = currentBook.chapters[location.chapterIndex];
+    const chapterProgress = chapter
+      ? chapterProgressAtLocation(chapter, location.blockIndex, location.textOffset)
+      : 0;
+    const wholeBookProgress = bookProgressAtLocation(currentBook, location);
+    if (!force && currentBook.location?.chapterIndex === location.chapterIndex
+      && currentBook.location.blockIndex === location.blockIndex
+      && currentBook.location.textOffset === location.textOffset) return;
+    const nextBook: ImportedBook = {
+      ...currentBook,
+      currentChapter: location.chapterIndex + 1,
+      currentChapterProgress: chapterProgress,
+      location,
+    };
     saveReaderBookProgress(nextBook);
-    lastPersistedChapterProgressRef.current = progress;
     bookRef.current = nextBook;
-  }, [saveReaderBookProgress]);
+    currentLocationRef.current = location;
+    setCurrentLocation(location);
+    setReadingProgressPercent(wholeBookProgress * 100);
+    isBookFinishedRef.current = readerLocationsEqual(location, lastLinearReaderLocation(currentBook));
+  }, [captureCurrentReaderLocation, saveReaderBookProgress]);
 
   useLayoutEffect(() => () => persistCurrentChapterProgress(true), [persistCurrentChapterProgress]);
 
@@ -1301,10 +1412,27 @@ export default function ReaderPage() {
         setBook(null);
         setChapterAnalysis([]);
         setDefinitionsByLemma(new Map());
+        setBookmarks([]);
+        currentLocationRef.current = null;
+        lastStableLocationRef.current = null;
+        canonicalAnchorCapturedRef.current = false;
+        isBookFinishedRef.current = false;
         resourcesRef.current = null;
         return;
       }
       const selectedBook = withBookReadingProgress(storedBook, profileId);
+      const selectedLocation = selectedBook.location ?? readerLocationFromLegacyProgress(
+        selectedBook,
+        selectedBook.currentChapter,
+        selectedBook.currentChapterProgress,
+      );
+      currentLocationRef.current = selectedLocation;
+      lastStableLocationRef.current = selectedLocation;
+      canonicalAnchorCapturedRef.current = Boolean(selectedBook.location);
+      isBookFinishedRef.current = readerLocationsEqual(selectedLocation, lastLinearReaderLocation(selectedBook));
+      setCurrentLocation(selectedLocation);
+      setReadingProgressPercent(bookProgressAtLocation(selectedBook, selectedLocation) * 100);
+      setBookmarks(listReaderBookmarks(profileId, selectedBook.id));
 
       const [model, lemmaDict, nlp] = await Promise.all([
         loadVocabularyModel(),
@@ -1416,6 +1544,9 @@ export default function ReaderPage() {
   useEffect(() => () => {
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
+    if (bookmarkFeedbackTimeoutRef.current !== null) window.clearTimeout(bookmarkFeedbackTimeoutRef.current);
+    if (layoutRestoreTimeoutRef.current !== null) window.clearTimeout(layoutRestoreTimeoutRef.current);
+    if (progressPersistTimeoutRef.current !== null) window.clearTimeout(progressPersistTimeoutRef.current);
   }, []);
 
   useEffect(() => {
@@ -1525,16 +1656,74 @@ export default function ReaderPage() {
     }, 250);
   }, [persistCurrentChapterProgress]);
 
-  const pendingReaderAnchorRef = useRef<string | null>(null);
-
   const restoreCurrentChapterProgress = useCallback((targetBook: ImportedBook) => {
     if (pendingReaderAnchorRef.current) {
       document.getElementById(pendingReaderAnchorRef.current)?.scrollIntoView({ behavior: 'auto', block: 'start' });
       return;
     }
+    if (targetBook.location && readerRootRef.current) {
+      restoreReaderLocation(readerRootRef.current, targetBook.location, 72);
+      return;
+    }
     const targetScrollTop = calculateScrollTopFromProgress(targetBook.currentChapterProgress);
     window.scrollTo({ top: targetScrollTop, behavior: 'auto' });
   }, []);
+
+  const navigateToReaderLocation = useCallback((rawLocation: ReaderLocation, pushHistory: boolean): void => {
+    const currentBook = bookRef.current;
+    if (!currentBook) return;
+    const location = resolveReaderLocation(currentBook, rawLocation);
+    const previousLocation = captureCurrentReaderLocation()
+      ?? currentBook.location
+      ?? readerLocationFromLegacyProgress(currentBook, currentBook.currentChapter, currentBook.currentChapterProgress);
+    if (pushHistory && !readerLocationsEqual(previousLocation, location)) {
+      navigationHistoryRef.current = [...navigationHistoryRef.current, previousLocation];
+      returnLocationRef.current = previousLocation;
+      setReturnLocation(previousLocation);
+    }
+    setWordPopups([]);
+    setNavigationOpen(false);
+    const chapter = currentBook.chapters[location.chapterIndex];
+    const chapterProgress = chapter
+      ? chapterProgressAtLocation(chapter, location.blockIndex, location.textOffset)
+      : 0;
+    const nextBook: ImportedBook = {
+      ...currentBook,
+      currentChapter: location.chapterIndex + 1,
+      currentChapterProgress: chapterProgress,
+      location,
+    };
+    saveReaderBookProgress(nextBook);
+    currentLocationRef.current = location;
+    lastStableLocationRef.current = location;
+    canonicalAnchorCapturedRef.current = true;
+    isBookFinishedRef.current = readerLocationsEqual(location, lastLinearReaderLocation(currentBook));
+    setCurrentLocation(location);
+    setReadingProgressPercent(bookProgressAtLocation(currentBook, location) * 100);
+    if (location.chapterIndex + 1 !== currentBook.currentChapter) {
+      pendingReaderAnchorRef.current = null;
+      openReaderChapter(nextBook);
+      return;
+    }
+    bookRef.current = nextBook;
+    window.requestAnimationFrame(() => {
+      if (readerRootRef.current) restoreReaderLocation(readerRootRef.current, location, 72);
+    });
+  }, [captureCurrentReaderLocation, openReaderChapter, saveReaderBookProgress]);
+
+  const returnToPreviousPosition = useCallback((): void => {
+    const previousLocation = navigationHistoryRef.current.pop() ?? returnLocationRef.current;
+    if (!previousLocation) return;
+    returnLocationRef.current = navigationHistoryRef.current[navigationHistoryRef.current.length - 1] ?? null;
+    setReturnLocation(returnLocationRef.current);
+    navigateToReaderLocation(previousLocation, false);
+  }, [navigateToReaderLocation]);
+
+  const markBookFinished = useCallback((): void => {
+    const currentBook = bookRef.current;
+    if (!currentBook) return;
+    navigateToReaderLocation(lastLinearReaderLocation(currentBook), true);
+  }, [navigateToReaderLocation]);
 
   const updateCurrentChapter = async (delta: -1 | 1) => {
     if (!book) {
@@ -1551,8 +1740,17 @@ export default function ReaderPage() {
       ...book,
       currentChapter: nextChapter,
       currentChapterProgress: 0,
+      location: { chapterIndex: nextChapter - 1, blockIndex: 0, textOffset: 0 },
     };
     saveReaderBookProgress(nextBook);
+    currentLocationRef.current = nextBook.location ?? null;
+    lastStableLocationRef.current = nextBook.location ?? null;
+    canonicalAnchorCapturedRef.current = Boolean(nextBook.location);
+    isBookFinishedRef.current = false;
+    if (nextBook.location) {
+      setCurrentLocation(nextBook.location);
+      setReadingProgressPercent(bookProgressAtLocation(nextBook, nextBook.location) * 100);
+    }
     openReaderChapter(nextBook);
     window.scrollTo({ top: 0, behavior: 'auto' });
   };
@@ -1562,7 +1760,6 @@ export default function ReaderPage() {
       return;
     }
     isRestoringProgressRef.current = true;
-    lastPersistedChapterProgressRef.current = clampChapterProgress(book.currentChapterProgress);
     if (delayedRestoreTimeoutRef.current !== null) {
       window.clearTimeout(delayedRestoreTimeoutRef.current);
       delayedRestoreTimeoutRef.current = null;
@@ -1652,6 +1849,40 @@ export default function ReaderPage() {
       if (isRestoringProgressRef.current) {
         return;
       }
+      const capturedLocation = captureCurrentReaderLocation();
+      if (capturedLocation) {
+        currentLocationRef.current = capturedLocation;
+        lastStableLocationRef.current = capturedLocation;
+        const activeBook = bookRef.current;
+        if (activeBook && isBookFinishedRef.current
+          && !readerLocationsEqual(capturedLocation, lastLinearReaderLocation(activeBook))) {
+          isBookFinishedRef.current = false;
+        }
+      }
+      const currentBook = bookRef.current;
+      const lastLinearChapterIndex = currentBook?.chapters.findLastIndex((chapter) => chapter.linear !== false) ?? -1;
+      const reachedDocumentBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight) <= 2;
+      const recentManualScroll = performance.now() - lastScrollActivityAtRef.current < 500;
+      if (currentBook && reachedDocumentBottom && recentManualScroll
+        && currentBook.currentChapter - 1 === lastLinearChapterIndex) {
+        const endLocation = lastLinearReaderLocation(currentBook);
+        const finalChapter = currentBook.chapters[endLocation.chapterIndex];
+        const finishedBook: ImportedBook = {
+          ...currentBook,
+          currentChapter: endLocation.chapterIndex + 1,
+          currentChapterProgress: finalChapter
+            ? chapterProgressAtLocation(finalChapter, endLocation.blockIndex, endLocation.textOffset)
+            : 1,
+          location: endLocation,
+        };
+        saveReaderBookProgress(finishedBook);
+        bookRef.current = finishedBook;
+        currentLocationRef.current = endLocation;
+        lastStableLocationRef.current = endLocation;
+        isBookFinishedRef.current = true;
+        setCurrentLocation(endLocation);
+        setReadingProgressPercent(100);
+      }
       if (y > previousY && y > 100 && (scrollDirectionRef.current === 1 || scrollbarPointerId !== null)) {
         setHeaderVisible(false);
       } else if (y < previousY && (scrollDirectionRef.current === -1 || scrollbarPointerId !== null)) {
@@ -1677,7 +1908,7 @@ export default function ReaderPage() {
       window.removeEventListener('keydown', recordKeyboardScrollActivity);
       window.removeEventListener('scroll', handleScroll);
     };
-  }, [scheduleChapterProgressPersist]);
+  }, [captureCurrentReaderLocation, saveReaderBookProgress, scheduleChapterProgressPersist]);
 
   useEffect(() => () => {
     if (progressPersistTimeoutRef.current !== null) {
@@ -2149,6 +2380,130 @@ export default function ReaderPage() {
   ]);
 
   const readerLoading = isLoading || (book !== null && !initialViewportReady);
+  const addCurrentBookmark = useCallback((): void => {
+    const currentBook = bookRef.current;
+    if (!currentBook) return;
+    const location = captureCurrentReaderLocation() ?? currentLocationRef.current;
+    if (!location) return;
+    const profileId = readerProfileIdRef.current;
+    if (!profileId) throw new Error(`Cannot add a bookmark without a loaded profile for book=${currentBook.id}.`);
+    const existingBookmarks = listReaderBookmarks(profileId, currentBook.id);
+    setBookmarks(existingBookmarks);
+    const duplicate = existingBookmarks.some((bookmark) => readerLocationsEqual(bookmark.location, location));
+    if (duplicate) {
+      setBookmarkFeedback('Already bookmarked');
+      if (bookmarkFeedbackTimeoutRef.current !== null) window.clearTimeout(bookmarkFeedbackTimeoutRef.current);
+      bookmarkFeedbackTimeoutRef.current = window.setTimeout(() => {
+        setBookmarkFeedback('');
+        bookmarkFeedbackTimeoutRef.current = null;
+      }, 1800);
+      return;
+    }
+    const bookmark = createReaderBookmark(
+      profileId,
+      currentBook.id,
+      location,
+      bookmarkLabelAtLocation(currentBook, location),
+    );
+    setBookmarks((previous) => [...previous, bookmark]);
+    setBookmarkFeedback('Bookmark added');
+    if (bookmarkFeedbackTimeoutRef.current !== null) window.clearTimeout(bookmarkFeedbackTimeoutRef.current);
+    bookmarkFeedbackTimeoutRef.current = window.setTimeout(() => {
+      setBookmarkFeedback('');
+      bookmarkFeedbackTimeoutRef.current = null;
+    }, 1800);
+  }, [captureCurrentReaderLocation]);
+
+  const removeReaderBookmark = useCallback((bookmarkId: string): void => {
+    const currentBook = bookRef.current;
+    const profileId = readerProfileIdRef.current;
+    if (!currentBook || !profileId) return;
+    deleteReaderBookmark(profileId, currentBook.id, bookmarkId);
+    setBookmarks((previous) => previous.filter((bookmark) => bookmark.id !== bookmarkId));
+  }, []);
+
+  useEffect(() => {
+    const isTextEntryTarget = (target: EventTarget | null): boolean => target instanceof HTMLElement
+      && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    const handleReaderShortcuts = (event: KeyboardEvent): void => {
+      if (isTextEntryTarget(event.target)) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        setNavigationSearchRequested(true);
+        setNavigationOpen(true);
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey || readerSettingsOpen || navigationOpen || studyOpen || wordPopups.length > 0) return;
+      if (event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        addCurrentBookmark();
+      } else if (event.key === '[') {
+        event.preventDefault();
+        void updateCurrentChapter(-1);
+      } else if (event.key === ']') {
+        event.preventDefault();
+        void updateCurrentChapter(1);
+      }
+    };
+    window.addEventListener('keydown', handleReaderShortcuts);
+    return () => window.removeEventListener('keydown', handleReaderShortcuts);
+  }, [addCurrentBookmark, navigationOpen, readerSettingsOpen, studyOpen, updateCurrentChapter, wordPopups.length]);
+
+  useEffect(() => {
+    if (!book || isLoading || !initialViewportReady) return;
+    const frame = window.requestAnimationFrame(() => persistCurrentChapterProgress(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [book?.id, book?.currentChapter, initialViewportReady, isLoading, persistCurrentChapterProgress]);
+
+  useEffect(() => {
+    const root = readerRootRef.current;
+    if (!root || !book || !initialViewportReady) return;
+    const scheduleAnchorRestore = (): void => {
+      if (!canonicalAnchorCapturedRef.current) return;
+      if (layoutRestoreTimeoutRef.current !== null) window.clearTimeout(layoutRestoreTimeoutRef.current);
+      layoutRestoreTimeoutRef.current = window.setTimeout(() => {
+        const elapsedSinceManualScroll = performance.now() - lastScrollActivityAtRef.current;
+        if (elapsedSinceManualScroll < 300) {
+          scheduleAnchorRestore();
+          return;
+        }
+        const anchor = lastStableLocationRef.current;
+        if (anchor && readerRootRef.current) restoreReaderLocation(readerRootRef.current, anchor, 72);
+        layoutRestoreTimeoutRef.current = null;
+      }, 180);
+    };
+    const observer = new ResizeObserver(scheduleAnchorRestore);
+    observer.observe(root);
+    return () => {
+      observer.disconnect();
+      if (layoutRestoreTimeoutRef.current !== null) {
+        window.clearTimeout(layoutRestoreTimeoutRef.current);
+        layoutRestoreTimeoutRef.current = null;
+      }
+    };
+  }, [book?.id, book?.currentChapter, initialViewportReady]);
+
+  useLayoutEffect(() => {
+    if (!book || !initialViewportReady) return;
+    const nextLayoutKey = JSON.stringify([
+      settings.fontChoice,
+      settings.fontSize,
+      settings.lineSpacing,
+      settings.pageWidth,
+      assistanceEnabled,
+    ]);
+    if (previousLayoutKeyRef.current === nextLayoutKey) return;
+    previousLayoutKeyRef.current = nextLayoutKey;
+    if (!canonicalAnchorCapturedRef.current) return;
+    const anchor = lastStableLocationRef.current;
+    if (!anchor) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (performance.now() - lastScrollActivityAtRef.current < 300) return;
+      if (readerRootRef.current) restoreReaderLocation(readerRootRef.current, anchor, 72);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [assistanceEnabled, book?.id, book?.currentChapter, initialViewportReady, settings.fontChoice, settings.fontSize, settings.lineSpacing, settings.pageWidth]);
+
   useLayoutEffect(() => {
     if (!readerLoading) return;
     const root = document.documentElement;
@@ -2181,6 +2536,8 @@ export default function ReaderPage() {
   const activeProfileForRender = getActiveProfile(profileStateForRender);
   const observationLabels = activeProfileForRender.observations;
   const chapterReaderBlocks = readerBlocksForChapter(chapterParagraphs, currentChapter?.readerBlocks);
+  const canGoToPreviousChapter = adjacentReadingChapter(book.chapters, currentChapterNumber, -1) !== currentChapterNumber;
+  const canGoToNextChapter = adjacentReadingChapter(book.chapters, currentChapterNumber, 1) !== currentChapterNumber;
   const openChapterStudy = (): void => {
     if (!currentChapter || chapterParagraphs.length === 0 || !resourcesRef.current) {
       return;
@@ -2221,12 +2578,13 @@ export default function ReaderPage() {
         headerVisible ? 'translate-y-0' : '-translate-y-full'
       )}>
         <div className="container mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0 sm:gap-1">
             <Link href="/">
               <Button
                 variant="ghost"
                 size="sm"
                 className="gap-2 text-muted-foreground hover:text-foreground"
+                aria-label="Back to library"
                 data-testid="button-back-library"
                 onClick={() => persistCurrentChapterProgress(true)}
               >
@@ -2234,20 +2592,35 @@ export default function ReaderPage() {
               </Button>
             </Link>
           </div>
-          <div className="font-serif text-sm font-medium text-muted-foreground hidden md:block">
-            {book.title} — Chapter {currentChapterNumber}
+          <div className="min-w-0 max-w-[24vw] truncate text-center font-serif text-sm font-medium text-muted-foreground hidden md:block">
+            {book.title} — {chapterDisplayTitle ?? `Chapter ${currentChapterNumber}`} · {Math.round(readingProgressPercent)}%
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0 sm:gap-1">
+            <Button variant="ghost" size="icon" className="text-muted-foreground" aria-label="Add bookmark at current position"
+              onClick={addCurrentBookmark} data-testid="button-add-bookmark">
+              <BookmarkPlus size={18} />
+            </Button>
+            <Button variant="ghost" size="icon" className="text-muted-foreground" aria-label="Open book contents, bookmarks, and search"
+              onClick={() => { setNavigationSearchRequested(false); setNavigationOpen(true); }} data-testid="button-reader-navigation">
+              <List size={18} />
+            </Button>
+            {returnLocation && (
+              <Button variant="ghost" size="icon" className="hidden text-muted-foreground sm:inline-flex" aria-label="Return to previous position"
+                onClick={returnToPreviousPosition} data-testid="button-reader-return">
+                <CornerUpLeft size={18} />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
               className="gap-2 text-muted-foreground hover:text-foreground"
+              aria-label="Study this chapter"
               onClick={openChapterStudy}
               disabled={!currentChapter || chapterParagraphs.length === 0 || !resourcesRef.current}
               data-testid="button-study-chapter"
             >
               <GraduationCap size={18} />
-              <span>Study</span>
+              <span className="hidden sm:inline">Study</span>
             </Button>
             <Button variant="ghost" size="icon"
               onClick={() => setAssistanceEnabled(!assistanceEnabled)}
@@ -2257,7 +2630,7 @@ export default function ReaderPage() {
             </Button>
             <Sheet modal={false} open={readerSettingsOpen} onOpenChange={setReaderSettingsOpen}>
               <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-reader-settings">
+                <Button variant="ghost" size="icon" className="text-muted-foreground" aria-label="Reader settings" data-testid="button-reader-settings">
                   <Type size={18} />
                 </Button>
               </SheetTrigger>
@@ -2309,6 +2682,17 @@ export default function ReaderPage() {
                       ))}
                     </div>
                   </div>
+                  <div className="space-y-4">
+                    <Label className="text-base font-medium">Theme</Label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['light', 'dark', 'system'] as const).map((themeChoice) => (
+                        <Button key={themeChoice} variant={theme === themeChoice ? 'default' : 'outline'} size="sm"
+                          onClick={() => setTheme(themeChoice)} data-testid={`button-theme-${themeChoice}`}>
+                          {themeChoice[0].toUpperCase() + themeChoice.slice(1)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </SheetContent>
             </Sheet>
@@ -2319,6 +2703,9 @@ export default function ReaderPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => { markBookFinished(); }} data-testid="button-mark-book-finished">
+                  Mark book finished
+                </DropdownMenuItem>
                 <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => { void deleteCurrentBook(); }}>
                   <Trash2 size={16} />
                   Delete Book
@@ -2328,6 +2715,24 @@ export default function ReaderPage() {
           </div>
         </div>
       </header>
+
+      <ReaderNavigationSheet
+        open={navigationOpen}
+        startOnSearch={navigationSearchRequested}
+        onOpenChange={(open) => {
+          setNavigationOpen(open);
+          if (!open) setNavigationSearchRequested(false);
+        }}
+        book={book}
+        location={currentLocation}
+        progressPercent={readingProgressPercent}
+        bookmarks={bookmarks}
+        canReturn={returnLocation !== null}
+        onNavigate={(location) => navigateToReaderLocation(location, true)}
+        onDeleteBookmark={removeReaderBookmark}
+        onReturn={returnToPreviousPosition}
+      />
+      {bookmarkFeedback && <div role="status" aria-live="polite" className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md bg-foreground px-4 py-2 text-sm text-background">{bookmarkFeedback}</div>}
 
       <div className="h-14" />
 
@@ -2340,7 +2745,7 @@ export default function ReaderPage() {
         }}
       >
         <div className="py-12 md:py-20" data-testid="reading-row">
-          <div className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
+          <div ref={readerRootRef} className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
             {chapterDisplayTitle && <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
               {chapterDisplayTitle}
             </h1>}
@@ -2361,21 +2766,30 @@ export default function ReaderPage() {
                   console.warn('reader-link-target-missing', { bookId: book.id, href });
                   return;
                 }
+                const targetElement = document.getElementById(anchor);
+                const targetChapterContent = book.chapters[targetChapter - 1];
+                const targetBlocks = targetChapterContent
+                  ? readerBlocksForChapter(targetChapterContent.paragraphs, targetChapterContent.readerBlocks)
+                  : [];
+                const targetBlockIndex = targetBlocks.findIndex((block) => block.anchorIds?.includes(anchor));
+                const rowBlockIndex = Number(targetElement?.closest<HTMLElement>('[data-reader-block-index]')?.dataset.readerBlockIndex);
+                const blockIndex = targetChapter === currentChapterNumber && Number.isInteger(rowBlockIndex)
+                  ? rowBlockIndex
+                  : targetBlockIndex >= 0 ? targetBlockIndex : 0;
+                const targetLocation = { chapterIndex: targetChapter - 1, blockIndex, textOffset: 0 };
                 if (targetChapter === currentChapterNumber) {
-                  document.getElementById(anchor)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+                  navigateToReaderLocation(targetLocation, true);
+                  window.requestAnimationFrame(() => targetElement?.scrollIntoView({ behavior: 'auto', block: 'start' }));
                   return;
                 }
-                persistCurrentChapterProgress(true);
+                navigateToReaderLocation(targetLocation, true);
                 pendingReaderAnchorRef.current = anchor;
-                const nextBook: ImportedBook = { ...book, currentChapter: targetChapter, currentChapterProgress: 0 };
-                saveReaderBookProgress(nextBook);
-                openReaderChapter(nextBook);
               }}
             >
               {chapterReaderBlocks.map((block, blockIndex) => {
                 if (block.type === 'image') {
                   return (
-                    <figure key={`reader-image-${blockIndex}`} className="my-6 w-full">
+                    <figure key={`reader-image-${blockIndex}`} data-reader-block-index={blockIndex} className="my-6 w-full">
                       {block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}
                       <img
                         src={block.src}
@@ -2389,17 +2803,17 @@ export default function ReaderPage() {
                   );
                 }
                 if (block.type === 'spacer') {
-                  return <div key={`reader-spacer-${blockIndex}`} aria-hidden="true" style={{ height: '1em', ...block.style } as CSSProperties}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}</div>;
+                  return <div key={`reader-spacer-${blockIndex}`} data-reader-block-index={blockIndex} aria-hidden="true" style={{ height: '1em', ...block.style } as CSSProperties}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}</div>;
                 }
                 if (block.type === 'rule') {
-                  return <div key={`reader-rule-${blockIndex}`}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}<hr className="my-8 border-border" style={block.style as CSSProperties | undefined} /></div>;
+                  return <div key={`reader-rule-${blockIndex}`} data-reader-block-index={blockIndex}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}<hr className="my-8 border-border" style={block.style as CSSProperties | undefined} /></div>;
                 }
                 const sourceIndex = block.paragraphIndex;
                 const visibleIndex = sourceIndex;
                 const paragraphText = chapterParagraphs[sourceIndex] ?? '';
                 const analysis = chapterAnalysis[sourceIndex] ?? { paragraphText, tokens: [], cardTargets: [] };
                 return (
-                <div key={`paragraph-${sourceIndex}`} className="mb-2" data-testid={`paragraph-block-${visibleIndex}`}>
+                <div key={`paragraph-${sourceIndex}`} className="mb-2" data-reader-block-index={blockIndex} data-testid={`paragraph-block-${visibleIndex}`}>
                   <ReaderParagraphText
                     analysis={analysis}
                     block={block}
@@ -2464,6 +2878,7 @@ export default function ReaderPage() {
                 variant="ghost"
                 className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
                 data-testid="button-prev-chapter"
+                disabled={!canGoToPreviousChapter}
                 onClick={() => void updateCurrentChapter(-1)}
               >
                 <ChevronLeft size={16} />
@@ -2477,6 +2892,7 @@ export default function ReaderPage() {
                 variant="ghost"
                 className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
                 data-testid="button-next-chapter"
+                disabled={!canGoToNextChapter}
                 onClick={() => void updateCurrentChapter(1)}
               >
                 <span className="sm:hidden">Next</span>

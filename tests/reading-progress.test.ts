@@ -62,6 +62,17 @@ test('shared books retain independent positions across profile switches, reloads
     localStorage.setItem(READING_PROGRESS_STORAGE_KEY, serialized);
     const reloadedId = getActiveProfile(loadProfileState()).id;
     assert.equal(withBookReadingProgress(storedBook, reloadedId).currentChapterProgress, 0.7);
+    saveBookReadingProgress(firstId, book.id, {
+      currentChapter: 1,
+      currentChapterProgress: 0.01,
+      location: { chapterIndex: 99, blockIndex: 99, textOffset: 99 },
+    });
+    const canonicalReload = withBookReadingProgress(storedBook, firstId);
+    assert.deepEqual(canonicalReload.location, { chapterIndex: 2, blockIndex: 0, textOffset: 14 });
+    assert.equal(canonicalReload.currentChapter, 3);
+    assert.equal(canonicalReload.currentChapterProgress, 1);
+    assert.equal(withBookReadingProgress(storedBook, secondId).currentChapter, 3);
+    assert.equal(withBookReadingProgress(storedBook, secondId).currentChapterProgress, 0.7);
     resetProfileObservations(secondId);
     assert.equal(withBookReadingProgress(storedBook, secondId).currentChapterProgress, 0.7);
 
@@ -70,7 +81,7 @@ test('shared books retain independent positions across profile switches, reloads
     assert.deepEqual(listReaderBookmarks(firstId, book.id), [firstBookmark]);
     assert.equal(getActiveProfile(loadProfileState()).id, firstId);
     assert.equal(withBookReadingProgress(storedBook, secondId).currentChapterProgress, 0);
-    assert.equal(withBookReadingProgress(storedBook, firstId).currentChapterProgress, 0.9);
+    assert.equal(withBookReadingProgress(storedBook, firstId).currentChapterProgress, 1);
     createProfile('Third reader');
     const thirdId = getActiveProfile(loadProfileState()).id;
     assert.equal(withBookReadingProgress(storedBook, thirdId).currentChapter, 1);

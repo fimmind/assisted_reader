@@ -210,15 +210,17 @@ export function captureVisibleReaderLocation(
         break;
       }
     }
-    range.setStart(selected.node, clamp(textOffset - selected.start, 0, selected.length));
-    range.setEnd(selected.node, clamp(textOffset - selected.start, 0, selected.length));
+    const nodeOffset = clamp(textOffset - selected.start, 0, selected.length);
+    const endOffset = Math.min(selected.length, nodeOffset + 1);
+    range.setStart(selected.node, nodeOffset);
+    range.setEnd(selected.node, endOffset);
     return range.getBoundingClientRect();
   };
   let low = 0;
   let high = totalLength;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (rectForOffset(middle).top < viewportTop) low = middle + 1;
+    if (rectForOffset(middle).bottom <= viewportTop) low = middle + 1;
     else high = middle;
   }
   const rect = rectForOffset(low);
@@ -229,33 +231,43 @@ export function captureVisibleReaderLocation(
 /** Scroll the rendered canonical text offset into view after the requested chapter has rendered. */
 export function restoreReaderLocation(root: ParentNode, location: ReaderLocation, topInset: number): boolean {
   if (!Number.isFinite(topInset) || topInset < 0) throw new RangeError('Reader restore top inset must be a non-negative finite number.');
+  if (location.blockIndex === 0 && location.textOffset === 0 && root instanceof HTMLElement) {
+    const rootTop = root.getBoundingClientRect().top;
+    window.scrollBy({ top: rootTop - topInset, behavior: 'instant' as ScrollBehavior });
+    return true;
+  }
   const row = root.querySelector<ReaderBlockElement>(`[data-reader-block-index="${location.blockIndex}"]`);
   if (!row) return false;
   const element = row.querySelector<HTMLElement>('[data-reader-text-block]');
   if (!element) {
-    row.scrollIntoView({ block: 'start' });
+    window.scrollBy({ top: row.getBoundingClientRect().top - topInset, behavior: 'instant' as ScrollBehavior });
     return true;
   }
   const range = document.createRange();
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  let remaining = location.textOffset;
-  while (node) {
-    const nodeLength = node.textContent?.length ?? 0;
-    if (remaining <= nodeLength) {
-      range.setStart(node, remaining);
-      range.setEnd(node, remaining);
-      const rect = range.getBoundingClientRect();
-      if (rect.height > 0) {
-        window.scrollBy({ top: rect.top - topInset, behavior: 'instant' as ScrollBehavior });
-      } else {
-        element.scrollIntoView({ block: 'start' });
-      }
-      return true;
-    }
-    remaining -= nodeLength;
-    node = walker.nextNode();
+  const textNodes: Array<{ node: Node; start: number; length: number }> = [];
+  let totalLength = 0;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const length = node.textContent?.length ?? 0;
+    if (length > 0) textNodes.push({ node, start: totalLength, length });
+    totalLength += length;
   }
-  element.scrollIntoView({ block: 'start' });
+  if (textNodes.length === 0) {
+    window.scrollBy({ top: element.getBoundingClientRect().top - topInset, behavior: 'instant' as ScrollBehavior });
+    return true;
+  }
+  const targetOffset = clamp(location.textOffset, 0, totalLength);
+  const selected = textNodes.find((item) => targetOffset < item.start + item.length)
+    ?? textNodes[textNodes.length - 1];
+  const characterOffset = clamp(targetOffset - selected.start, 0, selected.length - 1);
+  range.setStart(selected.node, characterOffset);
+  range.setEnd(selected.node, characterOffset + 1);
+  const rect = range.getBoundingClientRect();
+  if (rect.height > 0) {
+    window.scrollBy({ top: rect.top - topInset, behavior: 'instant' as ScrollBehavior });
+  } else {
+    window.scrollBy({ top: element.getBoundingClientRect().top - topInset, behavior: 'instant' as ScrollBehavior });
+  }
   return true;
 }
