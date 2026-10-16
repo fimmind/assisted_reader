@@ -3136,10 +3136,8 @@ export default function ReaderPage() {
         book={book}
         location={currentLocation}
         bookmarks={bookmarks}
-        canReturn={returnLocation !== null}
         onNavigate={(location) => navigateToReaderLocation(location, true)}
         onDeleteBookmark={removeReaderBookmark}
-        onReturn={returnToPreviousPosition}
       />
       {bookmarkFeedback && <div role="status" aria-live="polite" className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md bg-foreground px-4 py-2 text-sm text-background">{bookmarkFeedback}</div>}
 

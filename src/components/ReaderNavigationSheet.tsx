@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookmarkX, CornerUpLeft, Search } from 'lucide-react';
+import { BookmarkX, Search } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -17,10 +17,8 @@ interface ReaderNavigationSheetProps {
   book: ImportedBook;
   location: ReaderLocation;
   bookmarks: ReaderBookmark[];
-  canReturn: boolean;
   onNavigate: (location: ReaderLocation) => void;
   onDeleteBookmark: (bookmarkId: string) => void;
-  onReturn: () => void;
 }
 
 interface NavigationTreeProps {
@@ -97,10 +95,8 @@ export function ReaderNavigationSheet({
   book,
   location,
   bookmarks,
-  canReturn,
   onNavigate,
   onDeleteBookmark,
-  onReturn,
 }: ReaderNavigationSheetProps) {
   const navigation = useMemo(() => navigationForBook(book), [book]);
   const activeId = activeNavigationId(navigation, location);
@@ -176,12 +172,6 @@ export function ReaderNavigationSheet({
         <SheetHeader>
           <SheetTitle className="font-serif">Navigate book</SheetTitle>
         </SheetHeader>
-
-        {canReturn && (
-          <Button type="button" variant="ghost" className="justify-start gap-2" onClick={onReturn} data-testid="button-return-to-previous-position">
-            <CornerUpLeft size={16} /> Return to previous position
-          </Button>
-        )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
           <TabsList className="grid w-full grid-cols-3">
