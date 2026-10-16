@@ -1,6 +1,9 @@
 import { BOOKS_DB_NAME, BOOKS_DB_VERSION, BOOKS_FALLBACK_STORAGE_KEY, BOOKS_STORE_NAME } from './constants';
 import { clearReadingProgressForBook } from './reading-progress-store.js';
+import { readerBlocksForChapter } from './reader-content.js';
 import type {
+  BookChapter,
+  BookNavigationEntry,
   ImportedBook,
   ReaderContentBlock,
   ReaderContentStyle,
@@ -166,6 +169,45 @@ function normalizeReaderBlocks(raw: unknown, paragraphCount: number): ReaderCont
   return blocks;
 }
 
+function normalizeNavigation(raw: unknown, chapters: BookChapter[]): BookNavigationEntry[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) return null;
+  const ids = new Set<string>();
+  const visit = (entries: unknown[]): BookNavigationEntry[] | null => {
+    const normalized: BookNavigationEntry[] = [];
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      const location = entry && typeof entry === 'object' ? (entry as Record<string, unknown>).location : undefined;
+      const candidate = entry && typeof entry === 'object' ? entry as Record<string, unknown> : undefined;
+      if (!candidate || typeof candidate.id !== 'string' || !candidate.id || ids.has(candidate.id)
+        || typeof candidate.title !== 'string' || !candidate.title.trim() || !Array.isArray(candidate.children)
+        || !location || typeof location !== 'object') return null;
+      const target = location as Record<string, unknown>;
+      const chapterIndex = target.chapterIndex;
+      const blockIndex = target.blockIndex;
+      const textOffset = target.textOffset;
+      if (typeof chapterIndex !== 'number' || !Number.isInteger(chapterIndex) || chapterIndex < 0 || chapterIndex >= chapters.length
+        || typeof blockIndex !== 'number' || !Number.isInteger(blockIndex) || blockIndex < 0
+        || typeof textOffset !== 'number' || !Number.isInteger(textOffset) || textOffset < 0) return null;
+      const blocks = readerBlocksForChapter(chapters[chapterIndex].paragraphs, chapters[chapterIndex].readerBlocks);
+      const block = blocks[blockIndex];
+      if (!block || (block.type !== 'paragraph' && textOffset !== 0)
+        || (block.type === 'paragraph' && textOffset > chapters[chapterIndex].paragraphs[block.paragraphIndex].length)) return null;
+      ids.add(candidate.id);
+      const children = visit(candidate.children);
+      if (!children) return null;
+      normalized.push({
+        id: candidate.id,
+        title: candidate.title.trim(),
+        location: { chapterIndex, blockIndex, textOffset },
+        children,
+      });
+    }
+    return normalized;
+  };
+  return visit(raw);
+}
+
 function normalizeBook(raw: unknown): ImportedBook | null {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -191,6 +233,8 @@ function normalizeBook(raw: unknown): ImportedBook | null {
       };
     })
     .filter((chapter) => chapter.paragraphs.length > 0 || chapter.readerBlocks?.some((block) => block.type === 'image'));
+  const navigation = normalizeNavigation(candidate.navigation, normalizedChapters);
+  if (navigation === null) return null;
 
   const isSeedHitchhiker = candidate.id === 'seed-hitchhiker';
   const fallbackTitle = isSeedHitchhiker ? "The Hitchhiker's Guide to the Galaxy" : 'Untitled Book';
@@ -206,6 +250,7 @@ function normalizeBook(raw: unknown): ImportedBook | null {
     currentChapter: normalizeChapterNumber(candidate.currentChapter, normalizedChapters.length),
     currentChapterProgress: normalizeChapterProgress(candidate.currentChapterProgress),
     chapters: normalizedChapters,
+    ...(navigation ? { navigation } : {}),
   };
 }
 
@@ -317,6 +362,9 @@ export async function getBookById(id: string): Promise<ImportedBook | null> {
 export async function upsertBook(book: ImportedBook): Promise<void> {
   const normalized = normalizeBook(book);
   if (!normalized) {
+    if (book.navigation !== undefined) {
+      throw new Error(`Cannot upsert invalid navigation metadata: bookId=${book.id}`);
+    }
     throw new Error('Cannot upsert invalid book payload.');
   }
 

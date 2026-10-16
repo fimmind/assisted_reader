@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { getBookById, upsertBook } from '../src/core/books-store.js';
 import { importBookFromFile } from '../src/core/book-parser.js';
+import type { BookNavigationEntry } from '../src/core/types.js';
 
 import { chapterTitleForReader, readerAnchorChapter, readerBlocksForChapter } from '../src/core/reader-content.js';
 
@@ -99,6 +100,21 @@ test('FB2 notes remain link-accessible, and parent continuations do not repeat t
   assert.equal(imported.chapters[3].linear, false);
   assert.equal(readerAnchorChapter(imported.chapters, 'reader-fb2-note'), 4);
   assert.equal(imported.chapters[0].readerBlocks?.some((block) => block.type === 'paragraph' && block.content.some((part) => part.type === 'text' && part.href === '#reader-fb2-note')), true);
+});
+
+test('FB2 navigation follows nested sections and omits parent continuation chunks', async () => {
+  const imported = await importBookFromFile(file(`<FictionBook><body><section>
+    <title><p>Parent</p></title><p>Before child.</p><section><title><p>Child</p></title><p>Nested text.</p></section><p>After child.</p>
+    </section></body></FictionBook>`));
+  const findEntries = (entries: BookNavigationEntry[], title: string): BookNavigationEntry[] => entries.flatMap((entry) =>
+    entry.title === title ? [entry] : findEntries(entry.children, title));
+  const parent = findEntries(imported.navigation ?? [], 'Parent')[0];
+  assert.ok(parent);
+  assert.deepEqual(parent.location, { chapterIndex: 0, blockIndex: 0, textOffset: 0 });
+  assert.equal(parent.children.length, 1);
+  assert.equal(parent.children[0].title, 'Child');
+  assert.deepEqual(parent.children[0].location, { chapterIndex: 1, blockIndex: 0, textOffset: 0 });
+  assert.equal(findEntries(imported.navigation ?? [], 'Parent').length, 1);
 });
 
 test('FB2 image-only sections survive and invalid image references fail explicitly', async () => {

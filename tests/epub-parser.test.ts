@@ -143,7 +143,7 @@ async function navigationBook(nav?: string, ncx?: string): Promise<File> {
     ${ncx === undefined ? '' : '<item id="ncx" href="Nav/toc.ncx" media-type="application/x-dtbncx+xml"/>'}
     </manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/></spine></package>`);
   zip.file('OPS/Text/a.xhtml', '<html><body><p>Opening.</p><h1 id="one">First heading</h1><p>First page.</p></body></html>');
-  zip.file('OPS/Text/b.xhtml', '<html><body><p>Second page.</p><img src="scene.png" alt="Chapter boundary image"/><p id="two words">Next chapter.</p><p>More text.</p></body></html>');
+  zip.file('OPS/Text/b.xhtml', '<html><body><p>Second page.</p><img src="scene.png" alt="Chapter boundary image"/><p id="two words">Next <span id="inner">chapter</span>.</p><p>More text.</p></body></html>');
   zip.file('OPS/Text/scene.png', 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5nkAAAAASUVORK5CYII=', { base64: true });
   zip.file('OPS/Text/c.xhtml', '<html><body><p>Last page.</p></body></html>');
   if (nav !== undefined) zip.file('OPS/Nav/nav.xhtml', nav);
@@ -169,6 +169,19 @@ test('EPUB 3 TOC groups pages, resolves encoded fragments, and ignores page-list
   const oneImage = imported.chapters[1].readerBlocks?.find((block) => block.type === 'image');
   assert.equal(oneImage?.type === 'image' && oneImage.alt, 'Chapter boundary image');
   assert.equal(imported.chapters[2].readerBlocks?.some((block) => block.type === 'image'), false);
+});
+
+test('EPUB navigation preserves hierarchy and exact same-target parent and child locations', async () => {
+  const nav = navDocument('<li><span>Part One</span><ol><li><a href="../Text/a.xhtml#one">Chapter One</a></li><li><a href="../Text/b.xhtml#inner">Chapter Two</a></li></ol></li>');
+  const imported = await importBookFromFile(await navigationBook(nav));
+  assert.equal(imported.navigation?.length, 2);
+  assert.equal(imported.navigation?.[0].title, 'Front matter');
+  const parent = imported.navigation?.[1];
+  assert.equal(parent?.title, 'Part One');
+  assert.deepEqual(parent?.location, { chapterIndex: 1, blockIndex: 0, textOffset: 0 });
+  assert.deepEqual(parent?.children.map((entry) => entry.title), ['Chapter One', 'Chapter Two']);
+  assert.deepEqual(parent?.children[0].location, parent?.location);
+  assert.deepEqual(parent?.children[1].location, { chapterIndex: 2, blockIndex: 0, textOffset: 5 });
 });
 
 test('EPUB 2 NCX groups multiple content files under a chapter', async () => {
@@ -267,6 +280,18 @@ test('EPUB renders a linear navigation document and follows links into supplemen
   const target = 'reader-epub-OPS%2Fmissing.xhtml--note';
   assert.equal(readerAnchorChapter(imported.chapters, target), 2);
   assert.equal(imported.chapters[0].readerBlocks?.some((block) => block.type === 'paragraph' && block.content.some((part) => part.type === 'text' && part.href === `#${target}`)), true);
+});
+
+test('EPUB without a usable TOC exposes main and supplementary chapters in navigation', async () => {
+  const zip = await JSZip.loadAsync(await (await navigationBook()).arrayBuffer());
+  const packageXml = await zip.file('OPS/book.opf')!.async('string');
+  zip.file('OPS/book.opf', packageXml
+    .replace('</manifest>', '<item id="supp" href="Text/supp.xhtml" media-type="application/xhtml+xml"/></manifest>')
+    .replace('<itemref idref="c"/>', '<itemref idref="c"/><itemref idref="supp" linear="no"/>'));
+  zip.file('OPS/Text/supp.xhtml', '<html><body><p>Supplementary text.</p></body></html>');
+  const imported = await importBookFromFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'supplementary.epub'));
+  assert.deepEqual(imported.navigation?.map((entry) => entry.title), ['Chapter 1', 'Supplementary content']);
+  assert.deepEqual(imported.navigation?.map((entry) => entry.location.chapterIndex), [0, 1]);
 });
 
 test('EPUB CSS imports and charset declarations preserve cascade order and media filtering', async () => {

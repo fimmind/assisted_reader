@@ -1,4 +1,5 @@
-import type { BookChapter, ImportedBook } from './types';
+import { chapterNavigation } from './book-navigation.js';
+import type { BookChapter, BookNavigationEntry, ImportedBook } from './types';
 import { createId } from './math.js';
 
 interface ParsedBookPayload {
@@ -6,6 +7,7 @@ interface ParsedBookPayload {
   author: string;
   sourceType: ImportedBook['sourceType'];
   chapters: BookChapter[];
+  navigation?: BookNavigationEntry[];
 }
 
 function normalizeParagraphs(chunks: string[]): string[] {
@@ -15,7 +17,7 @@ function normalizeParagraphs(chunks: string[]): string[] {
 }
 
 export function parseTxtBook(text: string): BookChapter[] {
-  const chapterHeadingRegex = /^\s*(chapter\s+\d+.*)$/gim;
+  const chapterHeadingRegex = /^[\t ]*((?:chapter|part)[\t ]+(?:\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)(?:[\t ]*[:.\-]?[\t ]+[^\r\n]*)?)[\t ]*\r?$/gim;
   const headingMatches = Array.from(text.matchAll(chapterHeadingRegex));
 
   if (headingMatches.length === 0) {
@@ -26,15 +28,16 @@ export function parseTxtBook(text: string): BookChapter[] {
   }
 
   const chapters: BookChapter[] = [];
+  const preamble = text.slice(0, headingMatches[0].index ?? 0);
+  const preambleParagraphs = normalizeParagraphs(preamble.split(/\n\s*\n+/));
+  if (preambleParagraphs.length) chapters.push({ title: 'Front matter', paragraphs: preambleParagraphs });
   for (let index = 0; index < headingMatches.length; index += 1) {
     const current = headingMatches[index];
     const next = headingMatches[index + 1];
-    const start = current.index ?? 0;
+    const start = (current.index ?? 0) + current[0].length;
     const end = next?.index ?? text.length;
-    const chapterSlice = text.slice(start, end);
-    const lines = chapterSlice.split('\n');
-    const title = lines[0].trim();
-    const content = lines.slice(1).join('\n');
+    const title = current[1].trim();
+    const content = text.slice(start, end);
 
     chapters.push({
       title,
@@ -43,6 +46,10 @@ export function parseTxtBook(text: string): BookChapter[] {
   }
 
   return chapters.filter((chapter) => chapter.paragraphs.length > 0);
+}
+
+function parseTextNavigation(chapters: BookChapter[]): BookNavigationEntry[] {
+  return chapterNavigation(chapters, 'txt', 0);
 }
 
 function inferTitleFromFileName(fileName: string): string {
@@ -59,11 +66,13 @@ async function parseUploadedBook(file: File): Promise<ParsedBookPayload> {
 
   if (lowerName.endsWith('.txt')) {
     const text = await file.text();
+    const chapters = parseTxtBook(text);
     return {
       title,
       author: 'Unknown Author',
       sourceType: 'txt',
-      chapters: parseTxtBook(text),
+      chapters,
+      navigation: parseTextNavigation(chapters),
     };
   }
 
@@ -76,6 +85,7 @@ async function parseUploadedBook(file: File): Promise<ParsedBookPayload> {
       author: epub.author || 'Unknown Author',
       sourceType: 'epub',
       chapters: epub.chapters,
+      navigation: epub.navigation,
     };
   }
 
@@ -87,6 +97,7 @@ async function parseUploadedBook(file: File): Promise<ParsedBookPayload> {
       author: fb2.author || 'Unknown Author',
       sourceType: 'fb2',
       chapters: fb2.chapters,
+      navigation: fb2.navigation,
     };
   }
 
@@ -120,6 +131,7 @@ export async function importBookFromFile(file: File): Promise<ImportedBook> {
     currentChapter: 1,
     currentChapterProgress: 0,
     chapters: parsed.chapters,
+    navigation: parsed.navigation ?? chapterNavigation(parsed.chapters, parsed.sourceType, 0),
   };
 
   return book;

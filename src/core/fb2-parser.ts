@@ -1,4 +1,4 @@
-import type { BookChapter, ReaderContentBlock, ReaderContentStyle, ReaderInlineMark, ReaderParagraphBlock } from './types';
+import type { BookChapter, BookNavigationEntry, ReaderContentBlock, ReaderContentStyle, ReaderInlineMark, ReaderParagraphBlock, ReaderLocation } from './types';
 import { normalizeInlineParts, type RawInlinePart } from './rich-content';
 import { readerCssRules, readerElementStyle, type ReaderCssRule } from './reader-styles';
 
@@ -74,7 +74,21 @@ function decodeXml(buffer: ArrayBuffer): string {
   return new TextDecoder(encoding, { fatal: true }).decode(bytes);
 }
 
-export function parseFb2Book(buffer: ArrayBuffer): { title: string; author: string; chapters: BookChapter[] } {
+interface PendingNavigationEntry {
+  id: string;
+  title: string;
+  location?: ReaderLocation;
+  children: PendingNavigationEntry[];
+}
+
+function finalizeNavigation(entries: PendingNavigationEntry[]): BookNavigationEntry[] {
+  return entries.flatMap((entry) => {
+    const children = finalizeNavigation(entry.children);
+    return entry.location ? [{ id: entry.id, title: entry.title, location: entry.location, children }] : children;
+  });
+}
+
+export function parseFb2Book(buffer: ArrayBuffer): { title: string; author: string; chapters: BookChapter[]; navigation: BookNavigationEntry[] } {
   try {
     const xml = decodeXml(buffer);
     if (/<!DOCTYPE/i.test(xml)) throw new Error('FB2 documents with a DTD are not supported.');
@@ -110,9 +124,18 @@ export function parseFb2Book(buffer: ArrayBuffer): { title: string; author: stri
     }
     const resources: Fb2Resources = { binaries, rules };
     const chapters: BookChapter[] = [];
+    const navigationRoots: PendingNavigationEntry[] = [];
+    const navigationEntriesBySection = new Map<Element, PendingNavigationEntry>();
+    let navigationId = 0;
     const parseSection = (section: Element, fallback: string, linear: boolean, inherited: ReaderContentStyle): void => {
       const sectionTitle = child(section, 'title');
       const sectionName = sectionTitle ? children(sectionTitle, 'p').map((node) => content(node)).filter(Boolean).join(' ') || fallback : fallback;
+      const navigationEntry: PendingNavigationEntry = {
+        id: `fb2-${navigationId}`,
+        title: sectionName,
+        children: [],
+      };
+      navigationId += 1;
       let paragraphs: string[] = [];
       let readerBlocks: ReaderContentBlock[] = [];
       let pendingAnchors: string[] = section.getAttribute('id') ? [anchorId(section.getAttribute('id')!)] : [];
@@ -120,8 +143,10 @@ export function parseFb2Book(buffer: ArrayBuffer): { title: string; author: stri
       const flush = (): void => {
         if (!readerBlocks.some((block) => block.type === 'paragraph' || block.type === 'image')) return;
         if (pendingAnchors.length) readerBlocks.push({ type: 'spacer', afterParagraphIndex: paragraphs.length, anchorIds: pendingAnchors, style: { height: '0' } });
+        const chapterIndex = chapters.length;
         chapters.push({ title: sectionName, paragraphs, readerBlocks, linear,
           titlePresentation: isContinuation ? 'continuation' : 'content' });
+        navigationEntry.location ??= { chapterIndex, blockIndex: 0, textOffset: 0 };
         paragraphs = [];
         readerBlocks = [];
         pendingAnchors = [];
@@ -134,6 +159,8 @@ export function parseFb2Book(buffer: ArrayBuffer): { title: string; author: stri
         if (tag === 'section') {
           flush();
           parseSection(node, `Chapter ${chapters.length + 1}`, linear, style);
+          const childEntry = navigationEntriesBySection.get(node);
+          if (childEntry) navigationEntry.children.push(childEntry);
           isContinuation = true;
           return;
         }
@@ -178,12 +205,14 @@ export function parseFb2Book(buffer: ArrayBuffer): { title: string; author: stri
         }
       };
       const style = readerElementStyle(section, inherited, rules);
+      navigationEntriesBySection.set(section, navigationEntry);
       for (const node of Array.from(section.children)) visit(node, { blockType: 'paragraph', style });
       flush();
+      if (section.localName === 'body' || section.parentElement?.localName === 'FictionBook') navigationRoots.push(navigationEntry);
     };
     children(root, 'body').forEach((body, index) => parseSection(body, `Chapter ${chapters.length + 1}`, index === 0, {}));
     if (!chapters.length) throw new Error('No readable chapters found.');
-    return { title, author, chapters };
+    return { title, author, chapters, navigation: finalizeNavigation(navigationRoots) };
   } catch (error) {
     throw new Error(`Could not import FB2: ${error instanceof Error ? error.message : 'Invalid book.'}`);
   }

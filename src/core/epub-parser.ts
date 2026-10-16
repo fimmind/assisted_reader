@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import type {
   BookChapter,
+  BookNavigationEntry,
   ReaderContentBlock,
   ReaderContentStyle,
   ReaderInlineMark,
@@ -12,6 +13,7 @@ import {
   parseStyleDeclarations,
   type RawInlinePart,
 } from './rich-content';
+import { chapterNavigation, readerLocationAtOffset } from './book-navigation.js';
 
 import { readerCssRules, readerElementStyle, readerMediaMatches } from './reader-styles';
 
@@ -91,7 +93,7 @@ function resolvePath(base: string, href: string): string {
 interface ParsedChapterContent {
   paragraphs: string[];
   readerBlocks: ReaderContentBlock[];
-  anchors: Map<string, number>;
+  anchors: Map<string, { blockIndex: number; textOffset: number }>;
 }
 
 interface ParagraphContext {
@@ -234,7 +236,7 @@ async function chapterContent(
   if (!body) throw new Error(`EPUB chapter ${index} has no readable body.`);
   const paragraphs: string[] = [];
   const readerBlocks: ReaderContentBlock[] = [];
-  const anchors = new Map<string, number>();
+  const anchors = new Map<string, { blockIndex: number; textOffset: number }>();
   const cssRules = styleText.flatMap(readerCssRules).map((rule, order) => ({ ...rule, order }));
   let currentParts: RawInlinePart[] = [];
   let currentContext: ParagraphContext = { blockType: 'paragraph', style: {} };
@@ -244,7 +246,16 @@ async function chapterContent(
   const attachAnchor = (rawAnchor: string | null) => {
     const anchor = rawAnchor?.trim();
     if (!anchor) return;
-    if (!anchors.has(anchor)) anchors.set(anchor, readerBlocks.length);
+    if (!anchors.has(anchor)) {
+      const preserveWhitespace = currentContext.blockType === 'pre'
+        || ['pre', 'pre-wrap', 'break-spaces'].includes(currentContext.style.whiteSpace ?? '');
+      const normalizedOffset = normalizeInlineParts(currentParts, preserveWhitespace).text;
+      const lastPart = currentParts[currentParts.length - 1];
+      const pendingCanonicalSpace = !preserveWhitespace && lastPart?.type === 'text'
+        && /[\t\r\n ]$/.test(lastPart.text) && normalizedOffset.length > 0 && !normalizedOffset.endsWith('\n');
+      const textOffset = normalizedOffset.length + (pendingCanonicalSpace ? 1 : 0);
+      anchors.set(anchor, { blockIndex: readerBlocks.length, textOffset });
+    }
     if (currentParts.some((part) => part.type === 'text' && part.text.length > 0)) currentAnchorIds.push(epubAnchorId(path, anchor));
     else pendingAnchorIds.push(epubAnchorId(path, anchor));
   };
@@ -442,14 +453,63 @@ async function chapterContent(
   return { paragraphs, readerBlocks, anchors };
 }
 
-interface TocEntry { title: string; path: string; fragment: string }
+interface TocEntry { title: string; path?: string; fragment?: string; children: TocEntry[] }
 interface TocTable { entries: TocEntry[]; skippedEntry: boolean }
 interface ContentFile extends ParsedChapterContent { path: string }
 
 function tocEntry(base: string, href: string | null, title: string): TocEntry {
   if (!href || !normalize(title)) throw new Error('Invalid table of contents entry.');
   const url = new URL(href, new URL(base, 'https://epub.invalid/'));
-  return { title: normalize(title), path: resolvePath(base, href), fragment: decodeURIComponent(url.hash.slice(1)) };
+  return { title: normalize(title), path: resolvePath(base, href), fragment: decodeURIComponent(url.hash.slice(1)), children: [] };
+}
+
+function tocEntriesInOrder(entries: TocEntry[]): TocEntry[] {
+  return entries.flatMap((entry) => [entry, ...tocEntriesInOrder(entry.children)]);
+}
+
+function directChildren(node: Element, name: string): Element[] {
+  return Array.from(node.children).filter((child) => child.localName === name);
+}
+
+function readNcxPoints(parent: Element, path: string): { entries: TocEntry[]; skippedEntry: boolean } {
+  const result = directChildren(parent, 'navPoint').reduce<{ entries: TocEntry[]; skippedEntry: boolean }>((current, point) => {
+    const direct = (name: string) => directChildren(point, name)[0];
+    const nested = readNcxPoints(point, path);
+    try {
+      const entry = tocEntry(path, direct('content')?.getAttribute('src') ?? null, direct('navLabel')?.textContent ?? '');
+      entry.children = nested.entries;
+      return { entries: [...current.entries, entry], skippedEntry: current.skippedEntry || nested.skippedEntry };
+    } catch {
+      return { entries: [...current.entries, ...nested.entries], skippedEntry: true };
+    }
+  }, { entries: [], skippedEntry: false });
+  return result;
+}
+
+function readEpubNavList(list: Element, path: string): { entries: TocEntry[]; skippedEntry: boolean } {
+  return directChildren(list, 'li').reduce<{ entries: TocEntry[]; skippedEntry: boolean }>((current, item) => {
+    const link = directChildren(item, 'a')[0];
+    const label = link ?? directChildren(item, 'span')[0];
+    const nestedLists = directChildren(item, 'ol').map((nested) => readEpubNavList(nested, path));
+    const nestedEntries = nestedLists.flatMap((nested) => nested.entries);
+    const nestedSkipped = nestedLists.some((nested) => nested.skippedEntry);
+    if (!label) return { entries: [...current.entries, ...nestedEntries], skippedEntry: true };
+    if (!link && nestedEntries.length > 0) {
+      const title = normalize(label.textContent ?? '');
+      if (title) return {
+        entries: [...current.entries, { title, children: nestedEntries }],
+        skippedEntry: current.skippedEntry || nestedSkipped,
+      };
+    }
+    if (!link) return { entries: [...current.entries, ...nestedEntries], skippedEntry: true };
+    try {
+      const entry = tocEntry(path, link.getAttribute('href'), link.textContent ?? '');
+      entry.children = nestedEntries;
+      return { entries: [...current.entries, entry], skippedEntry: current.skippedEntry || nestedSkipped };
+    } catch {
+      return { entries: [...current.entries, ...nestedEntries], skippedEntry: true };
+    }
+  }, { entries: [], skippedEntry: false });
 }
 
 async function readTablesOfContents(opf: Document, opfPath: string, manifest: Map<string | null, Element>, read: (path: string) => Promise<string>): Promise<TocTable[]> {
@@ -467,24 +527,15 @@ async function readTablesOfContents(opf: Document, opfPath: string, manifest: Ma
       if (item === ncx) {
         const map = elements(doc, 'navMap')[0];
         if (!map) continue;
-        const entries: TocEntry[] = [];
-        let skippedEntry = false;
-        for (const point of elements(map, 'navPoint')) {
-          const direct = (name: string) => Array.from(point.children).find((node) => node.localName === name);
-          try { entries.push(tocEntry(path, direct('content')?.getAttribute('src') ?? null, direct('navLabel')?.textContent ?? '')); }
-          catch { skippedEntry = true; }
-        }
-        tables.push({ entries, skippedEntry });
+        const result = readNcxPoints(map, path);
+        tables.push({ entries: result.entries, skippedEntry: result.skippedEntry || result.entries.length === 0 });
       } else {
         const toc = elements(doc, 'nav').find((nav) =>
           (nav.getAttributeNS('http://www.idpf.org/2007/ops', 'type') ?? nav.getAttribute('epub:type') ?? '').split(/\s+/).includes('toc'));
         if (toc) {
-          const entries: TocEntry[] = [];
-          let skippedEntry = false;
-          for (const link of elements(toc, 'a')) {
-            try { entries.push(tocEntry(path, link.getAttribute('href'), link.textContent ?? '')); }
-            catch { skippedEntry = true; }
-          }
+          const results = directChildren(toc, 'ol').map((list) => readEpubNavList(list, path));
+          const entries = results.flatMap((result) => result.entries);
+          const skippedEntry = results.some((result) => result.skippedEntry) || entries.length === 0;
           tables.push({ entries, skippedEntry });
         }
       }
@@ -506,7 +557,32 @@ function chapterFromBlocks(title: string, blocks: ReaderContentBlock[]): BookCha
   return { title, paragraphs, readerBlocks, titlePresentation: 'content' };
 }
 
-function groupChapters(files: ContentFile[], tables: TocTable[]): BookChapter[] {
+function navigationTree(
+  entries: TocEntry[],
+  offsets: ReadonlyMap<TocEntry, { blockOffset: number; textOffset: number }>,
+  chapters: BookChapter[],
+  counter: { value: number },
+): BookNavigationEntry[] {
+  return entries.flatMap((entry) => {
+    const children = navigationTree(entry.children, offsets, chapters, counter);
+    const target = offsets.get(entry);
+    if (target === undefined) {
+      const location = children[0]?.location;
+      if (!entry.path && location) return [{ id: `epub-${counter.value++}`, title: entry.title, location, children }];
+      return children;
+    }
+    const id = `epub-${counter.value}`;
+    counter.value += 1;
+    const location = readerLocationAtOffset(chapters, target.blockOffset);
+    return [{ id, title: entry.title, location: { ...location, textOffset: target.textOffset }, children }];
+  });
+}
+
+function navigationContainsTitle(entries: BookNavigationEntry[], title: string): boolean {
+  return entries.some((entry) => entry.title === title || navigationContainsTitle(entry.children, title));
+}
+
+function groupChapters(files: ContentFile[], tables: TocTable[]): { chapters: BookChapter[]; navigation: BookNavigationEntry[] } {
   const blocks: ReaderContentBlock[] = [];
   const locations = new Map<string, { offset: number; file: ContentFile }>();
   for (const file of files) {
@@ -515,16 +591,20 @@ function groupChapters(files: ContentFile[], tables: TocTable[]): BookChapter[] 
     blocks.push(...file.readerBlocks);
   }
   let partialChapters: BookChapter[] | undefined;
+  let partialNavigation: BookNavigationEntry[] | undefined;
   for (const table of tables) {
     const boundaries: Array<{ title: string; offset: number }> = [];
+    const resolvedOffsets = new Map<TocEntry, { blockOffset: number; textOffset: number }>();
     let skippedEntry = table.skippedEntry;
-    for (const entry of table.entries) {
+    for (const entry of tocEntriesInOrder(table.entries)) {
+      if (!entry.path) continue;
       const location = locations.get(entry.path);
-      const local = entry.fragment ? location?.file.anchors.get(entry.fragment) : 0;
+      const local = entry.fragment ? location?.file.anchors.get(entry.fragment) : { blockIndex: 0, textOffset: 0 };
       if (!location || local === undefined) { skippedEntry = true; continue; }
-      const offset = location.offset + local;
+      const offset = location.offset + local.blockIndex;
       const previous = boundaries[boundaries.length - 1];
       if (previous && offset < previous.offset) { skippedEntry = true; continue; }
+      resolvedOffsets.set(entry, { blockOffset: offset, textOffset: local.textOffset });
       if (previous?.offset === offset) { previous.title = entry.title; continue; }
       boundaries.push({ title: entry.title, offset });
     }
@@ -534,16 +614,23 @@ function groupChapters(files: ContentFile[], tables: TocTable[]): BookChapter[] 
       boundary.title, blocks.slice(boundary.offset, boundaries[index + 1]?.offset ?? blocks.length),
     )).filter((chapter) => chapter.readerBlocks!.length > 0);
     if (!chapters.length) continue;
-    if (!skippedEntry) return chapters;
-    partialChapters ??= chapters;
+    const navigation = navigationTree(table.entries, resolvedOffsets, chapters, { value: 0 });
+    if (!skippedEntry) return { chapters, navigation };
+    if (!partialChapters) {
+      partialChapters = chapters;
+      partialNavigation = navigation;
+    }
   }
-  return partialChapters ?? [chapterFromBlocks('Chapter 1', blocks)];
+  return partialChapters
+    ? { chapters: partialChapters, navigation: partialNavigation ?? [] }
+    : { chapters: [chapterFromBlocks('Chapter 1', blocks)], navigation: [] };
 }
 
 export async function parseEpubBook(buffer: ArrayBuffer): Promise<{
   title: string;
   author: string;
   chapters: BookChapter[];
+  navigation: BookNavigationEntry[];
 }> {
   try {
     const zip = await JSZip.loadAsync(buffer);
@@ -598,10 +685,25 @@ export async function parseEpubBook(buffer: ArrayBuffer): Promise<{
       }
     }
     if (!files.some((file) => file.readerBlocks.length)) throw new Error('No readable text could be extracted from this EPUB. This does not necessarily mean the book is image-only or DRM-protected.');
-    const chapters = [...groupChapters(files, tables.map((table) => ({
-      ...table, entries: table.entries.filter((entry) => !supplementaryPaths.has(entry.path)),
-    }))), ...supplementary];
-    return { title, author, chapters };
+    const grouped = groupChapters(files, tables.map((table) => ({
+      ...table, entries: table.entries.filter((entry) => entry.path === undefined || !supplementaryPaths.has(entry.path)),
+    })));
+    const chapters = [...grouped.chapters, ...supplementary];
+    const mainNavigation = grouped.navigation.length
+      ? grouped.navigation
+      : chapterNavigation(grouped.chapters, 'epub-main', 0);
+    const frontMatterNavigation = grouped.chapters[0]?.title === 'Front matter'
+      && !navigationContainsTitle(mainNavigation, 'Front matter')
+      ? [{
+        id: 'epub-front-matter',
+        title: 'Front matter',
+        location: readerLocationAtOffset(grouped.chapters, 0),
+        children: [],
+      }]
+      : [];
+    const supplementaryNavigation = chapterNavigation(supplementary, 'epub-supplementary', grouped.chapters.length);
+    const navigation = [...frontMatterNavigation, ...mainNavigation, ...supplementaryNavigation];
+    return { title, author, chapters, navigation };
   } catch (error) {
     throw new Error(`Could not import EPUB: ${error instanceof Error ? error.message : 'Invalid book.'}`);
   }
