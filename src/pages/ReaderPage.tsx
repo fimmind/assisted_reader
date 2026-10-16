@@ -27,7 +27,6 @@ import {
   bookProgressAtLocation,
   captureVisibleReaderLocation,
   chapterProgressAtLocation,
-  readerLocationAtBookProgress,
   readerLocationFromLegacyProgress,
   resolveReaderLocation,
   restoreReaderLocation,
@@ -3136,7 +3135,6 @@ export default function ReaderPage() {
         }}
         book={book}
         location={currentLocation}
-        progressPercent={readingProgressPercent}
         bookmarks={bookmarks}
         canReturn={returnLocation !== null}
         onNavigate={(location) => navigateToReaderLocation(location, true)}

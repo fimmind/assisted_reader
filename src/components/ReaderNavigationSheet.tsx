@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
 import { BookmarkX, CornerUpLeft, Search } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -7,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { navigationForBook } from '@/core/book-navigation';
-import { readerLocationAtBookProgress } from '@/core/reader-location';
 import { searchBookText } from '@/core/reader-search';
 import type { ReaderSearchMatch } from '@/core/reader-search';
 import type { BookNavigationEntry, ImportedBook, ReaderBookmark, ReaderLocation } from '@/core/types';
@@ -18,7 +16,6 @@ interface ReaderNavigationSheetProps {
   onOpenChange: (open: boolean) => void;
   book: ImportedBook;
   location: ReaderLocation;
-  progressPercent: number;
   bookmarks: ReaderBookmark[];
   canReturn: boolean;
   onNavigate: (location: ReaderLocation) => void;
@@ -99,7 +96,6 @@ export function ReaderNavigationSheet({
   onOpenChange,
   book,
   location,
-  progressPercent,
   bookmarks,
   canReturn,
   onNavigate,
@@ -109,7 +105,6 @@ export function ReaderNavigationSheet({
   const navigation = useMemo(() => navigationForBook(book), [book]);
   const activeId = activeNavigationId(navigation, location);
   const [activeTab, setActiveTab] = useState('contents');
-  const [percentageInput, setPercentageInput] = useState(String(Math.round(progressPercent)));
   const [query, setQuery] = useState('');
   const [matches, setMatches] = useState<ReaderSearchMatch[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -125,9 +120,8 @@ export function ReaderNavigationSheet({
     }
     if (wasOpenRef.current) return;
     wasOpenRef.current = true;
-    setPercentageInput(String(Math.round(progressPercent)));
     setActiveTab(startOnSearch ? 'search' : 'contents');
-  }, [open, progressPercent, startOnSearch]);
+  }, [open, startOnSearch]);
 
   useEffect(() => {
     if (open && startOnSearch) {
@@ -172,14 +166,6 @@ export function ReaderNavigationSheet({
     return () => controller.abort();
   }, [book, open, query]);
 
-  const submitPercentage = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault();
-    const percentage = Number(percentageInput);
-    if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) return;
-    onNavigate(readerLocationAtBookProgress(book, percentage / 100));
-    onOpenChange(false);
-  };
-
   const visibleMatches = matches.slice(0, 200);
   const hasMoreMatches = matches.length > 200;
   const noMatches = didSearch && !isSearching && matches.length === 0 && !searchError;
@@ -190,24 +176,6 @@ export function ReaderNavigationSheet({
         <SheetHeader>
           <SheetTitle className="font-serif">Navigate book</SheetTitle>
         </SheetHeader>
-
-        <form className="flex items-end gap-2" onSubmit={submitPercentage}>
-          <div className="min-w-0 flex-1 space-y-1">
-            <label htmlFor="reader-go-to-percent" className="text-sm text-muted-foreground">Go to book percentage</label>
-            <Input
-              id="reader-go-to-percent"
-              type="number"
-              min={0}
-              max={100}
-              step={1}
-              required
-              value={percentageInput}
-              onChange={(event) => setPercentageInput(event.currentTarget.value)}
-              aria-label="Go to book percentage"
-            />
-          </div>
-          <Button type="submit" variant="outline" data-testid="button-go-to-percent">Go</Button>
-        </form>
 
         {canReturn && (
           <Button type="button" variant="ghost" className="justify-start gap-2" onClick={onReturn} data-testid="button-return-to-previous-position">
