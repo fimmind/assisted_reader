@@ -38,6 +38,21 @@ test('paragraph lines span consecutive pages without losing canonical offsets', 
   assert.equal(readerPageIndexForLocation(pages, { chapterIndex: 3, blockIndex: 3, textOffset: 21 }), null);
 });
 
+test('equal canonical page starts restore to the earliest title or card-only page', () => {
+  const segments: ReaderPaginationSegment[] = [
+    { kind: 'atomic', blockIndex: 0, startOffset: 0, endOffset: 0, startY: 0, endY: 60 },
+    { kind: 'text-line', blockIndex: 0, startOffset: 0, endOffset: 8, startY: 64, endY: 82 },
+    { kind: 'atomic', blockIndex: 0, startOffset: 8, endOffset: 8, startY: 86, endY: 146 },
+    { kind: 'atomic', blockIndex: 0, startOffset: 8, endOffset: 8, startY: 150, endY: 210 },
+  ];
+
+  const pages = buildReaderPages(segments, 70, 0);
+
+  assert.equal(readerPageIndexForLocation(pages, { chapterIndex: 0, blockIndex: 0, textOffset: 0 }), 0);
+  assert.equal(readerPageIndexForLocation(pages, { chapterIndex: 0, blockIndex: 0, textOffset: 8 }), 2);
+  assert.deepEqual(pages.map((page) => page.startLocation.textOffset), [0, 0, 8, 8]);
+});
+
 test('oversized visual segments are surfaced as a page issue', () => {
   const segments: ReaderPaginationSegment[] = [
     { kind: 'atomic', blockIndex: 4, startOffset: 0, endOffset: 0, startY: 10, endY: 160 },

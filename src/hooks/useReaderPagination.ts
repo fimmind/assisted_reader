@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import type { RefObject } from 'react';
 import {
   buildReaderPages,
@@ -51,11 +51,10 @@ const LINE_OVERLAP_EPSILON = 0.5;
 const PAGE_EDGE_EPSILON = 1.25;
 const MAX_STABILITY_MEASUREMENTS = 8;
 
-export class ReaderPaginationMeasurementError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ReaderPaginationMeasurementError';
-  }
+function readerPaginationMeasurementError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'ReaderPaginationMeasurementError';
+  return error;
 }
 
 function rectBounds(element: Element, rootTop: number): { top: number; bottom: number } {
@@ -124,7 +123,7 @@ function textLineFragments(textElement: HTMLElement, rootTop: number): TextLineF
   }
 
   if (canonicalOffset !== textElement.textContent?.length) {
-    throw new ReaderPaginationMeasurementError(
+    throw readerPaginationMeasurementError(
       `Rendered paragraph text offsets are inconsistent: renderedLength=${textElement.textContent?.length ?? 0}, measuredLength=${canonicalOffset}`,
     );
   }
@@ -246,7 +245,7 @@ function readRenderedSegments(root: HTMLElement): ReaderPaginationSegment[] {
   const rootTop = root.getBoundingClientRect().top;
   const markedBlocks = Array.from(root.querySelectorAll<HTMLElement>('[data-reader-block-index]'));
   if (markedBlocks.length === 0) {
-    throw new ReaderPaginationMeasurementError('No rendered reader blocks have data-reader-block-index markers.');
+    throw readerPaginationMeasurementError('No rendered reader blocks have data-reader-block-index markers.');
   }
 
   const segments: ReaderPaginationSegment[] = [];
@@ -256,12 +255,12 @@ function readRenderedSegments(root: HTMLElement): ReaderPaginationSegment[] {
   markedBlocks.forEach((blockElement) => {
     const blockIndex = Number(blockElement.dataset.readerBlockIndex);
     if (!Number.isInteger(blockIndex) || blockIndex < 0) {
-      throw new ReaderPaginationMeasurementError(
+      throw readerPaginationMeasurementError(
         `Rendered reader block has an invalid data-reader-block-index: value=${blockElement.dataset.readerBlockIndex ?? ''}`,
       );
     }
     if (seenIndexes.has(blockIndex)) {
-      throw new ReaderPaginationMeasurementError(`Rendered reader block index is duplicated: blockIndex=${blockIndex}`);
+      throw readerPaginationMeasurementError(`Rendered reader block index is duplicated: blockIndex=${blockIndex}`);
     }
     seenIndexes.add(blockIndex);
     if (!firstBlockElement) {
@@ -361,7 +360,7 @@ async function waitForRenderedResources(root: HTMLElement, signal: AbortSignal):
       await image.decode();
     } catch (failure) {
       if (!image.complete) {
-        throw new ReaderPaginationMeasurementError(
+        throw readerPaginationMeasurementError(
           `Reader image did not settle before pagination measurement: src=${image.currentSrc || image.src}, error=${String(failure)}`,
         );
       }
@@ -395,9 +394,39 @@ async function measureStablePages(
     previousSignature = firstSignature;
     if (!await waitForNextFrame(signal)) return null;
   }
-  throw new ReaderPaginationMeasurementError(
+  throw readerPaginationMeasurementError(
     `Reader layout kept changing during pagination measurement: measurements=${MAX_STABILITY_MEASUREMENTS}`,
   );
+}
+
+function layoutSignature(
+  layoutKey: string,
+  chapterIndex: number,
+  pageHeight: number,
+  pages: readonly ReaderPaginationPage[],
+): string {
+  const input = JSON.stringify([
+    layoutKey,
+    chapterIndex,
+    Math.round(pageHeight * 100) / 100,
+    pages.map((page) => [
+      Math.round(page.startY * 100) / 100,
+      Math.round(page.endY * 100) / 100,
+      page.startLocation.blockIndex,
+      page.startLocation.textOffset,
+      page.endLocation.blockIndex,
+      page.endLocation.textOffset,
+      page.issues,
+    ]),
+  ]);
+  let firstHash = 0x811c9dc5;
+  let secondHash = 0x9e3779b9;
+  for (let index = 0; index < input.length; index += 1) {
+    const codePoint = input.charCodeAt(index);
+    firstHash = Math.imul(firstHash ^ codePoint, 0x01000193);
+    secondHash = Math.imul(secondHash ^ codePoint, 0x5bd1e995);
+  }
+  return `${(firstHash >>> 0).toString(16).padStart(8, '0')}${(secondHash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 /** Measure the settled chapter DOM and keep the last committed layout while a new one is prepared. */
@@ -413,7 +442,7 @@ export function useReaderPagination({
   const [measurementError, setMeasurementError] = useState<ReaderPaginationErrorState | null>(null);
   const [isMeasuring, setIsMeasuring] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = rootRef.current;
     if (!enabled || !settled || !root) {
       setIsMeasuring(false);
@@ -458,7 +487,13 @@ export function useReaderPagination({
       try {
         const pages = await measureStablePages(root, pageHeight, chapterIndex, controller.signal);
         if (active && pages) {
-          setLayout({ chapterIndex, layoutKey, pageHeight, pages });
+          setLayout({
+            chapterIndex,
+            layoutKey,
+            signature: layoutSignature(layoutKey, chapterIndex, pageHeight, pages),
+            pageHeight,
+            pages,
+          });
           setMeasurementError(null);
           setIsMeasuring(false);
         }
@@ -467,7 +502,7 @@ export function useReaderPagination({
           measurementFailed = true;
           const error = failure instanceof Error
             ? failure
-            : new ReaderPaginationMeasurementError(`Reader pagination failed: ${String(failure)}`);
+            : readerPaginationMeasurementError(`Reader pagination failed: ${String(failure)}`);
           setMeasurementError({ layoutKey, error });
           setIsMeasuring(false);
         }

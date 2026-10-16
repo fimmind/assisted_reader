@@ -66,9 +66,11 @@ test('shared books retain independent positions across profile switches, reloads
       currentChapter: 1,
       currentChapterProgress: 0.01,
       location: { chapterIndex: 99, blockIndex: 99, textOffset: 99 },
+      pagePosition: { layoutKey: 'layout-signature', pageIndex: 4 },
     });
     const canonicalReload = withBookReadingProgress(storedBook, firstId);
     assert.deepEqual(canonicalReload.location, { chapterIndex: 2, blockIndex: 0, textOffset: 14 });
+    assert.deepEqual(canonicalReload.pagePosition, { layoutKey: 'layout-signature', pageIndex: 4 });
     assert.equal(canonicalReload.currentChapter, 3);
     assert.equal(canonicalReload.currentChapterProgress, 1);
     assert.equal(withBookReadingProgress(storedBook, secondId).currentChapter, 3);
@@ -105,6 +107,11 @@ test('shared books retain independent positions across profile switches, reloads
     }), RangeError);
     assert.throws(() => saveBookReadingProgress(firstId, book.id, {
       currentChapter: 1, currentChapterProgress: Number.NaN,
+    }), RangeError);
+    assert.throws(() => saveBookReadingProgress(firstId, book.id, {
+      currentChapter: 1,
+      currentChapterProgress: 0,
+      pagePosition: { layoutKey: '', pageIndex: -1 },
     }), RangeError);
     localStorage.setItem(READING_PROGRESS_STORAGE_KEY, '{broken');
     assert.throws(() => loadProfileState(), /Saved reading progress is invalid JSON/);

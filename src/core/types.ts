@@ -149,6 +149,10 @@ export interface BookReadingProgress {
   currentChapter: number;
   currentChapterProgress: number;
   location?: ReaderLocation;
+  pagePosition?: {
+    layoutKey: string;
+    pageIndex: number;
+  };
 }
 
 export interface ReaderBookmark {

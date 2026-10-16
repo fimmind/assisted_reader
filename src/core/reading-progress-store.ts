@@ -20,7 +20,16 @@ function isBookReadingProgress(value: unknown): value is BookReadingProgress {
     && typeof value.currentChapterProgress === 'number'
     && Number.isFinite(value.currentChapterProgress)
     && value.currentChapterProgress >= 0 && value.currentChapterProgress <= 1
-    && (value.location === undefined || isReaderLocation(value.location));
+    && (value.location === undefined || isReaderLocation(value.location))
+    && (value.pagePosition === undefined || isReaderPagePosition(value.pagePosition));
+}
+
+function isReaderPagePosition(value: unknown): value is NonNullable<BookReadingProgress['pagePosition']> {
+  return isRecord(value)
+    && typeof value.layoutKey === 'string'
+    && value.layoutKey.length > 0
+    && Number.isInteger(value.pageIndex)
+    && (value.pageIndex as number) >= 0;
 }
 
 function isReaderLocation(value: unknown): value is ReaderLocation {
@@ -87,6 +96,7 @@ export function withBookReadingProgress(book: ImportedBook, profileId: string): 
       currentChapter: Math.max(1, Math.min(position.currentChapter, Math.max(1, book.chapters.length))),
       currentChapterProgress: position.currentChapterProgress,
       location: undefined,
+      pagePosition: progress?.pagePosition,
     };
   }
   const location = resolveReaderLocation(book, progress.location);
@@ -97,6 +107,7 @@ export function withBookReadingProgress(book: ImportedBook, profileId: string): 
     currentChapter: location.chapterIndex + 1,
     currentChapterProgress: chapterProgress,
     location,
+    pagePosition: progress.pagePosition,
   };
 }
 
@@ -115,6 +126,7 @@ export function saveBookReadingProgress(profileId: string, bookId: string, progr
           currentChapter: progress.currentChapter,
           currentChapterProgress: progress.currentChapterProgress,
           ...(progress.location ? { location: progress.location } : {}),
+          ...(progress.pagePosition ? { pagePosition: progress.pagePosition } : {}),
         },
       },
     },

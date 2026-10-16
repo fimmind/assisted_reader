@@ -230,3 +230,22 @@
   border-bottom: 2px solid hsl(var(--primary));
   font-weight: 500;
 }
+
+.reader-page-content [data-definition-card="true"] {
+  max-height: max(4rem, calc(var(--reader-page-height) - 1rem));
+  overflow-y: auto;
+}
+
+.reader-page-content [data-reader-text-block],
+.reader-page-content .unknown-word {
+  overflow-wrap: anywhere;
+}
+
+.reader-page-content .unknown-word {
+  max-width: 100%;
+}
+
+.reader-page-content img {
+  max-height: max(1px, calc(var(--reader-page-height) - 4px)) !important;
+  object-fit: contain;
+}

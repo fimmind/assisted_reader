@@ -28,6 +28,7 @@ export interface ReaderPaginationIssue {
 export interface ReaderPaginationLayout {
   chapterIndex: number;
   layoutKey: string;
+  signature: string;
   pageHeight: number;
   pages: ReaderPaginationPage[];
 }
@@ -133,8 +134,16 @@ export function readerPageIndexForLocation(
   if (pages.length === 0 || pages[0].startLocation.chapterIndex !== location.chapterIndex) return null;
   let matchingPageIndex: number | null = null;
   for (let index = 0; index < pages.length; index += 1) {
-    if (compareLocations(pages[index].startLocation, location) > 0) break;
-    matchingPageIndex = index;
+    const comparison = compareLocations(pages[index].startLocation, location);
+    if (comparison > 0) break;
+    if (comparison < 0) {
+      matchingPageIndex = index;
+      continue;
+    }
+    const previousPage = pages[index - 1];
+    if (!previousPage || compareLocations(previousPage.startLocation, location) !== 0) {
+      matchingPageIndex = index;
+    }
   }
   return matchingPageIndex;
 }
