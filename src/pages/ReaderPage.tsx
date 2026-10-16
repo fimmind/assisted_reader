@@ -2972,7 +2972,7 @@ export default function ReaderPage() {
         'fixed top-0 inset-x-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border transition-transform duration-300',
         settings.readingMode === 'page' || headerVisible ? 'translate-y-0' : '-translate-y-full'
       )}>
-        <div className="container mx-auto px-4 h-14 flex items-center justify-between">
+        <div className="container mx-auto px-4 h-14 flex items-center justify-between [&_button]:cursor-pointer [&_a]:cursor-pointer">
           <div className="flex items-center gap-0 sm:gap-1">
             <Link href="/">
               <Button
