@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import { JSDOM } from 'jsdom';
 import { importBookFromFile } from '../src/core/book-parser.js';
+import { getBookById, upsertBook } from '../src/core/books-store.js';
 
 import { chapterTitleForReader, readerAnchorChapter, readerBlocksForChapter } from '../src/core/reader-content.js';
 
@@ -182,6 +183,17 @@ test('EPUB navigation preserves hierarchy and exact same-target parent and child
   assert.deepEqual(parent?.children.map((entry) => entry.title), ['Chapter One', 'Chapter Two']);
   assert.deepEqual(parent?.children[0].location, parent?.location);
   assert.deepEqual(parent?.children[1].location, { chapterIndex: 2, blockIndex: 0, textOffset: 5 });
+});
+
+test('EPUB trailing inline fragment anchors clamp to canonical paragraph end and persist', async () => {
+  const archive = await JSZip.loadAsync(await (await navigationBook(navDocument('<li><a href="../Text/a.xhtml#end">End</a></li>'))).arrayBuffer());
+  archive.file('OPS/Text/a.xhtml', '<html><body><p>Text <span id="end"></span></p></body></html>');
+  const imported = await importBookFromFile(new File([await archive.generateAsync({ type: 'arraybuffer' })], 'trailing-anchor.epub'));
+  assert.equal(imported.navigation?.[0].location.textOffset, 4);
+  globalThis.localStorage = new JSDOM('', { url: 'https://reader.test/' }).window.localStorage;
+  await upsertBook(imported);
+  const stored = await getBookById(imported.id);
+  assert.equal(stored?.navigation?.[0].location.textOffset, 4);
 });
 
 test('EPUB 2 NCX groups multiple content files under a chapter', async () => {

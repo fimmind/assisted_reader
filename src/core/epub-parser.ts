@@ -450,6 +450,14 @@ async function chapterContent(
   for (const child of Array.from(body.childNodes)) await walk(child, bodyStyle, null);
   flush();
   if (pendingAnchorIds.length && readerBlocks.length) readerBlocks.push({ type: 'spacer', afterParagraphIndex: paragraphs.length, anchorIds: pendingAnchorIds, style: { height: '0' } });
+  for (const [anchor, location] of anchors) {
+    const block = readerBlocks[location.blockIndex];
+    if (block?.type !== 'paragraph') continue;
+    const paragraphLength = paragraphs[block.paragraphIndex]?.length;
+    if (paragraphLength !== undefined && location.textOffset > paragraphLength) {
+      anchors.set(anchor, { ...location, textOffset: paragraphLength });
+    }
+  }
   return { paragraphs, readerBlocks, anchors };
 }
 
