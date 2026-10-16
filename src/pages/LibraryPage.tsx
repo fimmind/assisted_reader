@@ -13,6 +13,7 @@ import { buildResumableBookLemmaHistogramAsync, calculateBookStatsFromLemmaHisto
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { withBookReadingProgress } from '@/core/reading-progress-store';
+import { bookProgressAtLocation, readerLocationFromLegacyProgress } from '@/core/reader-location';
 import { loadLemmaDict } from '@/core/lemma';
 import { LEXICAL_ANALYSIS_VERSION } from '@/core/nlp';
 import { loadCompromise } from '@/core/external';
@@ -85,24 +86,12 @@ async function yieldToEventLoop(): Promise<void> {
 }
 
 function calculateProgressPercent(book: ImportedBook): number {
-  const chapterCount = book.chapters.length;
-  if (chapterCount === 0) {
-    return 0;
-  }
-  const completedChapters = Math.max(0, Math.min(chapterCount, book.currentChapter - 1));
-  const chapterProgress = (() => {
-    if (typeof book.currentChapterProgress !== 'number' || !Number.isFinite(book.currentChapterProgress)) {
-      return 0;
-    }
-    if (book.currentChapterProgress < 0) {
-      return 0;
-    }
-    if (book.currentChapterProgress > 1) {
-      return 1;
-    }
-    return book.currentChapterProgress;
-  })();
-  return ((completedChapters + chapterProgress) / chapterCount) * 100;
+  const location = book.location ?? readerLocationFromLegacyProgress(
+    book,
+    book.currentChapter,
+    book.currentChapterProgress,
+  );
+  return bookProgressAtLocation(book, location) * 100;
 }
 
 function hashTokenSegment(value: string, seed: number): number {

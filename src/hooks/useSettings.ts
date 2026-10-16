@@ -4,7 +4,8 @@ import type { ReaderSettings } from '@/core/types';
 
 function areReaderSettingsEqual(left: ReaderSettings, right: ReaderSettings): boolean {
   return (
-    left.fontSize === right.fontSize
+    left.readingMode === right.readingMode
+    && left.fontSize === right.fontSize
     && left.lineSpacing === right.lineSpacing
     && left.fontChoice === right.fontChoice
     && left.pageWidth === right.pageWidth

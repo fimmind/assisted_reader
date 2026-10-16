@@ -15,6 +15,7 @@ export const WORD_TOKEN_RE = /^[A-Za-z]+(?:['’][A-Za-z]+)?$/;
 export const SENTENCE_RE = /[^.!?]+[.!?]+|[^.!?]+$/g;
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
+  readingMode: 'scroll',
   fontSize: 18,
   lineSpacing: 'Normal',
   fontChoice: 'Serif',

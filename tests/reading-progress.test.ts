@@ -5,6 +5,7 @@ import { deleteBookById, getBookById, listBooks, upsertBook } from '../src/core/
 import { READING_PROGRESS_STORAGE_KEY } from '../src/core/constants.js';
 import { createProfile, deleteProfile, getActiveProfile, loadProfileState, resetProfileObservations, setActiveProfile } from '../src/core/profile-store.js';
 import { saveBookReadingProgress, withBookReadingProgress } from '../src/core/reading-progress-store.js';
+import { createReaderBookmark, listReaderBookmarks } from '../src/core/reader-bookmarks.js';
 import type { ImportedBook } from '../src/core/types.js';
 
 const book: ImportedBook = {
@@ -26,12 +27,17 @@ test('shared books retain independent positions across profile switches, reloads
   try {
     await upsertBook(book);
     const firstId = getActiveProfile(loadProfileState()).id;
+    const firstBookmark = createReaderBookmark(firstId, book.id, { chapterIndex: 0, blockIndex: 0, textOffset: 2 }, 'Opening');
+    assert.deepEqual(listReaderBookmarks(firstId, book.id), [firstBookmark]);
     const legacyView = withBookReadingProgress(book, firstId);
     assert.equal(legacyView.currentChapter, 2);
     assert.equal(legacyView.currentChapterProgress, 0.4);
 
     createProfile('Second reader');
     const secondId = getActiveProfile(loadProfileState()).id;
+    assert.deepEqual(listReaderBookmarks(secondId, book.id), []);
+    const secondBookmark = createReaderBookmark(secondId, book.id, { chapterIndex: 1, blockIndex: 0, textOffset: 4 }, 'Second chapter');
+    assert.deepEqual(listReaderBookmarks(secondId, book.id), [secondBookmark]);
     const freshView = withBookReadingProgress(book, secondId);
     assert.equal(freshView.currentChapter, 1);
     assert.equal(freshView.currentChapterProgress, 0);
@@ -60,6 +66,8 @@ test('shared books retain independent positions across profile switches, reloads
     assert.equal(withBookReadingProgress(storedBook, secondId).currentChapterProgress, 0.7);
 
     deleteProfile(secondId);
+    assert.deepEqual(listReaderBookmarks(secondId, book.id), []);
+    assert.deepEqual(listReaderBookmarks(firstId, book.id), [firstBookmark]);
     assert.equal(getActiveProfile(loadProfileState()).id, firstId);
     assert.equal(withBookReadingProgress(storedBook, secondId).currentChapterProgress, 0);
     assert.equal(withBookReadingProgress(storedBook, firstId).currentChapterProgress, 0.9);
@@ -73,6 +81,8 @@ test('shared books retain independent positions across profile switches, reloads
 
     await deleteBookById(book.id);
     assert.equal(await getBookById(book.id), null);
+    assert.deepEqual(listReaderBookmarks(firstId, book.id), []);
+    assert.deepEqual(listReaderBookmarks(thirdId, book.id), []);
     await upsertBook({ ...book, currentChapter: 1, currentChapterProgress: 0 });
     const reimportedBook = await getBookById(book.id);
     assert.ok(reimportedBook);

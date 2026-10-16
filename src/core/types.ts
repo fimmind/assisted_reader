@@ -1,6 +1,7 @@
 export type WsdMode = 'none' | 'sayedshaun' | 'glite-lens';
 
 export interface ReaderSettings {
+  readingMode: 'scroll' | 'page';
   fontSize: number;
   lineSpacing: 'Compact' | 'Normal' | 'Relaxed';
   fontChoice: 'Serif' | 'Sans';
@@ -131,9 +132,31 @@ export interface BookChapter {
   linear?: boolean;
 }
 
+export interface ReaderLocation {
+  chapterIndex: number;
+  blockIndex: number;
+  textOffset: number;
+}
+
+export interface BookNavigationEntry {
+  id: string;
+  title: string;
+  location: ReaderLocation;
+  children: BookNavigationEntry[];
+}
+
 export interface BookReadingProgress {
   currentChapter: number;
   currentChapterProgress: number;
+  location?: ReaderLocation;
+}
+
+export interface ReaderBookmark {
+  id: string;
+  bookId: string;
+  location: ReaderLocation;
+  label: string;
+  createdAt: string;
 }
 
 export interface ImportedBook extends BookReadingProgress {
@@ -144,6 +167,7 @@ export interface ImportedBook extends BookReadingProgress {
   createdAt: string;
   updatedAt: string;
   chapters: BookChapter[];
+  navigation?: BookNavigationEntry[];
 }
 
 export interface VocabularyModel {

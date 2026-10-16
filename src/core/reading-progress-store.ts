@@ -1,5 +1,7 @@
 import { READING_PROGRESS_STORAGE_KEY } from './constants.js';
-import type { BookReadingProgress, ImportedBook } from './types.js';
+import { clearReaderBookmarksForBook, clearReaderBookmarksForProfile } from './reader-bookmarks.js';
+import { chapterProgressAtLocation, resolveReaderLocation } from './reader-location.js';
+import type { BookReadingProgress, ImportedBook, ReaderLocation } from './types.js';
 
 interface ReadingProgressState {
   schemaVersion: 1;
@@ -17,7 +19,15 @@ function isBookReadingProgress(value: unknown): value is BookReadingProgress {
     && Number.isInteger(value.currentChapter) && value.currentChapter >= 1
     && typeof value.currentChapterProgress === 'number'
     && Number.isFinite(value.currentChapterProgress)
-    && value.currentChapterProgress >= 0 && value.currentChapterProgress <= 1;
+    && value.currentChapterProgress >= 0 && value.currentChapterProgress <= 1
+    && (value.location === undefined || isReaderLocation(value.location));
+}
+
+function isReaderLocation(value: unknown): value is ReaderLocation {
+  return isRecord(value)
+    && Number.isInteger(value.chapterIndex) && (value.chapterIndex as number) >= 0
+    && Number.isInteger(value.blockIndex) && (value.blockIndex as number) >= 0
+    && Number.isInteger(value.textOffset) && (value.textOffset as number) >= 0;
 }
 
 function loadReadingProgressState(): ReadingProgressState | null {
@@ -71,10 +81,22 @@ export function withBookReadingProgress(book: ImportedBook, profileId: string): 
   const position = progress ?? (state.legacyProfileId === profileId
     ? { currentChapter: book.currentChapter, currentChapterProgress: book.currentChapterProgress }
     : { currentChapter: 1, currentChapterProgress: 0 });
+  if (!progress?.location) {
+    return {
+      ...book,
+      currentChapter: Math.max(1, Math.min(position.currentChapter, Math.max(1, book.chapters.length))),
+      currentChapterProgress: position.currentChapterProgress,
+      location: undefined,
+    };
+  }
+  const location = resolveReaderLocation(book, progress.location);
+  const chapter = book.chapters[location.chapterIndex];
+  const chapterProgress = chapter ? chapterProgressAtLocation(chapter, location.blockIndex, location.textOffset) : 0;
   return {
     ...book,
-    currentChapter: Math.max(1, Math.min(position.currentChapter, book.chapters.length)),
-    currentChapterProgress: position.currentChapterProgress,
+    currentChapter: location.chapterIndex + 1,
+    currentChapterProgress: chapterProgress,
+    location,
   };
 }
 
@@ -89,13 +111,18 @@ export function saveBookReadingProgress(profileId: string, bookId: string, progr
       ...state.byProfile,
       [profileId]: {
         ...state.byProfile[profileId],
-        [bookId]: { currentChapter: progress.currentChapter, currentChapterProgress: progress.currentChapterProgress },
+        [bookId]: {
+          currentChapter: progress.currentChapter,
+          currentChapterProgress: progress.currentChapterProgress,
+          ...(progress.location ? { location: progress.location } : {}),
+        },
       },
     },
   });
 }
 
 export function clearReadingProgressForProfile(profileId: string): void {
+  clearReaderBookmarksForProfile(profileId);
   const state = loadReadingProgressState();
   if (!state) return;
   saveReadingProgressState({
@@ -106,6 +133,7 @@ export function clearReadingProgressForProfile(profileId: string): void {
 }
 
 export function clearReadingProgressForBook(bookId: string): void {
+  clearReaderBookmarksForBook(bookId);
   const state = loadReadingProgressState();
   if (!state) return;
   saveReadingProgressState({
