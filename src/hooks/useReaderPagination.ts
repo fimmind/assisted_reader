@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
   buildReaderPages,
@@ -25,6 +25,7 @@ export interface UseReaderPaginationResult {
   layout: ReaderPaginationLayout | null;
   isReady: boolean;
   error: Error | null;
+  settledMeasurementRevision: number;
 }
 
 interface TextLineFragment {
@@ -429,7 +430,16 @@ function layoutSignature(
   return `${(firstHash >>> 0).toString(16).padStart(8, '0')}${(secondHash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-/** Measure the settled chapter DOM and keep the last committed layout while a new one is prepared. */
+function geometryElements(node: Node): Element[] {
+  if (!(node instanceof Element)) return [];
+  const selector = '[data-reader-block-index], [data-definition-card="true"], img';
+  return [
+    ...(node.matches(selector) ? [node] : []),
+    ...Array.from(node.querySelectorAll(selector)),
+  ];
+}
+
+/** Keep compatible pages available and remeasure them as rendered chapter geometry changes. */
 export function useReaderPagination({
   rootRef,
   enabled,
@@ -440,16 +450,26 @@ export function useReaderPagination({
 }: UseReaderPaginationOptions): UseReaderPaginationResult {
   const [layout, setLayout] = useState<ReaderPaginationLayout | null>(null);
   const [measurementError, setMeasurementError] = useState<ReaderPaginationErrorState | null>(null);
-  const [isMeasuring, setIsMeasuring] = useState(false);
+  const [settledMeasurementRevision, setSettledMeasurementRevision] = useState(0);
+  const settledRef = useRef(settled);
+  const layoutRef = useRef<ReaderPaginationLayout | null>(null);
+  const scheduleMeasurementRef = useRef<() => void>(() => {});
+
+  useLayoutEffect(() => {
+    settledRef.current = settled;
+    if (settled) scheduleMeasurementRef.current();
+  }, [settled]);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!enabled || !settled || !root) {
-      setIsMeasuring(false);
+    if (!enabled || !root) {
+      scheduleMeasurementRef.current = () => {};
+      layoutRef.current = null;
+      setLayout(null);
+      setMeasurementError(null);
       return;
     }
     if (!Number.isFinite(pageHeight) || pageHeight <= 0) {
-      setIsMeasuring(false);
       setMeasurementError({
         layoutKey,
         error: new RangeError(`Reader pagination page height must be positive: pageHeight=${pageHeight}`),
@@ -464,15 +484,22 @@ export function useReaderPagination({
     let measurementFailed = false;
     let scheduledFrame = 0;
 
+    const hasCompatibleLayout = (): boolean => {
+      const currentLayout = layoutRef.current;
+      return currentLayout?.layoutKey === layoutKey
+        && currentLayout.chapterIndex === chapterIndex
+        && currentLayout.pageHeight === pageHeight;
+    };
+
     const scheduleMeasurement = (): void => {
       if (!active || controller.signal.aborted) return;
+      if (!settledRef.current && !hasCompatibleLayout()) return;
       if (running) {
         runPending = true;
         return;
       }
       if (scheduledFrame !== 0) return;
       measurementFailed = false;
-      setIsMeasuring(true);
       scheduledFrame = window.requestAnimationFrame(() => {
         scheduledFrame = 0;
         void runMeasurement();
@@ -483,19 +510,25 @@ export function useReaderPagination({
       if (!active || running) return;
       running = true;
       runPending = false;
-      setIsMeasuring(true);
+      const measurementStartedSettled = settledRef.current;
       try {
         const pages = await measureStablePages(root, pageHeight, chapterIndex, controller.signal);
         if (active && pages) {
-          setLayout({
+          const nextLayout: ReaderPaginationLayout = {
             chapterIndex,
             layoutKey,
             signature: layoutSignature(layoutKey, chapterIndex, pageHeight, pages),
             pageHeight,
             pages,
-          });
+          };
+          if (layoutRef.current?.signature !== nextLayout.signature) {
+            layoutRef.current = nextLayout;
+            setLayout(nextLayout);
+          }
+          if (measurementStartedSettled && settledRef.current && !runPending) {
+            setSettledMeasurementRevision((revision) => revision + 1);
+          }
           setMeasurementError(null);
-          setIsMeasuring(false);
         }
       } catch (failure) {
         if (active && !controller.signal.aborted) {
@@ -504,7 +537,6 @@ export function useReaderPagination({
             ? failure
             : readerPaginationMeasurementError(`Reader pagination failed: ${String(failure)}`);
           setMeasurementError({ layoutKey, error });
-          setIsMeasuring(false);
         }
       } finally {
         running = false;
@@ -516,26 +548,60 @@ export function useReaderPagination({
     };
 
     const resizeObserver = new ResizeObserver(scheduleMeasurement);
-    resizeObserver.observe(root);
-    root.querySelectorAll<HTMLElement>(
-      '[data-reader-block-index], [data-definition-card="true"], img',
-    ).forEach((element) => resizeObserver.observe(element));
+    const observedElements = new Set<Element>();
+    const observeGeometry = (element: Element): void => {
+      if (observedElements.has(element)) return;
+      observedElements.add(element);
+      resizeObserver.observe(element);
+    };
+    const observeTree = (node: Node): void => {
+      geometryElements(node).forEach(observeGeometry);
+    };
+    const unobserveTree = (node: Node): void => {
+      geometryElements(node).forEach((element) => {
+        if (observedElements.delete(element)) resizeObserver.unobserve(element);
+      });
+    };
+    observeGeometry(root);
+    root.querySelectorAll('[data-reader-block-index], [data-definition-card="true"], img')
+      .forEach(observeGeometry);
+    const mutationObserver = new MutationObserver((records) => {
+      let geometryChanged = false;
+      records.forEach((record) => {
+        if (record.type === 'childList') {
+          geometryChanged = true;
+          record.addedNodes.forEach(observeTree);
+          record.removedNodes.forEach(unobserveTree);
+        } else if (record.type === 'characterData') {
+          geometryChanged = true;
+        }
+      });
+      if (geometryChanged) scheduleMeasurement();
+    });
+    mutationObserver.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+    scheduleMeasurementRef.current = scheduleMeasurement;
     document.fonts.addEventListener('loadingdone', scheduleMeasurement);
     window.addEventListener('resize', scheduleMeasurement);
-    scheduleMeasurement();
+    if (settledRef.current) scheduleMeasurement();
 
     return () => {
       active = false;
       controller.abort();
+      scheduleMeasurementRef.current = () => {};
       resizeObserver.disconnect();
+      mutationObserver.disconnect();
       document.fonts.removeEventListener('loadingdone', scheduleMeasurement);
       window.removeEventListener('resize', scheduleMeasurement);
       if (scheduledFrame !== 0) window.cancelAnimationFrame(scheduledFrame);
     };
-  }, [rootRef, enabled, settled, layoutKey, chapterIndex, pageHeight]);
+  }, [rootRef, enabled, layoutKey, chapterIndex, pageHeight]);
 
   const error = measurementError?.layoutKey === layoutKey ? measurementError.error : null;
-  const isReady = enabled && settled && !isMeasuring && error === null
+  const isReady = enabled && error === null
     && layout?.layoutKey === layoutKey
     && layout.chapterIndex === chapterIndex
     && layout.pageHeight === pageHeight;
@@ -544,5 +610,6 @@ export function useReaderPagination({
     layout,
     isReady,
     error,
+    settledMeasurementRevision,
   };
 }

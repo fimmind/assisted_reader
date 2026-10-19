@@ -254,6 +254,12 @@ interface ParagraphWordClick {
   start: number;
 }
 
+interface PageRefreshAnchor {
+  location: ReaderLocation;
+  layout: ReaderPaginationLayout;
+  settledMeasurementRevision: number;
+}
+
 type AnalysisRefreshMode = 'reset' | 'preserve';
 
 function contextForCard(analysis: ParagraphAnalysis, target: DefinitionTarget): WsdContext | null {
@@ -903,6 +909,9 @@ export default function ReaderPage() {
   const [pageAnalysisCompleteRunId, setPageAnalysisCompleteRunId] = useState<number | null>(null);
   const [pageAnalysisError, setPageAnalysisError] = useState<string | null>(null);
   const [viewportSize, setViewportSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  const paginationLayoutRef = useRef<ReaderPaginationLayout | null>(null);
+  const paginationLayoutKeyRef = useRef('');
+  const paginationSettledMeasurementRevisionRef = useRef(0);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
   const readerProfileIdRef = useRef<string | null>(null);
@@ -925,6 +934,7 @@ export default function ReaderPage() {
   const currentPageIndexRef = useRef(0);
   const pageAnchorLocationRef = useRef<ReaderLocation | null>(null);
   const pendingPageAnchorRef = useRef<ReaderLocation | null>(null);
+  const pageRefreshAnchorRef = useRef<PageRefreshAnchor | null>(null);
   const paginationInertStateRef = useRef(new WeakMap<HTMLElement, { inert: boolean; ariaHidden: string | null }>());
   const persistCurrentChapterProgressRef = useRef<(force: boolean) => void>(() => {});
   const currentLocationRef = useRef<ReaderLocation | null>(null);
@@ -977,6 +987,7 @@ export default function ReaderPage() {
   const paginationLayoutKey = JSON.stringify([
     book?.id,
     book?.updatedAt,
+    readerProfileIdRef.current,
     paginationChapterIndex,
     viewportSize.width,
     paginationPageHeight,
@@ -996,7 +1007,7 @@ export default function ReaderPage() {
   ]);
   const pagination = useReaderPagination({
     rootRef: readerRootRef,
-    enabled: settings.readingMode === 'page' && book !== null,
+    enabled: settings.readingMode === 'page' && book !== null && !isLoading,
     settled: paginationSettled,
     layoutKey: paginationLayoutKey,
     chapterIndex: paginationChapterIndex,
@@ -1007,8 +1018,15 @@ export default function ReaderPage() {
     && pagination.isReady
     && paginationErrorMessage === null;
 
+  useLayoutEffect(() => {
+    paginationLayoutRef.current = pagination.layout;
+    paginationLayoutKeyRef.current = paginationLayoutKey;
+    paginationSettledMeasurementRevisionRef.current = pagination.settledMeasurementRevision;
+  }, [pagination.layout, pagination.settledMeasurementRevision, paginationLayoutKey]);
+
   const beginReaderLoading = useCallback((): void => {
     nextChapterPreloadControllerRef.current?.abort();
+    pageRefreshAnchorRef.current = null;
     analysisRunIdRef.current += 1;
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
@@ -1209,6 +1227,25 @@ export default function ReaderPage() {
   ) => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
+    const currentPaginationLayout = paginationLayoutRef.current;
+    if (mode === 'preserve' && !pageRefreshAnchorRef.current
+      && currentPaginationLayout?.layoutKey === paginationLayoutKeyRef.current
+      && currentPaginationLayout.chapterIndex === selectedBook.currentChapter - 1) {
+      const currentPage = currentPaginationLayout.pages[currentPageIndexRef.current];
+      const location = pendingPageAnchorRef.current
+        ?? currentPage?.startLocation
+        ?? pageAnchorLocationRef.current
+        ?? currentLocationRef.current;
+      if (location) {
+        pageRefreshAnchorRef.current = {
+          location,
+          layout: currentPaginationLayout,
+          settledMeasurementRevision: paginationSettledMeasurementRevisionRef.current,
+        };
+      }
+    } else if (mode === 'reset') {
+      pageRefreshAnchorRef.current = null;
+    }
     const currentRunId = analysisRunIdRef.current + 1;
     analysisRunIdRef.current = currentRunId;
     setPageAnalysisCompleteRunId(null);
@@ -1507,6 +1544,10 @@ export default function ReaderPage() {
     lastStableLocationRef.current = location;
     pageAnchorLocationRef.current = pageStartLocation;
     pendingPageAnchorRef.current = null;
+    const pageRefreshAnchor = pageRefreshAnchorRef.current;
+    if (pageRefreshAnchor?.layout === layout) {
+      pageRefreshAnchorRef.current = { ...pageRefreshAnchor, location: pageStartLocation };
+    }
     currentPageIndexRef.current = pageIndex;
     setCurrentPageIndex(pageIndex);
     if (pageViewportRef.current) pageViewportRef.current.scrollTop = 0;
@@ -1948,7 +1989,13 @@ export default function ReaderPage() {
       pendingPageAnchorRef.current = location;
       if (pagination.isReady && pagination.layout) {
         const pageIndex = readerPageIndexForLocation(pagination.layout.pages, location);
-        if (pageIndex !== null) commitReaderPage(pageIndex, pagination.layout);
+        if (pageIndex !== null) {
+          const pageRefreshAnchor = pageRefreshAnchorRef.current;
+          if (pageRefreshAnchor) {
+            pageRefreshAnchorRef.current = { ...pageRefreshAnchor, location };
+          }
+          commitReaderPage(pageIndex, pagination.layout);
+        }
       }
       return;
     }
@@ -2008,6 +2055,11 @@ export default function ReaderPage() {
     if (!pagination.isReady || !pagination.layout) return;
     const targetPageIndex = currentPageIndexRef.current + delta;
     if (targetPageIndex >= 0 && targetPageIndex < pagination.layout.pages.length) {
+      const pageRefreshAnchor = pageRefreshAnchorRef.current;
+      const targetPage = pagination.layout.pages[targetPageIndex];
+      if (pageRefreshAnchor && targetPage) {
+        pageRefreshAnchorRef.current = { ...pageRefreshAnchor, location: targetPage.startLocation };
+      }
       commitReaderPage(targetPageIndex, pagination.layout);
       return;
     }
@@ -2605,7 +2657,9 @@ export default function ReaderPage() {
       && savedPagePosition.pageIndex < layout.pages.length
       ? savedPagePosition.pageIndex
       : null;
+    const pageRefreshAnchor = pageRefreshAnchorRef.current;
     const anchor = pendingPageAnchorRef.current
+      ?? pageRefreshAnchor?.location
       ?? pageAnchorLocationRef.current
       ?? currentBook.location
       ?? currentLocationRef.current
@@ -2629,7 +2683,11 @@ export default function ReaderPage() {
       pageAnchorLocationRef.current = page.startLocation;
       pendingPageAnchorRef.current = null;
     }
-  }, [book, commitReaderPage, pagination.isReady, pagination.layout, settings.readingMode]);
+    if (pageRefreshAnchor
+      && pagination.settledMeasurementRevision > pageRefreshAnchor.settledMeasurementRevision) {
+      pageRefreshAnchorRef.current = null;
+    }
+  }, [book, commitReaderPage, pagination.isReady, pagination.layout, pagination.settledMeasurementRevision, settings.readingMode]);
 
   useLayoutEffect(() => {
     const root = readerRootRef.current;

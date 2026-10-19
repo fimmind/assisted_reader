@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ComponentProps, ReactNode } from 'react';
 import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
@@ -61,14 +61,13 @@ export function ContextualDefinitionCard({
   definitionStatus,
   ...cardProps
 }: ContextualDefinitionCardProps) {
-  const [modelStatus, setModelStatus] = useState(getWsdModelStatus);
+  const modelStatus = useSyncExternalStore(subscribeWsdModelStatus, getWsdModelStatus);
   const modelPhase = modelStatus.mode === wsdMode ? modelStatus.phase : 'loading';
   const wsdEnabled = wsdMode !== 'none';
   const [nearViewport, setNearViewport] = useState(false);
   const [scored, setScored] = useState<ScoredDefinition | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
-  useEffect(() => subscribeWsdModelStatus(setModelStatus), []);
   useEffect(() => {
     if (wsdEnabled && modelPhase === 'error') {
       onWsdSettled?.();
