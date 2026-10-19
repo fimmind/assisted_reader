@@ -22,7 +22,7 @@ import { scoreWordSenses, startWsdModel, stopWsdModel, waitForWsdModelReady } fr
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks } from '@/core/books-store';
 import { saveBookReadingProgress, withBookReadingProgress } from '@/core/reading-progress-store';
-import { createReaderBookmark, deleteReaderBookmark, listReaderBookmarks } from '@/core/reader-bookmarks';
+import { createReaderBookmark, deleteReaderBookmark, listReaderBookmarks, renameReaderBookmark } from '@/core/reader-bookmarks';
 import {
   bookProgressAtLocation,
   captureVisibleReaderLocation,
@@ -2806,6 +2806,14 @@ export default function ReaderPage() {
     setBookmarks((previous) => previous.filter((bookmark) => bookmark.id !== bookmarkId));
   }, []);
 
+  const renameBookmark = useCallback((bookmarkId: string, label: string): void => {
+    const currentBook = bookRef.current;
+    const profileId = readerProfileIdRef.current;
+    if (!currentBook || !profileId) throw new Error('Cannot rename a bookmark without a loaded reader profile and book.');
+    const renamedBookmark = renameReaderBookmark(profileId, currentBook.id, bookmarkId, label);
+    setBookmarks((previous) => previous.map((bookmark) => bookmark.id === renamedBookmark.id ? renamedBookmark : bookmark));
+  }, []);
+
   useEffect(() => {
     const isTextEntryTarget = (target: EventTarget | null): boolean => target instanceof HTMLElement
       && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
@@ -3138,6 +3146,7 @@ export default function ReaderPage() {
         bookmarks={bookmarks}
         onNavigate={(location) => navigateToReaderLocation(location, true)}
         onDeleteBookmark={removeReaderBookmark}
+        onRenameBookmark={renameBookmark}
       />
       {bookmarkFeedback && <div role="status" aria-live="polite" className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md bg-foreground px-4 py-2 text-sm text-background">{bookmarkFeedback}</div>}
 

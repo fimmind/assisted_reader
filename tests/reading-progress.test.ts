@@ -5,7 +5,7 @@ import { deleteBookById, getBookById, listBooks, upsertBook } from '../src/core/
 import { READING_PROGRESS_STORAGE_KEY } from '../src/core/constants.js';
 import { createProfile, deleteProfile, getActiveProfile, loadProfileState, resetProfileObservations, setActiveProfile } from '../src/core/profile-store.js';
 import { saveBookReadingProgress, withBookReadingProgress } from '../src/core/reading-progress-store.js';
-import { createReaderBookmark, listReaderBookmarks } from '../src/core/reader-bookmarks.js';
+import { createReaderBookmark, listReaderBookmarks, renameReaderBookmark } from '../src/core/reader-bookmarks.js';
 import type { ImportedBook } from '../src/core/types.js';
 
 const book: ImportedBook = {
@@ -38,6 +38,12 @@ test('shared books retain independent positions across profile switches, reloads
     assert.deepEqual(listReaderBookmarks(secondId, book.id), []);
     const secondBookmark = createReaderBookmark(secondId, book.id, { chapterIndex: 1, blockIndex: 0, textOffset: 4 }, 'Second chapter');
     assert.deepEqual(listReaderBookmarks(secondId, book.id), [secondBookmark]);
+    const renamedBookmark = renameReaderBookmark(secondId, book.id, secondBookmark.id, '  Renamed title  ');
+    assert.deepEqual(renamedBookmark, { ...secondBookmark, label: 'Renamed title' });
+    assert.deepEqual(listReaderBookmarks(secondId, book.id), [renamedBookmark]);
+    assert.deepEqual(listReaderBookmarks(firstId, book.id), [firstBookmark]);
+    assert.throws(() => renameReaderBookmark(secondId, book.id, secondBookmark.id, '   '), RangeError);
+    assert.throws(() => renameReaderBookmark(secondId, book.id, 'missing-bookmark', 'Title'), /missing bookmark/);
     const freshView = withBookReadingProgress(book, secondId);
     assert.equal(freshView.currentChapter, 1);
     assert.equal(freshView.currentChapterProgress, 0);

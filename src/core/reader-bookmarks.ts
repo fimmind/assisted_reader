@@ -91,6 +91,28 @@ export function createReaderBookmark(
   return bookmark;
 }
 
+/** Rename one profile-scoped bookmark while preserving its location and creation order. */
+export function renameReaderBookmark(profileId: string, bookId: string, bookmarkId: string, label: string): ReaderBookmark {
+  const trimmedLabel = label.trim();
+  if (!trimmedLabel) throw new RangeError('Bookmark title must contain at least one non-whitespace character.');
+  const state = loadState();
+  const bookmarks = state.byProfile[profileId]?.[bookId] ?? [];
+  const existingBookmark = bookmarks.find((bookmark) => bookmark.id === bookmarkId);
+  if (!existingBookmark) throw new Error(`Cannot rename missing bookmark profile=${profileId} book=${bookId} bookmark=${bookmarkId}.`);
+  const renamedBookmark: ReaderBookmark = { ...existingBookmark, label: trimmedLabel };
+  saveState({
+    ...state,
+    byProfile: {
+      ...state.byProfile,
+      [profileId]: {
+        ...state.byProfile[profileId],
+        [bookId]: bookmarks.map((bookmark) => bookmark.id === bookmarkId ? renamedBookmark : bookmark),
+      },
+    },
+  });
+  return renamedBookmark;
+}
+
 /** Remove one bookmark without affecting another profile's saved locations. */
 export function deleteReaderBookmark(profileId: string, bookId: string, bookmarkId: string): void {
   const state = loadState();

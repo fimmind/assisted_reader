@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { BookmarkX, ChevronDown, Search } from 'lucide-react';
+import { BookmarkX, Check, ChevronDown, Pencil, Search } from 'lucide-react';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ interface ReaderNavigationSheetProps {
   bookmarks: ReaderBookmark[];
   onNavigate: (location: ReaderLocation) => void;
   onDeleteBookmark: (bookmarkId: string) => void;
+  onRenameBookmark: (bookmarkId: string, label: string) => void;
 }
 
 interface NavigationTreeProps {
@@ -166,6 +167,141 @@ function matchLabel(book: ImportedBook, match: ReaderSearchMatch): string {
   return `${chapter?.title ?? `Chapter ${match.chapterIndex + 1}`} · paragraph ${match.paragraphIndex + 1}`;
 }
 
+interface BookmarkRowProps {
+  bookmark: ReaderBookmark;
+  chapterTitle: string;
+  isEditing: boolean;
+  open: boolean;
+  activeTab: string;
+  onNavigate: (location: ReaderLocation) => void;
+  onDelete: (bookmarkId: string) => void;
+  onRename: (bookmarkId: string, label: string) => void;
+  onStartEditing: (bookmarkId: string) => void;
+  onStopEditing: () => void;
+}
+
+const bookmarkActionButtonClassName = 'shrink-0 cursor-pointer rounded-none text-muted-foreground hover:bg-muted hover:text-foreground active:bg-muted/80 focus-visible:ring-2 focus-visible:ring-muted-foreground/40';
+
+function BookmarkRow({ bookmark, chapterTitle, isEditing, open, activeTab, onNavigate, onDelete, onRename, onStartEditing, onStopEditing }: BookmarkRowProps) {
+  const [draft, setDraft] = useState(bookmark.label);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const controlButtonRef = useRef<HTMLButtonElement | null>(null);
+  const wasEditingRef = useRef(false);
+  const completionRef = useRef<'idle' | 'saved' | 'cancelled'>('idle');
+  const restoreFocusRef = useRef(false);
+
+  useEffect(() => {
+    if (!isEditing) {
+      if (!wasEditingRef.current) return;
+      wasEditingRef.current = false;
+      if (restoreFocusRef.current && open && activeTab === 'bookmarks') controlButtonRef.current?.focus();
+      restoreFocusRef.current = false;
+      return;
+    }
+    wasEditingRef.current = true;
+    completionRef.current = 'idle';
+    restoreFocusRef.current = false;
+    setDraft(bookmark.label);
+    setError(null);
+    inputRef.current?.focus();
+    const caretPosition = inputRef.current?.value.length ?? 0;
+    inputRef.current?.setSelectionRange(caretPosition, caretPosition);
+  }, [activeTab, bookmark.label, isEditing, open]);
+
+  const saveTitle = (): void => {
+    if (completionRef.current !== 'idle') return;
+    if (!draft.trim()) {
+      completionRef.current = 'cancelled';
+      inputRef.current?.removeAttribute('data-bookmark-save-error');
+      setDraft(bookmark.label);
+      setError(null);
+      onStopEditing();
+      return;
+    }
+    completionRef.current = 'saved';
+    try {
+      onRename(bookmark.id, draft);
+      inputRef.current?.removeAttribute('data-bookmark-save-error');
+      onStopEditing();
+      setError(null);
+    } catch (caughtError: unknown) {
+      completionRef.current = 'idle';
+      inputRef.current?.setAttribute('data-bookmark-save-error', 'true');
+      console.error('reader-bookmark-rename-failed', {
+        bookmarkId: bookmark.id,
+        bookId: bookmark.bookId,
+        error: caughtError,
+      });
+      setError(caughtError instanceof Error ? caughtError.message : 'The bookmark title could not be saved.');
+    }
+  };
+
+  const cancelEditing = (): void => {
+    if (completionRef.current !== 'idle') return;
+    completionRef.current = 'cancelled';
+    restoreFocusRef.current = true;
+    setDraft(bookmark.label);
+    setError(null);
+    onStopEditing();
+  };
+
+  return (
+    <li className="flex items-center gap-2 py-2" data-testid={`bookmark-${bookmark.id}`}>
+      {isEditing
+        ? <div className="min-w-0 flex-1 px-1 py-1" data-bookmark-editor="true">
+          <Input ref={inputRef} value={draft} onChange={(event) => {
+            setDraft(event.currentTarget.value);
+            event.currentTarget.removeAttribute('data-bookmark-save-error');
+            setError(null);
+          }}
+              onBlur={() => { restoreFocusRef.current = false; saveTitle(); }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  cancelEditing();
+                } else if (event.key === 'Enter') {
+                  event.preventDefault();
+                  restoreFocusRef.current = true;
+                  saveTitle();
+                }
+              }}
+              className="h-auto rounded-none border-0 border-b border-muted-foreground/40 bg-transparent px-0 py-0 text-sm leading-5 shadow-none outline-none ring-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              aria-label={`Edit bookmark title ${bookmark.label}`} aria-invalid={error ? true : undefined}
+              aria-describedby={error ? `bookmark-title-error-${bookmark.id}` : undefined}
+              data-testid={`input-bookmark-title-${bookmark.id}`} />
+          <span className="mt-1 block truncate text-xs text-muted-foreground">{chapterTitle}</span>
+          {error && <p id={`bookmark-title-error-${bookmark.id}`} role="alert" className="mt-1 text-xs text-destructive">{error}</p>}
+        </div>
+        : <button type="button" className="min-w-0 flex-1 cursor-pointer px-1 py-1 text-left" onClick={() => onNavigate(bookmark.location)}>
+          <span className="block truncate text-sm">{bookmark.label || chapterTitle}</span>
+          <span className="block truncate text-xs text-muted-foreground">{chapterTitle}</span>
+        </button>}
+      <Button ref={controlButtonRef} type="button" variant="ghost" size="icon" className={bookmarkActionButtonClassName}
+        aria-label={`${isEditing ? 'Accept' : 'Edit'} bookmark ${bookmark.label || bookmark.id}`}
+        onMouseDown={(event) => { if (isEditing) event.preventDefault(); }}
+        onClick={() => {
+          if (isEditing) {
+            restoreFocusRef.current = true;
+            saveTitle();
+            return;
+          }
+          setDraft(bookmark.label);
+          setError(null);
+          onStartEditing(bookmark.id);
+        }}
+        data-testid={`button-${isEditing ? 'accept' : 'edit'}-bookmark-${bookmark.id}`}>
+        {isEditing ? <Check size={16} aria-hidden="true" /> : <Pencil size={16} aria-hidden="true" />}
+      </Button>
+      <Button type="button" variant="ghost" size="icon" className={bookmarkActionButtonClassName} aria-label={`Delete bookmark ${bookmark.label || bookmark.id}`}
+        onClick={() => onDelete(bookmark.id)} data-testid={`button-delete-bookmark-${bookmark.id}`}>
+        <BookmarkX size={16} />
+      </Button>
+    </li>
+  );
+}
+
 export function ReaderNavigationSheet({
   open,
   startOnSearch,
@@ -175,6 +311,7 @@ export function ReaderNavigationSheet({
   bookmarks,
   onNavigate,
   onDeleteBookmark,
+  onRenameBookmark,
 }: ReaderNavigationSheetProps) {
   const navigation = useMemo(() => navigationForBook(book), [book]);
   const activeId = activeNavigationId(navigation, location);
@@ -184,12 +321,22 @@ export function ReaderNavigationSheet({
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [didSearch, setDidSearch] = useState(false);
+  const [editingBookmarkId, setEditingBookmarkId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wasOpenRef = useRef(false);
+
+  const commitBookmarkEditor = (): boolean => {
+    if (editingBookmarkId === null) return true;
+    const editorInput = document.querySelector<HTMLInputElement>('[data-bookmark-editor] input');
+    if (!editorInput) return true;
+    editorInput.blur();
+    return !editorInput.hasAttribute('data-bookmark-save-error');
+  };
 
   useEffect(() => {
     if (!open) {
       wasOpenRef.current = false;
+      setEditingBookmarkId(null);
       return;
     }
     if (wasOpenRef.current) return;
@@ -246,10 +393,18 @@ export function ReaderNavigationSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" showCloseButton={false} aria-describedby={undefined} className="w-[360px] max-w-full sm:w-[440px] flex flex-col gap-0 overflow-hidden p-0" data-testid="reader-navigation-sheet">
+      <SheetContent side="right" showCloseButton={false} aria-describedby={undefined} onEscapeKeyDown={(event) => {
+        if (editingBookmarkId !== null) event.preventDefault();
+      }} onPointerDownOutside={(event) => {
+        if (!commitBookmarkEditor()) event.preventDefault();
+      }} className="w-[360px] max-w-full sm:w-[440px] flex flex-col gap-0 overflow-hidden p-0" data-testid="reader-navigation-sheet">
         <SheetTitle className="sr-only">Navigate book</SheetTitle>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden rounded-none">
+        <Tabs value={activeTab} onValueChange={(value) => {
+          if (!commitBookmarkEditor()) return;
+          setActiveTab(value);
+          setEditingBookmarkId(null);
+        }} className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden rounded-none">
           <TabsList className="grid w-full shrink-0 grid-cols-3 rounded-none border-b border-border bg-muted/40 p-1 shadow-sm">
             <TabsTrigger value="contents" className="rounded-none bg-transparent shadow-none data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">Contents</TabsTrigger>
             <TabsTrigger value="bookmarks" className="rounded-none bg-transparent shadow-none data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">Bookmarks</TabsTrigger>
@@ -269,16 +424,10 @@ export function ReaderNavigationSheet({
               {bookmarks.length === 0
                 ? <p className="py-6 text-sm text-muted-foreground">No bookmarks yet.</p>
                 : <ul className="divide-y divide-border border-y border-border">{bookmarks.map((bookmark) => (
-                  <li key={bookmark.id} className="flex items-center gap-2 py-2" data-testid={`bookmark-${bookmark.id}`}>
-                    <button type="button" className="min-w-0 flex-1 px-1 py-1 text-left" onClick={() => onNavigate(bookmark.location)}>
-                      <span className="block truncate text-sm">{bookmark.label || book.chapters[bookmark.location.chapterIndex]?.title}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{book.chapters[bookmark.location.chapterIndex]?.title ?? `Chapter ${bookmark.location.chapterIndex + 1}`}</span>
-                    </button>
-                    <Button type="button" variant="ghost" size="icon" className="rounded-none" aria-label={`Delete bookmark ${bookmark.label || bookmark.id}`}
-                      onClick={() => onDeleteBookmark(bookmark.id)} data-testid={`button-delete-bookmark-${bookmark.id}`}>
-                      <BookmarkX size={16} />
-                    </Button>
-                  </li>
+                  <BookmarkRow key={bookmark.id} bookmark={bookmark} open={open} activeTab={activeTab}
+                    chapterTitle={book.chapters[bookmark.location.chapterIndex]?.title ?? `Chapter ${bookmark.location.chapterIndex + 1}`}
+                    isEditing={editingBookmarkId === bookmark.id} onNavigate={onNavigate} onDelete={onDeleteBookmark}
+                    onRename={onRenameBookmark} onStartEditing={setEditingBookmarkId} onStopEditing={() => setEditingBookmarkId(null)} />
                 ))}</ul>}
             </ScrollArea>
           </TabsContent>
