@@ -18,7 +18,7 @@ const requiredFiles = [
   'index.html',
   'data/words.csv',
   'data/lemma_dict.json',
-  'data/hitchhikers_guide.txt',
+  'data/hitchhikers_guide.epub',
   'data/lexicon/index.json',
   'data/wordnet/index.json',
   'data/wordnet/LICENSE',

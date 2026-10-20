@@ -1,14 +1,13 @@
-import { parseTxtBook } from './book-parser';
 import type { ImportedBook } from './types';
 
-const HITCHHIKERS_TXT_URL = 'data/hitchhikers_guide.txt';
+const HITCHHIKERS_EPUB_URL = 'data/hitchhikers_guide.epub';
 
 function createFallbackSeedBook(nowIso: string): ImportedBook {
   return {
     id: 'seed-hitchhiker',
     title: "The Hitchhiker's Guide to the Galaxy",
     author: 'Douglas Adams',
-    sourceType: 'txt',
+    sourceType: 'epub',
     createdAt: nowIso,
     updatedAt: nowIso,
     currentChapter: 1,
@@ -16,7 +15,7 @@ function createFallbackSeedBook(nowIso: string): ImportedBook {
     chapters: [
       {
         title: 'Chapter 1',
-        paragraphs: ['Unable to load seeded book text from data/hitchhikers_guide.txt.'],
+        paragraphs: ['Unable to load bundled book from data/hitchhikers_guide.epub.'],
       },
     ],
   };
@@ -26,27 +25,25 @@ export async function createSeedBook(): Promise<ImportedBook> {
   const nowIso = new Date().toISOString();
 
   try {
-    const response = await fetch(`${import.meta.env.BASE_URL}${HITCHHIKERS_TXT_URL}`);
+    const response = await fetch(`${import.meta.env.BASE_URL}${HITCHHIKERS_EPUB_URL}`);
     if (!response.ok) {
       throw new Error(`status=${response.status}`);
     }
 
-    const text = await response.text();
-    const chapters = parseTxtBook(text);
-    if (chapters.length === 0) {
-      throw new Error('no chapters parsed from seeded text');
-    }
+    const { parseEpubBook } = await import('./epub-parser.js');
+    const epub = await parseEpubBook(await response.arrayBuffer());
 
     return {
       id: 'seed-hitchhiker',
-      title: "The Hitchhiker's Guide to the Galaxy",
-      author: 'Douglas Adams',
-      sourceType: 'txt',
+      title: epub.title,
+      author: epub.author,
+      sourceType: 'epub',
       createdAt: nowIso,
       updatedAt: nowIso,
       currentChapter: 1,
       currentChapterProgress: 0,
-      chapters,
+      chapters: epub.chapters.map((chapter) => ({ ...chapter, titlePresentation: 'generated' })),
+      navigation: epub.navigation,
     };
   } catch (error) {
     console.error('seed-book-load-failed', { error });

@@ -11,6 +11,13 @@ This README covers setup, build/run/deploy, and project structure.
 
 ## Importing books
 
+The default Hitchhiker book is bundled as `data/hitchhikers_guide.epub` and uses
+the EPUB importer. It is generated from the existing bundled text, rather than
+a separate publisher edition. Run `node scripts/build-seed-epub.mjs` to rebuild
+it after editing `data/hitchhikers_guide.txt`. Chapter and paragraph positions
+are preserved; existing bundled TXT copies upgrade automatically with their
+reading progress intact.
+
 EPUB import runs locally with a bundled ZIP reader, without a CDN dependency.
 It uses the book's title and author when available and reads text in spine
 order. EPUB 3 navigation or EPUB 2 NCX contents determine chapter titles and

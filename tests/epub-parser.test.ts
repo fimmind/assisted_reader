@@ -1,14 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import JSZip from 'jszip';
 import { JSDOM } from 'jsdom';
-import { importBookFromFile } from '../src/core/book-parser.js';
+import { importBookFromFile, parseTxtBook } from '../src/core/book-parser.js';
 import { getBookById, upsertBook } from '../src/core/books-store.js';
 
 import { chapterTitleForReader, readerAnchorChapter, readerBlocksForChapter } from '../src/core/reader-content.js';
 
 const dom = new JSDOM('');
 globalThis.DOMParser = dom.window.DOMParser;
+
+test('bundled Hitchhiker EPUB preserves text positions, metadata and chapter navigation', async () => {
+  const [archive, text] = await Promise.all([
+    readFile('data/hitchhikers_guide.epub'),
+    readFile('data/hitchhikers_guide.txt', 'utf8'),
+  ]);
+  const imported = await importBookFromFile(new File([new Uint8Array(archive)], 'hitchhikers_guide.epub'));
+  assert.equal(imported.sourceType, 'epub');
+  assert.equal(imported.title, "The Hitchhiker's Guide to the Galaxy");
+  assert.equal(imported.author, 'Douglas Adams');
+  assert.deepEqual(plainChapters(imported), parseTxtBook(text));
+  assert.equal(imported.navigation?.length, imported.chapters.length);
+  imported.navigation?.forEach((entry, index) => {
+    assert.equal(entry.title, imported.chapters[index].title);
+    assert.equal(entry.location?.chapterIndex, index);
+  });
+});
 
 async function book(options: { metadata?: string; missing?: boolean; empty?: boolean; encrypted?: boolean }): Promise<File> {
   const zip = new JSZip();

@@ -7,7 +7,7 @@ import { Button } from '../components/ui/button';
 import { BookCard } from '../components/BookCard';
 import { VocabularyTestOnboarding, VocabularyTestReminder } from '../components/VocabularyTestOnboarding';
 import { importBookFromFile } from '@/core/book-parser';
-import { deleteBookById, listBooks, seedBooksIfEmpty, upsertBook } from '@/core/books-store';
+import { deleteBookById, getBookById, listBooks, seedBooksIfEmpty, upsertBook } from '@/core/books-store';
 import { createSeedBook } from '@/core/seed-book';
 import { buildResumableBookLemmaHistogramAsync, calculateBookStatsFromLemmaHistogram } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
@@ -303,6 +303,7 @@ export default function LibraryPage() {
 
       const hasLegacySeedAlice = loadedBooks.some((book) => book.id === 'seed-alice');
       const hasNewSeedHitchhiker = loadedBooks.some((book) => book.id === 'seed-hitchhiker');
+      const hasTextSeedHitchhiker = loadedBooks.some((book) => book.id === 'seed-hitchhiker' && book.sourceType === 'txt');
       if (hasLegacySeedAlice && !hasNewSeedHitchhiker) {
         seedHandleRef.current = scheduleDeferredTask(() => {
           void (async () => {
@@ -314,6 +315,27 @@ export default function LibraryPage() {
               }
             } catch (error) {
               console.warn('library-legacy-seed-migration-failed', { error });
+            }
+          })();
+        }, 1500);
+      }
+      if (hasTextSeedHitchhiker) {
+        seedHandleRef.current = scheduleDeferredTask(() => {
+          void (async () => {
+            try {
+              const epub = await createSeedBook();
+              if (!epub.navigation?.length) return; // Retry on the next refresh if the asset failed to load.
+              const previous = await getBookById(epub.id);
+              if (!previous || previous.sourceType !== 'txt') return;
+              await upsertBook({
+                ...epub,
+                createdAt: previous.createdAt,
+                currentChapter: previous.currentChapter,
+                currentChapterProgress: previous.currentChapterProgress,
+              });
+              if (refreshRunIdRef.current === runId) void refreshBooksAndStats();
+            } catch (error) {
+              console.warn('library-seed-epub-migration-failed', { error });
             }
           })();
         }, 1500);
