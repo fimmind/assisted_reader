@@ -6,4 +6,7 @@ const destination = resolve('public/data');
 
 rmSync(destination, { recursive: true, force: true });
 mkdirSync(destination, { recursive: true });
-cpSync(source, destination, { recursive: true });
+cpSync(source, destination, {
+  recursive: true,
+  filter: (sourcePath) => sourcePath !== resolve(source, 'hitchhikers_guide.txt'),
+});

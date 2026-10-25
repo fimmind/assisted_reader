@@ -324,7 +324,6 @@ export default function LibraryPage() {
           void (async () => {
             try {
               const epub = await createSeedBook();
-              if (!epub.navigation?.length) return; // Retry on the next refresh if the asset failed to load.
               const previous = await getBookById(epub.id);
               if (!previous || previous.sourceType !== 'txt') return;
               await upsertBook({

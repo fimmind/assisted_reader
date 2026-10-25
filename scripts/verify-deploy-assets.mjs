@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import JSZip from 'jszip';
 import { verifyWordNetAssets } from './verify-wordnet-assets.mjs';
 import {
   CANONICAL_PARTS_OF_SPEECH,
@@ -139,6 +140,48 @@ async function verifyDictionaryCopies() {
       }
     }
   }
+}
+
+async function verifySeedBook() {
+  const relativePath = 'data/hitchhikers_guide.epub';
+  const [source, deployed] = await Promise.all([
+    readFile(path.resolve('data/hitchhikers_guide.epub')),
+    readFile(path.join(DIST_DIR, relativePath)),
+  ]);
+  if (!source.equals(deployed)) {
+    throw new Error(`Deployed seed book differs from source: file=${relativePath}`);
+  }
+  if (deployed.length < 30 || deployed.readUInt32LE(0) !== 0x04034b50) {
+    throw new Error(`Invalid deployed seed book ZIP header: file=${relativePath}`);
+  }
+  const firstEntryCompression = deployed.readUInt16LE(8);
+  const firstEntryNameLength = deployed.readUInt16LE(26);
+  const firstEntryName = deployed.subarray(30, 30 + firstEntryNameLength).toString('utf8');
+  if (firstEntryName !== 'mimetype' || firstEntryCompression !== 0) {
+    throw new Error(`Invalid deployed seed book mimetype entry: file=${relativePath}`);
+  }
+
+  const archive = await JSZip.loadAsync(deployed, { checkCRC32: true });
+  const mimetype = archive.file('mimetype');
+  const container = archive.file('META-INF/container.xml');
+  if (!mimetype || await mimetype.async('string') !== 'application/epub+zip') {
+    throw new Error(`Invalid deployed seed book mimetype: file=${relativePath}`);
+  }
+  if (!container) {
+    throw new Error(`Missing deployed seed book container: file=${relativePath}`);
+  }
+  const containerXml = await container.async('string');
+  if (!containerXml.includes('<container ') || !containerXml.includes('<rootfile ')
+    || !containerXml.includes('EPUB/package.opf')) {
+    throw new Error(`Invalid deployed seed book container: file=${relativePath}`);
+  }
+  try {
+    await access(path.join(DIST_DIR, 'data/hitchhikers_guide.txt'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error('Legacy seed book text file must not be deployed: data/hitchhikers_guide.txt');
 }
 
 async function hashFile(filePath) {
@@ -300,6 +343,7 @@ async function main() {
   await verifyLexiconChunks();
   await verifyWordNetAssets(path.join(DIST_DIR, 'data/wordnet'));
   await verifyDictionaryCopies();
+  await verifySeedBook();
   if (availability.sayedshaun.available) {
     await verifyWsdAssets('wsd/sayedshaun-wsd', '54e41c09c61ae8bd60c62e40bf483141c49ce0d3', ['tokenizer.json', 'tokenizer_config.json']);
     await verifySenseVectors('wsd/sayedshaun-wsd');
