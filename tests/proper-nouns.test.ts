@@ -9,6 +9,7 @@ import {
   splitSentenceSpans,
   tagSentenceTerms,
 } from '../src/core/nlp.js';
+import type { NlpDocumentLike } from '../src/core/nlp.js';
 import {
   analyzeChapter,
   buildBookLemmaHistogramAsync,
@@ -38,10 +39,15 @@ import type {
 } from '../src/core/types.js';
 import type { BookLemmaHistogramSegment } from '../src/core/reader-analysis.js';
 
+function cloneableNlpDocument(document: Omit<NlpDocumentLike, 'clone'>): NlpDocumentLike {
+  const clone = (): NlpDocumentLike => cloneableNlpDocument(document);
+  return { ...document, clone };
+}
+
 function createStubNlpWithTaggedTerms(
   terms: Array<{ text: string; tags: Record<string, boolean> | string[] }>,
 ) {
-  return (_text: string) => ({
+  return (_text: string) => cloneableNlpDocument({
     terms: () => ({
       json: () => terms.map((term) => ({ text: term.text, tags: term.tags })),
     }),
@@ -59,7 +65,7 @@ function createSentenceAwareStubNlp(
     Array<{ text: string; tags: Record<string, boolean> | string[] }>
   >,
 ) {
-  return (text: string) => ({
+  return (text: string) => cloneableNlpDocument({
     terms: () => ({
       json: () =>
         (termsBySentence[text] ?? []).map((term) => ({
@@ -81,7 +87,7 @@ function createStubNlpWithParentTaggedNestedTerms(
     parentTags: Record<string, boolean> | string[];
   }>,
 ) {
-  return (_text: string) => ({
+  return (_text: string) => cloneableNlpDocument({
     terms: () => ({
       json: () =>
         terms.map((term) => ({
@@ -120,7 +126,7 @@ function createLemmaNlp(formsByToken: Record<string, LemmaForms>) {
     const verbInfinitive = forms ? forms.verbInfinitive : '';
     const nounSingular = forms ? forms.nounSingular : '';
     const adjectiveBase = forms ? forms.adjectiveBase : '';
-    return {
+    return cloneableNlpDocument({
       terms: () => ({
         json: () =>
           [] as Array<{
@@ -138,7 +144,7 @@ function createLemmaNlp(formsByToken: Record<string, LemmaForms>) {
         conjugate: () =>
           adjectiveBase.length > 0 ? [{ adjective: adjectiveBase }] : [],
       }),
-    };
+    });
   };
 }
 

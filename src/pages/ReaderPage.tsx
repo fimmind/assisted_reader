@@ -49,6 +49,7 @@ import { normalizeToken } from '@/core/math';
 import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
+import type { NlpLike } from '@/core/nlp';
 import { analyzeChapter, createCachedChapterAnalyzer, getSessionBookLexicalCache, rankParagraphCardTargets } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
 import type { LazyLexicon } from '@/core/lexicon';
@@ -168,20 +169,11 @@ function measureVisibleReaderParagraphs(
   });
 }
 
-type NlpLike = ((text: string) => {
-  terms: () => {
-    json: () => Array<{ text?: string; normal?: string; tags?: string[]; terms?: Array<{ text?: string; normal?: string; tags?: string[] }> }>;
-  };
-  verbs: () => { toInfinitive: () => { out: (format: 'text') => string } };
-  nouns: () => { toSingular: () => { out: (format: 'text') => string } };
-  adjectives: () => { conjugate: () => Array<Record<string, string>> };
-}) | null;
-
 interface ReaderResources {
   model: VocabularyModel;
   lemmaDict: Record<string, string>;
   lexicon: LazyLexicon;
-  nlp: NlpLike;
+  nlp: NlpLike | null;
   lexicalAnalysisCache: LexicalAnalysisCache;
 }
 

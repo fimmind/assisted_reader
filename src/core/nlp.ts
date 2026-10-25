@@ -41,16 +41,19 @@ type CompromiseTermNode = {
   terms?: CompromiseTermNode[];
 };
 
-type NlpLike = {
-  (text: string): {
-    terms: () => {
-      json: () => CompromiseTermNode[];
-    };
-    verbs: () => { toInfinitive: () => { out: (format: 'text') => string } };
-    nouns: () => { toSingular: () => { out: (format: 'text') => string } };
-    adjectives: () => { conjugate: () => Array<Record<string, string>> };
+export interface NlpDocumentLike {
+  clone: () => NlpDocumentLike;
+  terms: () => {
+    json: () => CompromiseTermNode[];
   };
-};
+  verbs: () => { toInfinitive: () => { out: (format: 'text') => string } };
+  nouns: () => { toSingular: () => { out: (format: 'text') => string } };
+  adjectives: () => { conjugate: () => Array<Record<string, string>> };
+}
+
+export interface NlpLike {
+  (text: string): NlpDocumentLike;
+}
 
 const COMPROMISE_PROPER_TAGS = new Set<string>([
   'ProperNoun',
@@ -542,18 +545,6 @@ export function buildHighConfidenceProperNounLexicon(
   return lexicon;
 }
 
-function mapTagsToWordClass(tags: Set<string>): {
-  verb: boolean;
-  noun: boolean;
-  adjective: boolean;
-} {
-  return {
-    verb: tags.has('Verb'),
-    noun: tags.has('Noun'),
-    adjective: tags.has('Adjective'),
-  };
-}
-
 export function inferPartOfSpeech(term: TaggedTerm): PartOfSpeech | null {
   const tags = term.tags;
   if (ARTICLES.has(term.normalized) && tags.has('Determiner')) {
@@ -920,7 +911,6 @@ function buildApostropheLemmaCandidates(normalizedToken: string): string[] {
 
 function buildLemmaCandidateCacheKey(
   term: TaggedTerm,
-  classes: { verb: boolean; noun: boolean; adjective: boolean },
   lemmaFromDict: string | undefined,
   hasNlp: boolean,
   contextualPartOfSpeech: PartOfSpeech | null,
@@ -929,7 +919,7 @@ function buildLemmaCandidateCacheKey(
     typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
       ? normalizeToken(lemmaFromDict)
       : '';
-  return `${term.raw}\n${classes.verb ? '1' : '0'}${classes.noun ? '1' : '0'}${classes.adjective ? '1' : '0'}\n${contextualPartOfSpeech ?? ''}\n${hasNlp ? '1' : '0'}\n${normalizedLemmaFromDict}`;
+  return `${term.raw}\n${contextualPartOfSpeech ?? ''}\n${hasNlp ? '1' : '0'}\n${normalizedLemmaFromDict}`;
 }
 
 export function makeLemmaCandidates(
@@ -940,16 +930,23 @@ export function makeLemmaCandidates(
   cache: Map<string, string[]> | undefined,
 ): string[] {
   const normalized = term.normalized;
-  const classes = mapTagsToWordClass(term.tags);
   const hasOwnLemma = Object.prototype.hasOwnProperty.call(
     lemmaDict,
     normalized,
   );
   const lemmaFromDict = hasOwnLemma ? lemmaDict[normalized] : undefined;
+  const dictionaryLemma =
+    typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
+      ? normalizeToken(lemmaFromDict)
+      : '';
+  const needsOtherPartOfSpeechCandidates = contextualPartOfSpeech === null
+    || (dictionaryLemma.length > 0 && dictionaryLemma !== normalized);
+  const needsVerbLemma = needsOtherPartOfSpeechCandidates || contextualPartOfSpeech === 'verb';
+  const needsNounLemma = needsOtherPartOfSpeechCandidates || contextualPartOfSpeech === 'noun';
+  const needsAdjectiveLemma = needsOtherPartOfSpeechCandidates || contextualPartOfSpeech === 'adjective';
   const cacheKey = cache
     ? buildLemmaCandidateCacheKey(
       term,
-      classes,
       lemmaFromDict,
       nlp !== null,
       contextualPartOfSpeech,
@@ -973,15 +970,27 @@ export function makeLemmaCandidates(
 
   if (nlp) {
     try {
-      // Compromise transforms mutate their document, so each candidate must
-      // come from a fresh document and cannot overwrite another POS result.
-      const verbInfinitive = normalizeToken(
-        nlp(term.raw).verbs().toInfinitive().out('text'),
-      );
-      const nounSingular = normalizeToken(
-        nlp(term.raw).nouns().toSingular().out('text'),
-      );
-      const adjective = extractConjugatedAdjective(nlp(term.raw));
+      let verbInfinitive = '';
+      let nounSingular = '';
+      let adjective = '';
+      if (needsVerbLemma || needsNounLemma || needsAdjectiveLemma) {
+        // Compromise transforms mutate their document; use isolated clones only
+        // for POS results that can affect the selected candidates.
+        const document = nlp(term.raw);
+        if (needsVerbLemma) {
+          verbInfinitive = normalizeToken(
+            document.clone().verbs().toInfinitive().out('text'),
+          );
+        }
+        if (needsNounLemma) {
+          nounSingular = normalizeToken(
+            document.clone().nouns().toSingular().out('text'),
+          );
+        }
+        if (needsAdjectiveLemma) {
+          adjective = extractConjugatedAdjective(document.clone());
+        }
+      }
       const contextualCandidate = contextualPartOfSpeech === 'verb'
         ? verbInfinitive
         : contextualPartOfSpeech === 'noun'
@@ -998,10 +1007,6 @@ export function makeLemmaCandidates(
         contextualPartOfSpeech !== 'noun' ? nounSingular : '',
         contextualPartOfSpeech !== 'adjective' ? normalizeToken(adjective) : '',
       ].filter((candidate) => candidate.length > 0 && candidate !== normalized);
-      const dictionaryLemma =
-        typeof lemmaFromDict === 'string' && lemmaFromDict.length > 0
-          ? normalizeToken(lemmaFromDict)
-          : '';
       dictionaryConflictsWithOtherPartOfSpeech =
         dictionaryLemma.length > 0 &&
         otherPartOfSpeechCandidates.includes(dictionaryLemma);

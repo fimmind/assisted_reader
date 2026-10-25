@@ -77,10 +77,7 @@ function scheduleDeferredTask(task: () => void, timeoutMs: number): DeferredHand
 
 async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => {
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => resolve());
-      return;
-    }
+    // Animation frames can pause in background tabs; yield without waiting for a paint.
     window.setTimeout(resolve, 0);
   });
 }

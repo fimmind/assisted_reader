@@ -1,5 +1,6 @@
 import { WORD_RE } from './constants';
 import { buildHighConfidenceProperNounLexicon, buildTaggedSentences, contextualDeinflectTaggedTerms } from './nlp';
+import type { NlpLike } from './nlp';
 import { createDefinitionTarget, definitionTargetKey } from './definition-target';
 import { normalizeToken } from './math';
 import { estimateTheta, predictKnownProbability } from './model';
@@ -38,14 +39,7 @@ export interface ChapterAnalysisInput {
   model: VocabularyModel;
   profile: UserProfile;
   lemmaDict: Record<string, string>;
-  nlp: ((text: string) => {
-    terms: () => {
-      json: () => Array<{ text?: string; normal?: string; tags?: string[]; terms?: Array<{ text?: string; normal?: string; tags?: string[] }> }>;
-    };
-    verbs: () => { toInfinitive: () => { out: (format: 'text') => string } };
-    nouns: () => { toSingular: () => { out: (format: 'text') => string } };
-    adjectives: () => { conjugate: () => Array<Record<string, string>> };
-  }) | null;
+  nlp: NlpLike | null;
   maxCardsPerParagraph: number;
   includeCards?: boolean;
   thetaOverride?: number;

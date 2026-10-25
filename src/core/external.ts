@@ -1,17 +1,7 @@
 import { COMPROMISE_CDN_URL } from './constants';
+import type { NlpLike } from './nlp';
 
-type CompromiseDoc = {
-  terms: () => {
-    json: () => Array<{ text?: string; normal?: string; tags?: string[]; terms?: Array<{ text?: string; normal?: string; tags?: string[] }> }>;
-  };
-  verbs: () => { toInfinitive: () => { out: (format: 'text') => string } };
-  nouns: () => { toSingular: () => { out: (format: 'text') => string } };
-  adjectives: () => { conjugate: () => Array<Record<string, string>> };
-};
-
-type CompromiseGlobal = {
-  (text: string): CompromiseDoc;
-};
+type CompromiseGlobal = NlpLike;
 
 declare global {
   interface Window {
