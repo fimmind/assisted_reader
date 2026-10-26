@@ -11,6 +11,7 @@ import type { ReaderLocation } from '@/core/types';
 
 interface UseReaderPaginationOptions {
   rootRef: RefObject<HTMLElement | null>;
+  initialLayout: ReaderPaginationLayout | null;
   enabled: boolean;
   settled: boolean;
   getMeasurementKey: (layout: ReaderPaginationLayout | null) => string | null;
@@ -366,7 +367,9 @@ function readRenderedSegments(root: HTMLElement): ReaderPaginationSegment[] {
 }
 
 function readingRowForRoot(root: HTMLElement): HTMLElement {
-  return root.closest<HTMLElement>('[data-testid="reading-row"]') ?? root;
+  return root.closest<HTMLElement>('[data-reader-pagination-host]')
+    ?? root.closest<HTMLElement>('[data-testid="reading-row"]')
+    ?? root;
 }
 
 function readCardMetrics(root: HTMLElement): ReaderPaginationCardMetric[] {
@@ -531,9 +534,21 @@ function geometryElements(node: Node): Element[] {
   ];
 }
 
+function isIdenticalStyleTextReplacement(record: MutationRecord): boolean {
+  if (record.type !== 'childList' || !(record.target instanceof HTMLStyleElement)) return false;
+  const addedNodes = Array.from(record.addedNodes);
+  const removedNodes = Array.from(record.removedNodes);
+  return addedNodes.length > 0
+    && addedNodes.length === removedNodes.length
+    && addedNodes.every((node, index) => node.nodeType === Node.TEXT_NODE
+      && removedNodes[index]?.nodeType === Node.TEXT_NODE
+      && node.textContent === removedNodes[index]?.textContent);
+}
+
 /** Keep compatible pages available and remeasure them as rendered chapter geometry changes. */
 export function useReaderPagination({
   rootRef,
+  initialLayout,
   enabled,
   settled,
   getMeasurementKey,
@@ -550,7 +565,32 @@ export function useReaderPagination({
   const measurementKeyRef = useRef(getMeasurementKey);
   const layoutRef = useRef<ReaderPaginationLayout | null>(null);
   const scheduleMeasurementRef = useRef<() => void>(() => {});
+  const compatibleInitialLayout = initialLayout?.layoutKey === layoutKey
+    && initialLayout.chapterIndex === chapterIndex
+    && initialLayout.pageHeight === pageHeight
+    ? initialLayout
+    : null;
+  const internalLayoutIsCompatible = layout?.layoutKey === layoutKey
+    && layout.chapterIndex === chapterIndex
+    && layout.pageHeight === pageHeight;
+  if (compatibleInitialLayout && !internalLayoutIsCompatible
+    && (layoutRef.current?.layoutKey !== layoutKey
+      || layoutRef.current?.chapterIndex !== chapterIndex
+      || layoutRef.current?.pageHeight !== pageHeight)) {
+    layoutRef.current = compatibleInitialLayout;
+  }
   const currentMeasurementKey = getMeasurementKey(layoutRef.current);
+
+  useLayoutEffect(() => {
+    if (!enabled || !compatibleInitialLayout || internalLayoutIsCompatible) return;
+    layoutRef.current = compatibleInitialLayout;
+    setLayout((previous) => previous?.layoutKey === compatibleInitialLayout.layoutKey
+      && previous.chapterIndex === compatibleInitialLayout.chapterIndex
+      && previous.pageHeight === compatibleInitialLayout.pageHeight
+      && previous.signature === compatibleInitialLayout.signature
+      ? previous
+      : compatibleInitialLayout);
+  }, [compatibleInitialLayout, enabled, internalLayoutIsCompatible]);
 
   useLayoutEffect(() => {
     settledRef.current = settled;
@@ -710,6 +750,7 @@ export function useReaderPagination({
       let geometryChanged = false;
       records.forEach((record) => {
         if (record.type === 'childList') {
+          if (isIdenticalStyleTextReplacement(record)) return;
           geometryChanged = true;
           record.addedNodes.forEach(observeTree);
           record.removedNodes.forEach(unobserveTree);
@@ -750,16 +791,20 @@ export function useReaderPagination({
   }, [rootRef, enabled, layoutKey, chapterIndex, pageHeight, anchor]);
 
   const error = measurementError?.layoutKey === layoutKey ? measurementError.error : null;
+  const renderedLayout = internalLayoutIsCompatible ? layout : compatibleInitialLayout ?? layout;
+  const renderedMeasurementKey = compatibleInitialLayout && !internalLayoutIsCompatible
+    ? getMeasurementKey(compatibleInitialLayout) ?? measuredMeasurementKey
+    : measuredMeasurementKey;
   const isReady = enabled && error === null
-    && layout?.layoutKey === layoutKey
-    && layout.chapterIndex === chapterIndex
-    && layout.pageHeight === pageHeight;
+    && renderedLayout?.layoutKey === layoutKey
+    && renderedLayout.chapterIndex === chapterIndex
+    && renderedLayout.pageHeight === pageHeight;
 
   return {
-    layout,
+    layout: renderedLayout,
     isReady,
     error,
     settledMeasurementRevision,
-    measuredMeasurementKey,
+    measuredMeasurementKey: renderedMeasurementKey,
   };
 }
