@@ -12,6 +12,12 @@ const port = Number.isNaN(portFromEnv) || portFromEnv <= 0 ? 5173 : portFromEnv;
 
 const basePath = process.env.BASE_PATH;
 const resolvedBasePath = basePath && basePath.length > 0 ? basePath : "/";
+const publicWsdDirectory = path.resolve(import.meta.dirname, "public/wsd");
+
+function isGeneratedWsdAsset(filePath: string): boolean {
+  const resolvedPath = path.resolve(filePath);
+  return resolvedPath === publicWsdDirectory || resolvedPath.startsWith(`${publicWsdDirectory}${path.sep}`);
+}
 
 function wsdAvailabilityMiddleware(root: string, endpoint: string) {
   return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
@@ -75,6 +81,9 @@ export default defineConfig({
     strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,
+    watch: {
+      ignored: isGeneratedWsdAsset,
+    },
     fs: {
       strict: true,
     },

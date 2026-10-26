@@ -1,9 +1,11 @@
-"""Generate missing browser WSD assets before build/deploy, reusing verified local files.
+"""Prepare missing browser WSD assets before dev/build, reusing verified files.
 
 Only licenses and attribution belong in Git. Exports, tokenizers, manifests and
 sense vectors are generated under public/wsd and copied into dist by Vite.
-A process lock serializes builds; heavy stages run in separate subprocesses so
-each encoder releases its memory before the next stage starts.
+A process lock serializes setup; desktop model generation runs in separate
+subprocesses so each encoder releases its memory before the next stage starts.
+Android Termux downloads matching published packages because it cannot provide
+the systemd memory supervisor required for local model generation.
 """
 
 from __future__ import annotations
@@ -272,6 +274,9 @@ def main() -> None:
                     raise FileNotFoundError(f"Tracked WSD attribution file missing: {asset}. Restore it from Git before generating assets.")
         missing = [name for name in REVISIONS if not package_ready(name, source_hash, indices)]
         if not missing:
+            return
+        if sys.platform == "android" or hasattr(sys, "getandroidapilevel"):
+            run([sys.executable, str(SCRIPTS / "download_wsd_web.py"), *missing])
             return
         budget = generation_budget()
         run_limited_generation([sys.executable, str(SCRIPTS / 'generate_wsd_web.py'), *missing],

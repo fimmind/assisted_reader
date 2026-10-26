@@ -12,7 +12,7 @@ export async function inspectWsdModel(root, model) {
   try {
     try {
       await stat(path.join(directory, '.building'));
-      return { available: false, reason: 'Assets are being generated. Run pnpm ensure:wsd to finish an interrupted build.' };
+      return { available: false, reason: 'Assets are being prepared. Run pnpm ensure:wsd to finish the interrupted setup.' };
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
