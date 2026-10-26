@@ -4884,7 +4884,10 @@ export default function ReaderPage() {
         </footer>
       )}
       {activeAnalysisRunId !== null && (
-        <div className="pointer-events-none fixed bottom-4 right-4 z-30 text-muted-foreground">
+        <div className={cn(
+          'pointer-events-none fixed right-4 z-30 text-muted-foreground',
+          settings.readingMode === 'page' && !fullscreenPageMode ? 'bottom-20' : 'bottom-4',
+        )}>
           <ReaderActivityIndicator
             ariaLabel="Analyzing text"
             testId="reader-analysis-indicator"
