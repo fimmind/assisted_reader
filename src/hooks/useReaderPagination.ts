@@ -13,6 +13,7 @@ interface UseReaderPaginationOptions {
   rootRef: RefObject<HTMLElement | null>;
   enabled: boolean;
   settled: boolean;
+  getMeasurementKey: (layout: ReaderPaginationLayout | null) => string | null;
   layoutKey: string;
   chapterIndex: number;
   pageHeight: number;
@@ -29,6 +30,7 @@ export interface UseReaderPaginationResult {
   isReady: boolean;
   error: Error | null;
   settledMeasurementRevision: number;
+  measuredMeasurementKey: string | null;
 }
 
 function readAnchorPage(
@@ -530,6 +532,7 @@ export function useReaderPagination({
   rootRef,
   enabled,
   settled,
+  getMeasurementKey,
   layoutKey,
   chapterIndex,
   pageHeight,
@@ -538,14 +541,24 @@ export function useReaderPagination({
   const [layout, setLayout] = useState<ReaderPaginationLayout | null>(null);
   const [measurementError, setMeasurementError] = useState<ReaderPaginationErrorState | null>(null);
   const [settledMeasurementRevision, setSettledMeasurementRevision] = useState(0);
+  const [measuredMeasurementKey, setMeasuredMeasurementKey] = useState<string | null>(null);
   const settledRef = useRef(settled);
+  const measurementKeyRef = useRef(getMeasurementKey);
   const layoutRef = useRef<ReaderPaginationLayout | null>(null);
   const scheduleMeasurementRef = useRef<() => void>(() => {});
+  const currentMeasurementKey = getMeasurementKey(layoutRef.current);
 
   useLayoutEffect(() => {
     settledRef.current = settled;
     if (settled) scheduleMeasurementRef.current();
   }, [settled]);
+
+  useLayoutEffect(() => {
+    measurementKeyRef.current = getMeasurementKey;
+    if (currentMeasurementKey !== null && measuredMeasurementKey !== currentMeasurementKey) {
+      scheduleMeasurementRef.current();
+    }
+  }, [getMeasurementKey, currentMeasurementKey, measuredMeasurementKey]);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -590,7 +603,9 @@ export function useReaderPagination({
       running = true;
       runPending = false;
       const measurementStartedSettled = settledRef.current;
+      let measurementStartedKey: string | null = null;
       try {
+        measurementStartedKey = measurementKeyRef.current(layoutRef.current);
         const currentLayout = layoutRef.current;
         const needsInitialLayout = currentLayout?.layoutKey !== layoutKey
           || currentLayout.chapterIndex !== chapterIndex
@@ -639,6 +654,12 @@ export function useReaderPagination({
           if (measurementStartedSettled && settledRef.current && !runPending) {
             setSettledMeasurementRevision((revision) => revision + 1);
           }
+          const measurementCompletedKey = measurementKeyRef.current(nextLayout);
+          if (measurementStartedKey !== null
+            && measurementCompletedKey === measurementStartedKey
+            && !runPending) {
+            setMeasuredMeasurementKey(measurementCompletedKey);
+          }
           setMeasurementError(null);
         }
       } catch (failure) {
@@ -653,6 +674,10 @@ export function useReaderPagination({
         running = false;
         if (active && runPending && !measurementFailed && !controller.signal.aborted) {
           runPending = false;
+          scheduleMeasurement();
+        } else if (active
+          && !measurementFailed
+          && measurementStartedKey !== measurementKeyRef.current(layoutRef.current)) {
           scheduleMeasurement();
         }
       }
@@ -731,5 +756,6 @@ export function useReaderPagination({
     isReady,
     error,
     settledMeasurementRevision,
+    measuredMeasurementKey,
   };
 }

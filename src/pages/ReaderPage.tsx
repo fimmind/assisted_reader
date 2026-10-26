@@ -968,6 +968,8 @@ export default function ReaderPage() {
   const preparedChapterOpeningRef = useRef<PreparedChapterOpening | null>(null);
   const activePreparedOpeningRef = useRef<PreparedChapterOpening | null>(null);
   const instantChapterTransitionRef = useRef<PreparedChapterOpening | null>(null);
+  const pageModeWasRevealedRef = useRef(false);
+  const previousReadingModeRef = useRef(settings.readingMode);
   const nextChapterPreloadControllerRef = useRef<AbortController | null>(null);
   const [nextChapterPreloadRevision, setNextChapterPreloadRevision] = useState(0);
 
@@ -1018,20 +1020,109 @@ export default function ReaderPage() {
     settings.wsdContextUnit,
     settings.wsdContextSize,
     assistanceEnabled,
+    settings.readingMode,
+  ]);
+  const getOpeningPageMeasurementKey = useCallback((layout: ReaderPaginationLayout | null): string | null => {
+    if (settings.readingMode !== 'page' || !layout
+      || layout.layoutKey !== paginationLayoutKey
+      || layout.chapterIndex !== paginationChapterIndex) return null;
+    const page = layout.pages[currentPageIndex] ?? layout.pages[0];
+    const chapter = book?.chapters[paginationChapterIndex];
+    if (!page || !chapter) return null;
+    const blocks = readerBlocksForChapter(chapter.paragraphs, chapter.readerBlocks);
+    const paragraphIndices = [...new Set(page.blockFragments.flatMap((fragment) => {
+      const block = blocks[fragment.blockIndex];
+      return block?.type === 'paragraph' ? [block.paragraphIndex] : [];
+    }))];
+    const pageTargets = new Set(page.cardTargetKeys);
+    const analyses = paragraphIndices.map((index) => {
+      const analysis = chapterAnalysis[index];
+      const analysisReady = pageAnalysisCompleteRunId === analysisRunIdRef.current
+        || publishedAnalysisParagraphsRef.current.has(index)
+        || initialAnalysisFailedRef.current;
+      if (!analysis || (assistanceEnabled && !analysisReady)) return null;
+      const targets = analysis.cardTargets.map((target) => {
+        const targetKey = definitionTargetKey(target);
+        const onPage = pageTargets.has(readerTargetDomKey(target, index));
+        const lemma = normalizeToken(target.lemma);
+        const ready = !assistanceEnabled || !onPage || (
+          !loadingDefinitionLemmas.has(lemma)
+          && (definitionsByLemma.has(lemma) || failedDefinitionLemmas.has(lemma))
+          && readyInitialCardsRef.current.has(`${index}:${targetKey}`)
+        );
+        return [targetKey, onPage, ready];
+      });
+      if (targets.some((target) => target[2] === false)) return null;
+      return [index, targets];
+    });
+    if (analyses.some((analysis) => analysis === null)) return null;
+    return JSON.stringify([
+      layout.layoutKey,
+      layout.chapterIndex,
+      page.startLocation,
+      page.endLocation,
+      page.blockFragments.map((fragment) => [fragment.blockIndex, fragment.startY, fragment.endY, fragment.startOffset, fragment.endOffset]),
+      page.cardTargetKeys,
+      page.cardGroups,
+      page.reservedCardHeight,
+      page.presentationHeight,
+      page.blockDisplayOffsets,
+      analyses,
+    ]);
+  }, [
+    settings.readingMode,
+    paginationLayoutKey,
+    paginationChapterIndex,
+    currentPageIndex,
+    book,
+    assistanceEnabled,
+    chapterAnalysis,
+    pageAnalysisCompleteRunId,
+    loadingDefinitionLemmas,
+    definitionsByLemma,
+    failedDefinitionLemmas,
+    initialAnalysisRevision,
   ]);
   const pagination = useReaderPagination({
     rootRef: readerRootRef,
     enabled: settings.readingMode === 'page' && book !== null && !isLoading,
     settled: paginationSettled,
+    getMeasurementKey: getOpeningPageMeasurementKey,
     layoutKey: paginationLayoutKey,
     chapterIndex: paginationChapterIndex,
     pageHeight: paginationPageHeight,
     anchor: paginationAnchor,
   });
   const paginationErrorMessage = pageAnalysisError ?? pagination.error?.message ?? null;
+  const currentPaginationLayout = pagination.layout?.layoutKey === paginationLayoutKey
+    && pagination.layout.chapterIndex === paginationChapterIndex
+    ? pagination.layout
+    : null;
+  const displayedPage = currentPaginationLayout?.pages[currentPageIndex]
+    ?? currentPaginationLayout?.pages[0]
+    ?? null;
+  const displayedChapter = book?.chapters[paginationChapterIndex];
+  const displayedChapterBlocks = useMemo(() => displayedChapter
+    ? readerBlocksForChapter(displayedChapter.paragraphs, displayedChapter.readerBlocks)
+    : [], [displayedChapter]);
+  const displayedPageParagraphs = useMemo(() => displayedPage
+    ? [...new Set(displayedPage.blockFragments.flatMap((fragment) => {
+      const block = displayedChapterBlocks[fragment.blockIndex];
+      return block?.type === 'paragraph' ? [block.paragraphIndex] : [];
+    }))]
+    : [], [displayedPage, displayedChapterBlocks]);
+  const openingPageMeasurementKey = getOpeningPageMeasurementKey(currentPaginationLayout);
   const pageModeReady = settings.readingMode === 'page'
     && pagination.isReady
+    && initialViewportReady
+    && (pageModeWasRevealedRef.current
+      || (openingPageMeasurementKey !== null
+        && pagination.measuredMeasurementKey === openingPageMeasurementKey))
     && paginationErrorMessage === null;
+
+  useLayoutEffect(() => {
+    if (pageModeReady) pageModeWasRevealedRef.current = true;
+  }, [pageModeReady]);
 
   useLayoutEffect(() => {
     paginationLayoutRef.current = pagination.layout;
@@ -1050,6 +1141,7 @@ export default function ReaderPage() {
       delayedRestoreTimeoutRef.current = null;
     }
     initialReaderLoadPendingRef.current = true;
+    pageModeWasRevealedRef.current = false;
     initialViewportParagraphsRef.current = null;
     completedInitialAnalysisRef.current = new Set();
     publishedAnalysisParagraphsRef.current = new Set();
@@ -1079,8 +1171,8 @@ export default function ReaderPage() {
     beginReaderLoading();
     const analyses = buildPlainChapterAnalysis(nextBook);
     activePreparedOpeningRef.current = readyOpening;
-    instantChapterTransitionRef.current = readyOpening;
-    if (readyOpening) {
+    instantChapterTransitionRef.current = settingsRef.current.readingMode === 'scroll' ? readyOpening : null;
+    if (readyOpening && settingsRef.current.readingMode === 'scroll') {
       for (const [index, analysis] of readyOpening.analyses) analyses[index] = analysis;
       setDefinitionsByLemma(new Map(definitionsByLemmaRef.current));
       initialReaderLoadPendingRef.current = false;
@@ -1330,14 +1422,27 @@ export default function ReaderPage() {
           }, resources.lexicalAnalysisCache);
           const resolvedAnchorIndex = typeof anchorParagraphIndex === 'number' && Number.isFinite(anchorParagraphIndex)
             ? clampParagraphIndex(anchorParagraphIndex, expectedParagraphCount)
-            : resolveAnalysisAnchorIndex(
-              expectedParagraphCount,
-              selectedBook.currentChapterProgress,
-            );
+            : resolveAnalysisAnchorIndex(expectedParagraphCount, selectedBook.currentChapterProgress);
           const pageModeAnalysis = settingsRef.current.readingMode === 'page';
-          const paragraphOrder = (pageModeAnalysis
-            ? Array.from({ length: expectedParagraphCount }, (_, index) => index)
-            : buildParagraphProcessingOrder(expectedParagraphCount, resolvedAnchorIndex))
+          const savedLocation = selectedBook.location
+            ?? readerLocationFromLegacyProgress(selectedBook, selectedBook.currentChapter, selectedBook.currentChapterProgress);
+          const selectedChapter = selectedBook.chapters[clampChapterNumber(selectedBook, selectedBook.currentChapter) - 1];
+          const readerBlocks = selectedChapter
+            ? readerBlocksForChapter(selectedChapter.paragraphs, selectedChapter.readerBlocks)
+            : [];
+          const locationBlockIndex = savedLocation.chapterIndex === selectedBook.currentChapter - 1
+            ? Math.min(savedLocation.blockIndex, Math.max(0, readerBlocks.length - 1))
+            : -1;
+          const locationParagraphIndex = locationBlockIndex >= 0
+            ? readerBlocks.slice(locationBlockIndex).find((block) => block.type === 'paragraph')?.paragraphIndex
+              ?? [...readerBlocks.slice(0, locationBlockIndex)].reverse().find((block) => block.type === 'paragraph')?.paragraphIndex
+            : undefined;
+          const analysisAnchorIndex = anchorParagraphIndex !== undefined
+            ? resolvedAnchorIndex
+            : pageModeAnalysis && locationParagraphIndex !== undefined
+              ? locationParagraphIndex
+              : resolveAnalysisAnchorIndex(expectedParagraphCount, selectedBook.currentChapterProgress);
+          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, analysisAnchorIndex)
             .filter((index) => !preparedAnalyses.has(index));
           let pendingParagraphIndices: number[] = [];
           let timeSliceStartedAt = performance.now();
@@ -2765,6 +2870,16 @@ export default function ReaderPage() {
   }, [book, beginReaderLoading]);
 
   useLayoutEffect(() => {
+    if (previousReadingModeRef.current === settings.readingMode) return;
+    previousReadingModeRef.current = settings.readingMode;
+    if (settings.readingMode === 'page') pageModeWasRevealedRef.current = false;
+    if (!initialReaderLoadPendingRef.current) return;
+    initialViewportParagraphsRef.current = null;
+    completedInitialAnalysisRef.current = new Set();
+    setInitialAnalysisRevision((revision) => revision + 1);
+  }, [settings.readingMode]);
+
+  useLayoutEffect(() => {
     if (settings.readingMode !== 'page' || !pagination.isReady || !pagination.layout || !book) return;
     const currentBook = bookRef.current ?? book;
     const layout = pagination.layout;
@@ -2874,17 +2989,32 @@ export default function ReaderPage() {
   }, [chapterAnalysis, currentPageIndex, definitionsByLemma, failedDefinitionLemmas, loadingDefinitionLemmas, pageModeReady, pagination.layout, settings.readingMode]);
 
   useLayoutEffect(() => {
-    if (!book || isLoading || !initialReaderLoadPendingRef.current || initialViewportParagraphsRef.current !== null) return;
+    if (!book || isLoading || !initialReaderLoadPendingRef.current) return;
+    if (settings.readingMode === 'page') {
+      if (!displayedPage) return;
+      const current = initialViewportParagraphsRef.current;
+      const sameScope = current !== null
+        && current.length === displayedPageParagraphs.length
+        && current.every((index, position) => index === displayedPageParagraphs[position]);
+      if (!sameScope) {
+        initialViewportParagraphsRef.current = displayedPageParagraphs;
+        completedInitialAnalysisRef.current = new Set(displayedPageParagraphs.filter((index) =>
+          initialAnalysisFailedRef.current || publishedAnalysisParagraphsRef.current.has(index)));
+        setInitialAnalysisRevision((revision) => revision + 1);
+      }
+      if (!assistanceEnabledRef.current || displayedPageParagraphs.length === 0) {
+        initialReaderLoadPendingRef.current = false;
+        setInitialViewportReady(true);
+      }
+      return;
+    }
     const paragraphCount = book.chapters[clampChapterNumber(book, book.currentChapter) - 1]?.paragraphs.length ?? 0;
+    if (initialViewportParagraphsRef.current !== null) return;
     let firstFrame = 0;
     let secondFrame = 0;
     firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
-        const viewportParagraphs = measureVisibleReaderParagraphs(
-          paraRefs.current,
-          paragraphCount,
-          window.innerHeight,
-        );
+        const viewportParagraphs = measureVisibleReaderParagraphs(paraRefs.current, paragraphCount, window.innerHeight);
         if (viewportParagraphs.length === 0 && paragraphCount > 0) {
           viewportParagraphs.push(resolveAnalysisAnchorIndex(paragraphCount, book.currentChapterProgress));
         }
@@ -2902,16 +3032,22 @@ export default function ReaderPage() {
       window.cancelAnimationFrame(firstFrame);
       window.cancelAnimationFrame(secondFrame);
     };
-  }, [book, isLoading, initialProgressRestored, resolveAnalysisAnchorIndex]);
+  }, [book, isLoading, initialProgressRestored, resolveAnalysisAnchorIndex, settings.readingMode, displayedPage, displayedPageParagraphs]);
 
   useEffect(() => {
-    const visibleParagraphs = initialViewportParagraphsRef.current;
+    const visibleParagraphs = settings.readingMode === 'page'
+      ? displayedPageParagraphs
+      : initialViewportParagraphsRef.current;
     if (!initialReaderLoadPendingRef.current || !book || isLoading || !assistanceEnabled) return;
-    if (!visibleParagraphs || visibleParagraphs.some((index) => !completedInitialAnalysisRef.current.has(index))) {
+    if (!visibleParagraphs || visibleParagraphs.some((index) => settings.readingMode === 'page'
+      ? pageAnalysisCompleteRunId !== analysisRunIdRef.current
+        && !publishedAnalysisParagraphsRef.current.has(index)
+        && !initialAnalysisFailedRef.current
+      : !completedInitialAnalysisRef.current.has(index))) {
       setInitialLoadingMessage('Choosing difficult words...');
       return;
     }
-    if (!areInitialReaderCardsReady(
+    if (settings.readingMode === 'scroll' && !areInitialReaderCardsReady(
       visibleParagraphs,
       completedInitialAnalysisRef.current,
       chapterAnalysis,
@@ -2922,14 +3058,39 @@ export default function ReaderPage() {
       setInitialLoadingMessage('Fetching definitions...');
       return;
     }
+    const openingPage = settings.readingMode === 'page' ? displayedPage : null;
+    const openingCardKeys = openingPage ? new Set(openingPage.cardTargetKeys) : null;
+    const openingCardsReady = settings.readingMode === 'scroll' || visibleParagraphs.every((index) => {
+      if (settings.readingMode === 'page'
+        ? pageAnalysisCompleteRunId !== analysisRunIdRef.current
+          && !publishedAnalysisParagraphsRef.current.has(index)
+          && !initialAnalysisFailedRef.current
+        : !completedInitialAnalysisRef.current.has(index)) return false;
+      const analysis = chapterAnalysis[index];
+      if (!analysis) return false;
+      return analysis.cardTargets.every((target) => {
+        if (openingCardKeys && !openingCardKeys.has(readerTargetDomKey(target, index))) return true;
+        const lemma = normalizeToken(target.lemma);
+        return !loadingDefinitionLemmas.has(lemma)
+          && (definitionsByLemma.has(lemma) || failedDefinitionLemmas.has(lemma));
+      });
+    });
+    if (!openingCardsReady) {
+      setInitialLoadingMessage('Fetching definitions...');
+      return;
+    }
     const visibleCardsReady = visibleParagraphs.every((index) =>
       chapterAnalysis[index].cardTargets.every((target) =>
-        readyInitialCardsRef.current.has(`${index}:${definitionTargetKey(target)}`)));
+        (openingCardKeys && !openingCardKeys.has(readerTargetDomKey(target, index)))
+          || readyInitialCardsRef.current.has(`${index}:${definitionTargetKey(target)}`)));
     if (!visibleCardsReady) {
       setInitialLoadingMessage(settings.wsdMode === 'none' ? 'Fetching definitions...' : 'Performing WSD...');
       return;
     }
     if (!initialProgressRestored) return;
+    if (settings.readingMode === 'page'
+      && (openingPageMeasurementKey === null
+        || pagination.measuredMeasurementKey !== openingPageMeasurementKey)) return;
     const viewportCheckFrame = window.requestAnimationFrame(() => {
       initialReaderLoadPendingRef.current = false;
       setInitialViewportReady(true);
@@ -2947,6 +3108,12 @@ export default function ReaderPage() {
     failedDefinitionLemmas,
     activeAnalysisRunId,
     settings.wsdMode,
+    settings.readingMode,
+    openingPageMeasurementKey,
+    pagination.measuredMeasurementKey,
+    displayedPage,
+    displayedPageParagraphs,
+    pagination.settledMeasurementRevision,
   ]);
 
   const readerLoading = isLoading || (book !== null && !initialViewportReady);
