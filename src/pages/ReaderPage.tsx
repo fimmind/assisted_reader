@@ -1609,7 +1609,7 @@ export default function ReaderPage() {
         && pagination.measuredMeasurementKey === openingPageMeasurementKey))
     && paginationErrorMessage === null;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const chapter = book?.chapters[paginationChapterIndex];
     if (!pageModeReady || !book || !chapter || !currentPaginationLayout) return;
     if (currentPaginationLayout.layoutKey !== paginationLayoutKey
@@ -1699,6 +1699,33 @@ export default function ReaderPage() {
   }, []);
 
   const openReaderChapter = useCallback((nextBook: ImportedBook, entryDirection: ReaderChapterEntryDirection): void => {
+    const currentBook = bookRef.current;
+    const currentLayout = paginationLayoutRef.current;
+    const currentChapterIndex = currentBook ? clampChapterNumber(currentBook, currentBook.currentChapter) - 1 : -1;
+    const capturedLayoutKey = paginationLayoutKeyRef.current;
+    const currentPreparedCandidates = [
+      preparedChapterOpeningsRef.current.get(currentChapterIndex),
+      activePreparedOpeningRef.current,
+    ];
+    const currentPrepared = currentPreparedCandidates.find((candidate): candidate is PreparedChapterOpening => candidate !== undefined
+      && candidate !== null
+      && currentBook !== null
+      && candidate.bookId === currentBook.id
+      && candidate.bookUpdatedAt === currentBook.updatedAt
+      && candidate.chapterIndex === currentChapterIndex
+      && candidate.layoutKey === capturedLayoutKey);
+    if (settingsRef.current.readingMode === 'page'
+      && currentBook
+      && currentLayout
+      && currentLayout.layoutKey === capturedLayoutKey
+      && currentLayout.chapterIndex === currentChapterIndex
+      && currentPrepared
+      && currentPrepared.previewError === null
+      && currentPrepared.layout?.signature !== currentLayout.signature) {
+      currentPrepared.layout = currentLayout;
+      preparedChapterOpeningsRef.current.set(currentChapterIndex, currentPrepared);
+    }
+
     const chapterIndex = clampChapterNumber(nextBook, nextBook.currentChapter) - 1;
     const prepared = preparedChapterOpeningsRef.current.get(chapterIndex) ?? null;
     const profile = getActiveProfile(loadProfileState());
@@ -4257,6 +4284,10 @@ export default function ReaderPage() {
             assistanceEnabled,
           )
           || !entry.analysisComplete || !entry.cardPreloadComplete || entry.previewError !== null) return [];
+        if (entry.layout?.layoutKey === entry.layoutKey
+          && entry.layout.chapterIndex === entry.chapterIndex
+          && entry.layout.pageHeight === paginationPageHeight
+          && entry.layout.pages.length > 0) return [];
         return [entry];
       })
     : [];
