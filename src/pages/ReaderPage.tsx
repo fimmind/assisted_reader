@@ -1066,8 +1066,7 @@ const ReaderChapterPrerender = memo(function ReaderChapterPrerender({
       className={cn('fixed inset-x-0 top-0 mx-auto px-4 sm:px-6', pageWidthClass)}
       style={{
         height: `${pageHeight}px`,
-        overflowY: 'auto',
-        scrollbarGutter: 'stable',
+        overflowY: 'hidden',
         transform: 'translateX(-200vw)',
         visibility: 'hidden',
         pointerEvents: 'none',
@@ -4224,7 +4223,7 @@ export default function ReaderPage() {
     const root = document.documentElement;
     const previousOverflow = root.style.overflow;
     const previousScrollbarGutter = root.style.scrollbarGutter;
-    root.style.scrollbarGutter = 'stable';
+    root.style.scrollbarGutter = settings.readingMode === 'page' ? 'auto' : 'stable';
     root.style.overflow = 'hidden';
     return () => {
       root.style.overflow = previousOverflow;
@@ -4614,7 +4613,6 @@ export default function ReaderPage() {
           ...(fullscreenPageMode ? { top: `${fullscreenTopSpacing}px` } : {}),
           overflowX: 'clip',
           overflowY: 'auto',
-          scrollbarGutter: 'stable',
           touchAction: 'pan-y',
         } : undefined}
         data-testid={settings.readingMode === 'page' ? 'reader-page-viewport' : undefined}
