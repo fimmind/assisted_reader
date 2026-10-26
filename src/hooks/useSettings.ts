@@ -5,6 +5,7 @@ import type { ReaderSettings } from '@/core/types';
 function areReaderSettingsEqual(left: ReaderSettings, right: ReaderSettings): boolean {
   return (
     left.readingMode === right.readingMode
+    && left.fullscreenPageMode === right.fullscreenPageMode
     && left.fontSize === right.fontSize
     && left.lineSpacing === right.lineSpacing
     && left.fontChoice === right.fontChoice

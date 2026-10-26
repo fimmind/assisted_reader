@@ -16,6 +16,7 @@ export const SENTENCE_RE = /[^.!?]+[.!?]+|[^.!?]+$/g;
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   readingMode: 'page',
+  fullscreenPageMode: false,
   fontSize: 18,
   lineSpacing: 'Normal',
   fontChoice: 'Serif',

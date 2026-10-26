@@ -265,6 +265,7 @@ export function loadReaderSettings(): ReaderSettings {
       readingMode: parsed.readingMode === 'page' ? 'page'
         : parsed.readingMode === 'scroll' ? 'scroll'
         : DEFAULT_READER_SETTINGS.readingMode,
+      fullscreenPageMode: parsed.fullscreenPageMode === true,
       fontSize: sanitizeNumeric(parsed.fontSize, DEFAULT_READER_SETTINGS.fontSize, 12, 32),
       lineSpacing: parsed.lineSpacing ?? DEFAULT_READER_SETTINGS.lineSpacing,
       fontChoice: parsed.fontChoice ?? DEFAULT_READER_SETTINGS.fontChoice,

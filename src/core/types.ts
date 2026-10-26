@@ -2,6 +2,7 @@ export type WsdMode = 'none' | 'sayedshaun' | 'glite-lens';
 
 export interface ReaderSettings {
   readingMode: 'scroll' | 'page';
+  fullscreenPageMode: boolean;
   fontSize: number;
   lineSpacing: 'Compact' | 'Normal' | 'Relaxed';
   fontChoice: 'Serif' | 'Sans';

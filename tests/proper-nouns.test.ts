@@ -1583,6 +1583,7 @@ test('reader analysis retains short tokens without selecting them for cards', ()
   };
   const settings: ReaderSettings = {
     readingMode: 'scroll',
+    fullscreenPageMode: false,
     fontSize: 18,
     lineSpacing: 'Normal',
     fontChoice: 'Serif',
@@ -1680,6 +1681,7 @@ test('reader analysis keeps separate automatic targets for noun and verb usages'
   };
   const settings: ReaderSettings = {
     readingMode: 'scroll',
+    fullscreenPageMode: false,
     fontSize: 18,
     lineSpacing: 'Normal',
     fontChoice: 'Serif',
@@ -1730,6 +1732,7 @@ test('automatic card candidates exclude function words and leave unknown tokens 
   };
   const settings: ReaderSettings = {
     readingMode: 'scroll',
+    fullscreenPageMode: false,
     fontSize: 18,
     lineSpacing: 'Normal',
     fontChoice: 'Serif',
@@ -1804,6 +1807,7 @@ test('reader ranking excludes for in the reported passage', () => {
   };
   const settings: ReaderSettings = {
     readingMode: 'scroll',
+    fullscreenPageMode: false,
     fontSize: 18,
     lineSpacing: 'Normal',
     fontChoice: 'Serif',
@@ -1874,6 +1878,7 @@ test('cached chapter analysis reuses lexical work across profile changes', () =>
   };
   const settings: ReaderSettings = {
     readingMode: 'scroll',
+    fullscreenPageMode: false,
     fontSize: 18,
     lineSpacing: 'Normal',
     fontChoice: 'Serif',

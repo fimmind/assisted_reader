@@ -1369,13 +1369,13 @@ export default function ReaderPage() {
   const { bookId } = useParams();
   const [, setLocation] = useLocation();
   const { settings, updateSetting } = useSettings();
+  const fullscreenPageMode = settings.readingMode === 'page' && settings.fullscreenPageMode;
   const { theme, setTheme } = useTheme();
 
   const [book, setBook] = useState<ImportedBook | null>(null);
   const [assistanceEnabled, setAssistanceEnabled] = useState(true);
   const [headerVisible, setHeaderVisible] = useState(true);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
-  const [fullscreenPageMode, setFullscreenPageMode] = useState(false);
   const [fullscreenToolbarOpen, setFullscreenToolbarOpen] = useState(false);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [navigationSearchRequested, setNavigationSearchRequested] = useState(false);
@@ -2387,7 +2387,6 @@ export default function ReaderPage() {
       setHeaderVisible(true);
     }
     if (readingMode === 'scroll') {
-      setFullscreenPageMode(false);
       setFullscreenToolbarOpen(false);
     }
     updateSetting('readingMode', readingMode);
@@ -4439,7 +4438,7 @@ export default function ReaderPage() {
                 aria-label={fullscreenPageMode ? 'Exit fullscreen reader' : 'Enter fullscreen reader'}
                 data-testid="button-reader-fullscreen"
                 onClick={() => {
-                  setFullscreenPageMode((current) => !current);
+                  updateSetting('fullscreenPageMode', !settings.fullscreenPageMode);
                   setFullscreenToolbarOpen(false);
                 }}
               >
