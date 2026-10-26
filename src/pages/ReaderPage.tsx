@@ -1055,8 +1055,15 @@ const ReaderChapterPrerender = memo(function ReaderChapterPrerender({
 
   return (
     <div
-      className={cn('fixed left-[-10000px] top-0 mx-auto px-4 sm:px-6', pageWidthClass)}
-      style={{ width: '100vw', visibility: 'hidden', pointerEvents: 'none' }}
+      className={cn('fixed inset-x-0 top-0 mx-auto px-4 sm:px-6', pageWidthClass)}
+      style={{
+        height: `${pageHeight}px`,
+        overflowY: 'auto',
+        scrollbarGutter: 'stable',
+        transform: 'translateX(-200vw)',
+        visibility: 'hidden',
+        pointerEvents: 'none',
+      }}
       aria-hidden="true"
       inert
       data-reader-prerender-chapter={entry.chapterIndex}
@@ -1737,7 +1744,6 @@ export default function ReaderPage() {
         ? prepared : null);
     bookRef.current = nextBook;
     beginReaderLoading(initialPageIndex);
-    if (hasPageLayout) pageModeWasRevealedRef.current = true;
     const analyses = buildPlainChapterAnalysis(nextBook);
     activePreparedOpeningRef.current = readyOpening;
     instantChapterTransitionRef.current = settingsRef.current.readingMode === 'scroll' ? readyOpening : null;
@@ -4567,7 +4573,8 @@ export default function ReaderPage() {
         style={settings.readingMode === 'page' ? {
           ...(fullscreenPageMode ? { top: `${fullscreenTopSpacing}px` } : {}),
           overflowX: 'clip',
-          overflowY: pageHasOversizedSegment ? 'auto' : 'clip',
+          overflowY: 'auto',
+          scrollbarGutter: 'stable',
           touchAction: 'pan-y',
         } : undefined}
         data-testid={settings.readingMode === 'page' ? 'reader-page-viewport' : undefined}
@@ -4659,7 +4666,7 @@ export default function ReaderPage() {
                 pageMode={settings.readingMode === 'page'}
                 pageHeight={paginationPageHeight}
                 includeDocumentIds
-                loadingImagesEager={false}
+                loadingImagesEager={settings.readingMode === 'page'}
                 presentationForBlock={readerBlockPresentation}
                 renderParagraphSupplement={(sourceIndex, analysis) => settings.readingMode === 'scroll'
                   && assistanceEnabled && analysis.cardTargets.length > 0
