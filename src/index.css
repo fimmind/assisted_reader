@@ -231,9 +231,23 @@
   font-weight: 500;
 }
 
-.reader-page-content [data-definition-card="true"] {
-  max-height: max(4rem, calc(var(--reader-page-height) - 1rem));
-  overflow-y: auto;
+.reader-page-text-clip {
+  min-width: 0;
+}
+
+.reader-page-card-measurements {
+  position: absolute;
+  top: 0;
+  left: -10000px;
+  right: auto;
+  width: 100%;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.reader-page-card-group [data-definition-card="true"][data-definition-height-limited="true"],
+.reader-page-card-measurements [data-definition-card="true"][data-definition-height-limited="true"] {
+  max-height: var(--reader-page-card-height);
 }
 
 .reader-page-content [data-reader-text-block],

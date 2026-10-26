@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
   buildReaderPages,
+  type ReaderPaginationCardMetric,
   type ReaderPaginationLayout,
   type ReaderPaginationPage,
   type ReaderPaginationSegment,
@@ -35,6 +36,8 @@ function readAnchorPage(
   pageHeight: number,
   chapterIndex: number,
   anchor: ReaderLocation | null,
+  cardMetrics: readonly ReaderPaginationCardMetric[],
+  cardColumnCapacity: number,
 ): ReaderPaginationPage | null {
   const markedBlocks = Array.from(root.querySelectorAll<HTMLElement>('[data-reader-block-index]'));
   const targetBlock = anchor
@@ -46,6 +49,11 @@ function readAnchorPage(
   const rootTop = root.getBoundingClientRect().top;
   const targetBlockIndex = markedBlocks.indexOf(targetBlock);
   const segments: ReaderPaginationSegment[] = [];
+  const startsAtChapterOpening = !anchor
+    || (anchor.chapterIndex === chapterIndex && anchor.blockIndex === 0 && anchor.textOffset === 0);
+  if (startsAtChapterOpening && targetBlockIndex === 0) {
+    segments.push(...leadingPreambleSegments(root, targetBlock, blockIndex, rootTop));
+  }
   let firstSegmentIndex = 0;
   let pageStartY: number | null = null;
   let pageEndY: number | null = null;
@@ -72,7 +80,7 @@ function readAnchorPage(
     });
     if (pageStartY !== null && pageEndY !== null && pageEndY - pageStartY >= pageHeight) break;
   }
-  const page = buildReaderPages(segments, pageHeight, chapterIndex)[0];
+  const page = buildReaderPages(segments, pageHeight, chapterIndex, cardMetrics, cardColumnCapacity)[0];
   return page ?? null;
 }
 
@@ -90,11 +98,6 @@ interface TextLineBand {
   bottom: number;
 }
 
-interface CardRowBand {
-  top: number;
-  bottom: number;
-}
-
 const TEXT_NODE_TYPE = 3;
 const LINE_OVERLAP_EPSILON = 0.5;
 const PAGE_EDGE_EPSILON = 1.25;
@@ -106,11 +109,11 @@ function readerPaginationMeasurementError(message: string): Error {
   return error;
 }
 
-function rectBounds(element: Element, rootTop: number): { top: number; bottom: number } {
+function rectBounds(element: Element, rootTop: number, presentationOffset: number): { top: number; bottom: number } {
   const rect = element.getBoundingClientRect();
   return {
-    top: rect.top - rootTop - PAGE_EDGE_EPSILON,
-    bottom: rect.bottom - rootTop + PAGE_EDGE_EPSILON,
+    top: rect.top - rootTop - presentationOffset - PAGE_EDGE_EPSILON,
+    bottom: rect.bottom - rootTop - presentationOffset + PAGE_EDGE_EPSILON,
   };
 }
 
@@ -120,6 +123,7 @@ function collectRangeFragments(
   localEnd: number,
   baseOffset: number,
   rootTop: number,
+  presentationOffset: number,
   output: TextLineFragment[],
 ): void {
   if (localStart >= localEnd) return;
@@ -132,15 +136,15 @@ function collectRangeFragments(
     rects.forEach((rect) => output.push({
       startOffset: baseOffset + localStart,
       endOffset: baseOffset + localEnd,
-      top: rect.top - rootTop - PAGE_EDGE_EPSILON,
-      bottom: rect.bottom - rootTop + PAGE_EDGE_EPSILON,
+      top: rect.top - rootTop - presentationOffset - PAGE_EDGE_EPSILON,
+      bottom: rect.bottom - rootTop - presentationOffset + PAGE_EDGE_EPSILON,
     }));
     return;
   }
 
   const middle = localStart + Math.floor((localEnd - localStart) / 2);
-  collectRangeFragments(node, localStart, middle, baseOffset, rootTop, output);
-  collectRangeFragments(node, middle, localEnd, baseOffset, rootTop, output);
+  collectRangeFragments(node, localStart, middle, baseOffset, rootTop, presentationOffset, output);
+  collectRangeFragments(node, middle, localEnd, baseOffset, rootTop, presentationOffset, output);
 }
 
 function inlineImageOffset(textElement: HTMLElement, image: HTMLImageElement): number {
@@ -150,7 +154,7 @@ function inlineImageOffset(textElement: HTMLElement, image: HTMLImageElement): n
   return range.toString().length;
 }
 
-function textLineFragments(textElement: HTMLElement, rootTop: number): TextLineFragment[] {
+function textLineFragments(textElement: HTMLElement, rootTop: number, presentationOffset: number): TextLineFragment[] {
   const fragments: TextLineFragment[] = [];
   const walker = textElement.ownerDocument.createTreeWalker(textElement, NodeFilter.SHOW_TEXT);
   let canonicalOffset = 0;
@@ -164,6 +168,7 @@ function textLineFragments(textElement: HTMLElement, rootTop: number): TextLineF
         textNode.data.length,
         canonicalOffset,
         rootTop,
+        presentationOffset,
         fragments,
       );
       canonicalOffset += textNode.data.length;
@@ -178,7 +183,7 @@ function textLineFragments(textElement: HTMLElement, rootTop: number): TextLineF
   }
 
   Array.from(textElement.querySelectorAll('img')).forEach((image) => {
-    const bounds = rectBounds(image, rootTop);
+    const bounds = rectBounds(image, rootTop, presentationOffset);
     if (bounds.bottom <= bounds.top) return;
     const offset = inlineImageOffset(textElement, image);
     fragments.push({ startOffset: offset, endOffset: offset, ...bounds });
@@ -224,24 +229,20 @@ function mergeTextLineFragments(
   }));
 }
 
-function mergeCardRows(cards: readonly HTMLElement[], rootTop: number): CardRowBand[] {
-  const orderedCards = cards.map((card) => rectBounds(card, rootTop))
-    .filter((bounds) => bounds.bottom > bounds.top)
-    .sort((left, right) => left.top - right.top || left.bottom - right.bottom);
-  const rows: CardRowBand[] = [];
-  orderedCards.forEach((cardBounds) => {
-    const currentRow = rows[rows.length - 1];
-    const sameVisualRow = currentRow !== undefined
-      && cardBounds.top <= currentRow.bottom + LINE_OVERLAP_EPSILON
-      && cardBounds.bottom >= currentRow.top - LINE_OVERLAP_EPSILON;
-    if (sameVisualRow && currentRow) {
-      currentRow.top = Math.min(currentRow.top, cardBounds.top);
-      currentRow.bottom = Math.max(currentRow.bottom, cardBounds.bottom);
-      return;
-    }
-    rows.push({ top: cardBounds.top, bottom: cardBounds.bottom });
-  });
-  return rows;
+function selectedTargetsForLine(
+  textElement: HTMLElement,
+  segment: ReaderPaginationSegment,
+  rootTop: number,
+  presentationOffset: number,
+): string[] {
+  const lineTop = segment.startY + PAGE_EDGE_EPSILON;
+  const lineBottom = segment.endY - PAGE_EDGE_EPSILON;
+  return Array.from(textElement.querySelectorAll<HTMLElement>('[data-reader-selected-target]'))
+    .filter((element) => Array.from(element.getClientRects()).some((rect) =>
+      rect.bottom - presentationOffset > rootTop + lineTop
+      && rect.top - presentationOffset < rootTop + lineBottom))
+    .map((element) => element.dataset.readerSelectedTarget)
+    .filter((targetKey): targetKey is string => targetKey !== undefined);
 }
 
 function atomicSegment(
@@ -264,30 +265,35 @@ function measuredBlockSegments(
   rootTop: number,
   blockIndex: number,
 ): ReaderPaginationSegment[] {
+  const presentationOffset = Number(blockElement.dataset.readerPaginationOffset ?? '0');
+  if (!Number.isFinite(presentationOffset)) {
+    throw readerPaginationMeasurementError(
+      `Rendered reader block has an invalid pagination offset: blockIndex=${blockIndex}, value=${blockElement.dataset.readerPaginationOffset ?? ''}`,
+    );
+  }
+  const blockRect = blockElement.getBoundingClientRect();
+  const sourceBlockBounds = {
+    blockTopY: blockRect.top - rootTop - presentationOffset,
+    blockBottomY: blockRect.bottom - rootTop - presentationOffset,
+  };
+  const blockBounds = rectBounds(blockElement, rootTop, presentationOffset);
   const textElement = blockElement.querySelector<HTMLElement>('[data-reader-text-block], .reader-text');
   if (!textElement) {
-    return [atomicSegment(rectBounds(blockElement, rootTop), blockIndex, 0)];
+    return [{ ...atomicSegment(blockBounds, blockIndex, 0), ...sourceBlockBounds }];
   }
 
-  const textLength = textElement.textContent?.length ?? 0;
-  const textSegments = mergeTextLineFragments(textLineFragments(textElement, rootTop), blockIndex);
-  const cards = Array.from(blockElement.querySelectorAll<HTMLElement>('[data-definition-card="true"]'));
-  const cardRows = mergeCardRows(cards, rootTop);
-  const cardSegments = cardRows.map((row) => atomicSegment(row, blockIndex, textLength));
-  if (cards.length === 0) {
-    const cardGroup = blockElement.querySelector<HTMLElement>(
-      '[data-reader-pagination-card-group], [data-testid^="mobile-card-group-"]',
-    );
-    if (cardGroup) {
-      cardSegments.push(atomicSegment(rectBounds(cardGroup, rootTop), blockIndex, textLength));
-    }
+  const textSegments = mergeTextLineFragments(
+    textLineFragments(textElement, rootTop, presentationOffset),
+    blockIndex,
+  );
+  if (textSegments.length === 0) {
+    return [{ ...atomicSegment(blockBounds, blockIndex, 0), ...sourceBlockBounds }];
   }
-
-  if (textSegments.length === 0 && cardSegments.length === 0) {
-    return [atomicSegment(rectBounds(blockElement, rootTop), blockIndex, 0)];
-  }
-  return [...textSegments, ...cardSegments].sort((left, right) =>
-    left.startY - right.startY || left.endY - right.endY || left.startOffset - right.startOffset);
+  return textSegments.map((segment) => ({
+    ...segment,
+    selectedTargetKeys: selectedTargetsForLine(textElement, segment, rootTop, presentationOffset),
+    ...sourceBlockBounds,
+  }));
 }
 
 function readRenderedSegments(root: HTMLElement): ReaderPaginationSegment[] {
@@ -324,6 +330,30 @@ function readRenderedSegments(root: HTMLElement): ReaderPaginationSegment[] {
   return segments;
 }
 
+function readingRowForRoot(root: HTMLElement): HTMLElement {
+  return root.closest<HTMLElement>('[data-testid="reading-row"]') ?? root;
+}
+
+function readCardMetrics(root: HTMLElement): ReaderPaginationCardMetric[] {
+  const readingRow = readingRowForRoot(root);
+  return Array.from(readingRow.querySelectorAll<HTMLElement>('[data-reader-card-target]'))
+    .flatMap((wrapper) => {
+      const targetKey = wrapper.dataset.readerCardTarget;
+      const height = wrapper.getBoundingClientRect().height;
+      if (!targetKey) {
+        throw readerPaginationMeasurementError('Rendered reader card wrapper has no target key.');
+      }
+      if (!Number.isFinite(height) || height <= 0) return [];
+      return [{ targetKey, height }];
+    });
+}
+
+function cardColumnCapacityForRoot(root: HTMLElement): number {
+  const readingRow = readingRowForRoot(root);
+  const groupContentWidth = Math.max(1, readingRow.clientWidth - 8);
+  return Math.max(1, Math.floor((groupContentWidth + 12) / (266 + 12)));
+}
+
 function leadingPreambleSegments(
   root: HTMLElement,
   firstBlockElement: HTMLElement,
@@ -353,18 +383,29 @@ function leadingPreambleSegments(
     return 0;
   });
 
-  return documentOrder.map((element) => atomicSegment(rectBounds(element, rootTop), firstBlockIndex, 0));
+  return documentOrder.map((element) => atomicSegment(rectBounds(element, rootTop, 0), firstBlockIndex, 0));
 }
 
-function segmentsSignature(segments: readonly ReaderPaginationSegment[]): string {
-  return segments.map((segment) => [
+function segmentsSignature(
+  segments: readonly ReaderPaginationSegment[],
+  cardMetrics: readonly ReaderPaginationCardMetric[],
+  cardColumnCapacity: number,
+): string {
+  return JSON.stringify([
+    cardColumnCapacity,
+    cardMetrics.map((metric) => [metric.targetKey, Math.round(metric.height * 100) / 100]),
+    segments.map((segment) => [
     segment.blockIndex,
     segment.startOffset,
     segment.endOffset,
     Math.round(segment.startY * 100) / 100,
     Math.round(segment.endY * 100) / 100,
+    Math.round((segment.blockTopY ?? 0) * 100) / 100,
+    Math.round((segment.blockBottomY ?? 0) * 100) / 100,
     segment.kind,
-  ].join(':')).join('|');
+    segment.selectedTargetKeys ?? [],
+    ]),
+  ]);
 }
 
 function waitForNextFrame(signal: AbortSignal): Promise<boolean> {
@@ -395,9 +436,11 @@ async function measureStablePages(
   for (let measurementIndex = 0; measurementIndex < MAX_STABILITY_MEASUREMENTS; measurementIndex += 1) {
     if (signal.aborted) return null;
     const firstMeasurement = readRenderedSegments(root);
-    const firstSignature = segmentsSignature(firstMeasurement);
+    const firstCardMetrics = readCardMetrics(root);
+    const cardColumnCapacity = cardColumnCapacityForRoot(root);
+    const firstSignature = segmentsSignature(firstMeasurement, firstCardMetrics, cardColumnCapacity);
     if (firstSignature === previousSignature) {
-      return buildReaderPages(firstMeasurement, pageHeight, chapterIndex);
+      return buildReaderPages(firstMeasurement, pageHeight, chapterIndex, firstCardMetrics, cardColumnCapacity);
     }
     previousSignature = firstSignature;
     if (!await waitForNextFrame(signal)) return null;
@@ -425,6 +468,13 @@ function layoutSignature(
       page.endLocation.blockIndex,
       page.endLocation.textOffset,
       page.issues,
+      page.cardTargetKeys,
+      Math.round(page.reservedCardHeight * 100) / 100,
+      page.cardGroups,
+      page.blockDisplayOffsets,
+      page.blockFragments,
+      Math.round(page.textClipHeight * 100) / 100,
+      Math.round(page.presentationHeight * 100) / 100,
     ]),
   ]);
   let firstHash = 0x811c9dc5;
@@ -439,7 +489,7 @@ function layoutSignature(
 
 function geometryElements(node: Node): Element[] {
   if (!(node instanceof Element)) return [];
-  const selector = '[data-reader-block-index], [data-definition-card="true"], img';
+  const selector = '[data-reader-block-index], [data-reader-card-target], [data-definition-card="true"], img';
   return [
     ...(node.matches(selector) ? [node] : []),
     ...Array.from(node.querySelectorAll(selector)),
@@ -517,7 +567,14 @@ export function useReaderPagination({
           || currentLayout.chapterIndex !== chapterIndex
           || currentLayout.pageHeight !== pageHeight;
         const anchorPage = needsInitialLayout
-          ? readAnchorPage(root, pageHeight, chapterIndex, anchor)
+          ? readAnchorPage(
+            root,
+            pageHeight,
+            chapterIndex,
+            anchor,
+            readCardMetrics(root),
+            cardColumnCapacityForRoot(root),
+          )
           : null;
         if (active && anchorPage) {
           const anchorPages = [anchorPage];
@@ -572,6 +629,7 @@ export function useReaderPagination({
       }
     };
 
+    const measurementHost = readingRowForRoot(root);
     const resizeObserver = new ResizeObserver(scheduleMeasurement);
     const observedElements = new Set<Element>();
     const observeGeometry = (element: Element): void => {
@@ -588,7 +646,7 @@ export function useReaderPagination({
       });
     };
     observeGeometry(root);
-    root.querySelectorAll('[data-reader-block-index], [data-definition-card="true"], img')
+    measurementHost.querySelectorAll('[data-reader-block-index], [data-reader-card-target], [data-definition-card="true"], img')
       .forEach(observeGeometry);
     const mutationObserver = new MutationObserver((records) => {
       let geometryChanged = false;
@@ -599,14 +657,22 @@ export function useReaderPagination({
           record.removedNodes.forEach(unobserveTree);
         } else if (record.type === 'characterData') {
           geometryChanged = true;
+        } else if (record.type === 'attributes') {
+          geometryChanged = true;
         }
       });
       if (geometryChanged) scheduleMeasurement();
     });
-    mutationObserver.observe(root, {
+    mutationObserver.observe(measurementHost, {
       subtree: true,
       childList: true,
       characterData: true,
+      attributes: true,
+      attributeFilter: [
+        'data-reader-selected-target',
+        'data-definition-count',
+        'data-definition-height-limited',
+      ],
     });
     scheduleMeasurementRef.current = scheduleMeasurement;
     document.fonts.addEventListener('loadingdone', scheduleMeasurement);

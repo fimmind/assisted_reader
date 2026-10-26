@@ -10,6 +10,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from './ui/tooltip';
+import { ScrollArea } from './ui/scroll-area';
 
 export interface DefinitionWordClick {
   element: HTMLElement;
@@ -320,6 +321,44 @@ function renderCompactDefinitions(
   );
 }
 
+function compactCardDefinitionContent(
+  definition: LexiconEntry,
+  definitionStatus: 'loading' | 'ready' | 'error',
+  activeDefinitionSelection: DefinitionTextSelection | undefined,
+  onDefinitionWordClick: (click: DefinitionWordClick) => void,
+  pronunciationVariant: 'US' | 'UK',
+): ReactNode {
+  if (definitionStatus === 'loading') {
+    return <p className="shrink-0 text-muted-foreground leading-snug">Loading definition…</p>;
+  }
+  if (definitionStatus === 'error') {
+    return <p className="shrink-0 text-destructive leading-snug">Definition could not be loaded.</p>;
+  }
+  if (definition.senses.length === 0) {
+    return <p className="shrink-0 text-foreground/80 leading-snug">Definition unavailable in this build.</p>;
+  }
+  return (
+    <div className="space-y-2.5">
+      {definition.senses.map((sense) => {
+        const ipaText = resolveLexiconPronunciations(sense, pronunciationVariant).preferred;
+        return (
+          <section key={sense.partOfSpeech}>
+            <div className="flex items-baseline gap-2 mb-0.5">
+              <span className="text-[0.68em] font-medium uppercase tracking-wide text-primary">
+                {formatPartOfSpeech(sense.partOfSpeech)}
+              </span>
+              {ipaText.length > 0 && (
+                <span className="text-[0.75em] text-muted-foreground italic">{ipaText}</span>
+              )}
+            </div>
+            {renderCompactDefinitions(sense.definitions, activeDefinitionSelection, onDefinitionWordClick)}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 function renderExpandedDefinitions(
   definitions: string[],
   activeDefinitionSelection: DefinitionTextSelection | undefined,
@@ -341,6 +380,56 @@ function renderExpandedDefinitions(
   );
 }
 
+function expandedCardDefinitionContent(
+  definition: LexiconEntry,
+  definitionStatus: 'loading' | 'ready' | 'error',
+  activeDefinitionSelection: DefinitionTextSelection | undefined,
+  onDefinitionWordClick: (click: DefinitionWordClick) => void,
+  pronunciationVariant: 'US' | 'UK',
+): ReactNode {
+  if (definitionStatus === 'loading') {
+    return <p className="shrink-0 text-muted-foreground leading-relaxed">Loading definition…</p>;
+  }
+  if (definitionStatus === 'error') {
+    return <p className="shrink-0 text-destructive leading-relaxed">Definition could not be loaded.</p>;
+  }
+  if (definition.senses.length === 0) {
+    return <p className="shrink-0 text-foreground/90 leading-relaxed">Definition unavailable in this build.</p>;
+  }
+  return (
+    <div className="space-y-3">
+      {definition.senses.map((sense) => {
+        const ipaText = resolveLexiconPronunciations(sense, pronunciationVariant).preferred;
+        return (
+          <section key={sense.partOfSpeech}>
+            <div className="flex items-baseline gap-2 mb-1">
+              <span className="text-[0.75em] font-medium uppercase tracking-wide text-primary">
+                {formatPartOfSpeech(sense.partOfSpeech)}
+              </span>
+              {ipaText.length > 0 && (
+                <span className="text-[0.875em] text-muted-foreground italic">{ipaText}</span>
+              )}
+            </div>
+            {renderExpandedDefinitions(sense.definitions, activeDefinitionSelection, onDefinitionWordClick)}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function scrollableDefinitionContent(content: ReactNode): ReactNode {
+  return (
+    <ScrollArea
+      type="auto"
+      className="min-h-0 min-w-0 flex-1 [&_[data-orientation=vertical]>div]:bg-foreground/70"
+      viewportClassName="h-full min-h-0 pr-3"
+    >
+      {content}
+    </ScrollArea>
+  );
+}
+
 export function WordDefinitionCard({
   definition,
   cardRef,
@@ -357,15 +446,34 @@ export function WordDefinitionCard({
   definitionStatus = 'ready',
 }: WordDefinitionCardProps) {
   const cardFontSize = resolveDefinitionCardFontSize(fontSize);
+  const definitionCount = definitionStatus === 'ready'
+    ? definition.senses.reduce((count, sense) => count + sense.definitions.length, 0)
+    : 0;
+  const heightLimited = definitionCount > 1;
+  const cardMetadata = {
+    'data-definition-card': 'true',
+    'data-definition-count': definitionCount,
+    'data-definition-height-limited': heightLimited ? 'true' : undefined,
+  } as const;
   if (compact) {
+    const content = compactCardDefinitionContent(
+      definition,
+      definitionStatus,
+      activeDefinitionSelection,
+      onDefinitionWordClick,
+      pronunciationVariant,
+    );
     return (
       <div
         ref={cardRef}
-        data-definition-card="true"
-        className="inline-flex flex-col bg-popover border border-vocabulary-card-border rounded-md shadow-sm dark:shadow-md px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] max-h-[70vh] overflow-y-auto align-middle"
+        {...cardMetadata}
+        className={cn(
+          'inline-flex flex-col bg-popover border border-vocabulary-card-border rounded-md shadow-sm dark:shadow-md px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] align-middle',
+          heightLimited && 'min-h-0 max-h-[70vh]',
+        )}
         style={{ fontSize: `${cardFontSize}px` }}
       >
-        <div className="flex items-center justify-between gap-3 mb-1.5">
+        <div className="flex shrink-0 items-center justify-between gap-3 mb-1.5">
           <span className="font-serif font-medium text-[1.1em]">{definition.word}</span>
           <VocabularyStatusControl
             isMarkedKnown={isMarkedKnown}
@@ -375,45 +483,30 @@ export function WordDefinitionCard({
             tooltipSideOffset={10}
           />
         </div>
-        {definitionStatus === 'loading' ? (
-          <p className="text-muted-foreground leading-snug">Loading definition…</p>
-        ) : definitionStatus === 'error' ? (
-          <p className="text-destructive leading-snug">Definition could not be loaded.</p>
-        ) : definition.senses.length === 0 ? (
-          <p className="text-foreground/80 leading-snug">Definition unavailable in this build.</p>
-        ) : (
-          <div className="space-y-2.5">
-            {definition.senses.map((sense) => {
-              const ipaText = resolveLexiconPronunciations(sense, pronunciationVariant).preferred;
-              return (
-                <section key={sense.partOfSpeech}>
-                  <div className="flex items-baseline gap-2 mb-0.5">
-                    <span className="text-[0.68em] font-medium uppercase tracking-wide text-primary">
-                      {formatPartOfSpeech(sense.partOfSpeech)}
-                    </span>
-                    {ipaText.length > 0 && (
-                      <span className="text-[0.75em] text-muted-foreground italic">{ipaText}</span>
-                    )}
-                  </div>
-                  {renderCompactDefinitions(sense.definitions, activeDefinitionSelection, onDefinitionWordClick)}
-                </section>
-              );
-            })}
-          </div>
-        )}
-        {statusMessage && <p className="mt-2 text-xs text-muted-foreground">{statusMessage}</p>}
+        {heightLimited ? scrollableDefinitionContent(content) : content}
+        {statusMessage && <p className="mt-2 shrink-0 text-xs text-muted-foreground">{statusMessage}</p>}
       </div>
     );
   }
 
+  const content = expandedCardDefinitionContent(
+    definition,
+    definitionStatus,
+    activeDefinitionSelection,
+    onDefinitionWordClick,
+    pronunciationVariant,
+  );
   return (
     <div
       ref={cardRef}
-      data-definition-card="true"
-      className="bg-popover border border-vocabulary-card-border rounded-lg shadow-sm dark:shadow-md p-5 w-[300px]"
+      {...cardMetadata}
+      className={cn(
+        'bg-popover border border-vocabulary-card-border rounded-lg shadow-sm dark:shadow-md p-5 w-[300px]',
+        heightLimited && 'min-h-0 flex flex-col',
+      )}
       style={{ fontSize: `${cardFontSize}px` }}
     >
-      <div className="flex justify-between items-start mb-3">
+      <div className="flex shrink-0 justify-between items-start mb-3">
         <h3 className="font-serif text-[1.33em] font-medium text-foreground">{definition.word}</h3>
         <VocabularyStatusControl
           isMarkedKnown={isMarkedKnown}
@@ -423,33 +516,8 @@ export function WordDefinitionCard({
           tooltipSideOffset={20}
         />
       </div>
-      {definitionStatus === 'loading' ? (
-        <p className="text-muted-foreground leading-relaxed">Loading definition…</p>
-      ) : definitionStatus === 'error' ? (
-        <p className="text-destructive leading-relaxed">Definition could not be loaded.</p>
-      ) : definition.senses.length === 0 ? (
-        <p className="text-foreground/90 leading-relaxed">Definition unavailable in this build.</p>
-      ) : (
-        <div className="space-y-3">
-          {definition.senses.map((sense) => {
-            const ipaText = resolveLexiconPronunciations(sense, pronunciationVariant).preferred;
-            return (
-              <section key={sense.partOfSpeech}>
-                <div className="flex items-baseline gap-2 mb-1">
-                  <span className="text-[0.75em] font-medium uppercase tracking-wide text-primary">
-                    {formatPartOfSpeech(sense.partOfSpeech)}
-                  </span>
-                  {ipaText.length > 0 && (
-                    <span className="text-[0.875em] text-muted-foreground italic">{ipaText}</span>
-                  )}
-                </div>
-                {renderExpandedDefinitions(sense.definitions, activeDefinitionSelection, onDefinitionWordClick)}
-              </section>
-            );
-          })}
-        </div>
-      )}
-      {statusMessage && <p className="mt-3 text-xs text-muted-foreground">{statusMessage}</p>}
+      {heightLimited ? scrollableDefinitionContent(content) : content}
+      {statusMessage && <p className="mt-3 shrink-0 text-xs text-muted-foreground">{statusMessage}</p>}
     </div>
   );
 }

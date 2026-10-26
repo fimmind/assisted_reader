@@ -155,7 +155,7 @@ export function ContextualDefinitionCard({
   }, [onReadinessChange, readyToRender]);
 
   if (wsdEnabled && (definitionStatus === 'loading' || waitingForWsd)) {
-    return waitingForWsd ? pendingIndicator ?? null : null;
+    return pendingIndicator ?? null;
   }
   const visibleDefinition = readyScores
     ? filterWordNetEntry(definition, readyScores, wsdMargin)

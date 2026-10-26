@@ -13,6 +13,7 @@ import { useSettings } from '@/hooks/useSettings';
 import { useTheme } from '@/components/ThemeProvider';
 import { ContextualDefinitionCard } from '@/components/ContextualDefinitionCard';
 import type { ScoredDefinition } from '@/components/ContextualDefinitionCard';
+import { WordDefinitionCard } from '@/components/WordDefinitionCard';
 import { StudyFlow } from '@/components/StudyFlow';
 import { ReaderVocabularyTestOnboarding } from '@/components/ReaderVocabularyTestOnboarding';
 import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
@@ -582,6 +583,7 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
         <span
           key={`${analyzedToken.lemma}-${analyzedToken.start}-${contentIndex}`}
           data-word-popup-trigger="true"
+          data-reader-selected-target={readerTargetDomKey(target, sourceParagraphIndex)}
           className={cn(
             'cursor-pointer rounded-sm px-0.5 -mx-0.5',
             isPriority ? 'unknown-word priority' : 'unknown-word',
@@ -871,6 +873,10 @@ function deduplicateParagraphCardTargets(
     resolveKnowledgeThreshold(settings.knowledgeThreshold),
     suppressedTargetKeys,
   );
+}
+
+function readerTargetDomKey(target: DefinitionTarget, sourceParagraphIndex: number): string {
+  return `${sourceParagraphIndex}:${encodeURIComponent(definitionTargetKey(target))}`;
 }
 
 export default function ReaderPage() {
@@ -2836,10 +2842,11 @@ export default function ReaderPage() {
     const viewport = pageViewportRef.current;
     if (!viewport) return;
     const outerRect = viewport.getBoundingClientRect();
-    const clipRect = root.parentElement?.getBoundingClientRect() ?? outerRect;
+    const readingRow = root.closest<HTMLElement>('[data-testid="reading-row"]');
+    const rowRect = readingRow?.getBoundingClientRect() ?? outerRect;
     const viewportRect = {
-      top: Math.max(outerRect.top, clipRect.top),
-      bottom: Math.min(outerRect.bottom, clipRect.bottom),
+      top: Math.max(outerRect.top, rowRect.top),
+      bottom: Math.min(outerRect.bottom, rowRect.bottom),
     };
     const isOutsidePage = (element: HTMLElement): boolean => {
       const rect = element.getBoundingClientRect();
@@ -2847,10 +2854,21 @@ export default function ReaderPage() {
     };
     const focusableSelector = 'a, button, input, select, textarea, [tabindex], [contenteditable="true"], [data-definition-card="true"]';
     rows.forEach((row) => {
-      const rowOutsidePage = isOutsidePage(row);
+      const fragmentTop = Number(row.dataset.readerPageFragmentTop);
+      const fragmentBottom = Number(row.dataset.readerPageFragmentBottom);
+      const hasVisibleFragment = Number.isFinite(fragmentTop)
+        && Number.isFinite(fragmentBottom)
+        && fragmentBottom > fragmentTop;
+      const visibleFragmentTop = hasVisibleFragment ? rowRect.top + fragmentTop : 0;
+      const visibleFragmentBottom = hasVisibleFragment ? rowRect.top + fragmentBottom : 0;
+      const rowOutsidePage = !hasVisibleFragment
+        || visibleFragmentBottom <= viewportRect.top
+        || visibleFragmentTop >= viewportRect.bottom;
       setInert(row, rowOutsidePage);
       row.querySelectorAll<HTMLElement>(focusableSelector).forEach((element) => {
-        setInert(element, rowOutsidePage || isOutsidePage(element));
+        const rect = element.getBoundingClientRect();
+        const outsideFragment = rect.bottom <= visibleFragmentTop || rect.top >= visibleFragmentBottom;
+        setInert(element, rowOutsidePage || outsideFragment || isOutsidePage(element));
       });
     });
   }, [chapterAnalysis, currentPageIndex, definitionsByLemma, failedDefinitionLemmas, loadingDefinitionLemmas, pageModeReady, pagination.layout, settings.readingMode]);
@@ -3099,6 +3117,10 @@ export default function ReaderPage() {
     : null;
   const activePage = pageLayout?.pages[currentPageIndex];
   const pageHasOversizedSegment = activePage?.issues.length ? activePage.issues.length > 0 : false;
+  const activePageTextHeight = activePage ? activePage.textClipHeight : 0;
+  const activePagePresentationHeight = activePage && pageHasOversizedSegment
+    ? Math.max(paginationPageHeight, activePage.presentationHeight)
+    : paginationPageHeight;
   const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
   const currentChapter = book.chapters[currentChapterNumber - 1];
   const chapterParagraphs = currentChapter?.paragraphs ?? [];
@@ -3107,6 +3129,92 @@ export default function ReaderPage() {
   const activeProfileForRender = getActiveProfile(profileStateForRender);
   const observationLabels = activeProfileForRender.observations;
   const chapterReaderBlocks = readerBlocksForChapter(chapterParagraphs, currentChapter?.readerBlocks);
+  const activePageCardGroups = new Map(pageModeReady
+    ? activePage?.cardGroups.map((group) => [group.blockIndex, group]) ?? []
+    : []);
+  const activePageBlockOffsets = new Map(activePage?.blockDisplayOffsets.map((entry) => [entry.blockIndex, entry.offset]) ?? []);
+  const activePageBlockFragments = new Map(activePage?.blockFragments.map((fragment) => [fragment.blockIndex, fragment]) ?? []);
+  const readerBlockPresentation = (blockIndex: number): {
+    offset: number;
+    fragmentTop: number | undefined;
+    fragmentBottom: number | undefined;
+    clipPath: string | undefined;
+    visibility: CSSProperties['visibility'];
+  } => {
+    const fragment = activePageBlockFragments.get(blockIndex);
+    const offset = activePageBlockOffsets.get(blockIndex) ?? 0;
+    if (settings.readingMode !== 'page') {
+      return { offset: 0, fragmentTop: undefined, fragmentBottom: undefined, clipPath: undefined, visibility: undefined };
+    }
+    if (!activePage || !fragment) {
+      return { offset, fragmentTop: undefined, fragmentBottom: undefined, clipPath: undefined, visibility: activePage ? 'hidden' : undefined };
+    }
+    const topInset = Math.max(0, fragment.startY - fragment.blockTopY);
+    const bottomInset = Math.max(0, fragment.blockBottomY - fragment.endY);
+    return {
+      offset,
+      fragmentTop: fragment.startY - activePage.startY + offset,
+      fragmentBottom: fragment.endY - activePage.startY + offset,
+      clipPath: `inset(${topInset}px 0 ${bottomInset}px 0)`,
+      visibility: 'visible',
+    };
+  };
+  const renderDefinitionCard = (
+    sourceIndex: number,
+    analysis: ParagraphAnalysis,
+    target: DefinitionTarget,
+    active: boolean,
+  ): ReactNode => {
+    const rawDefinition = definitionsByLemma.get(target.lemma) ?? createFallbackLexiconEntry(target.lemma);
+    const definition = resolveLexiconEntry(rawDefinition, target);
+    const definitionStatus: DefinitionLoadStatus = loadingDefinitionLemmas.has(target.lemma)
+      ? 'loading'
+      : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
+    const observation = observationLabels[target.lemma];
+    const sharedCardProps = {
+      activeDefinitionSelection: wordPopups[0]?.triggerSelection ?? undefined,
+      fontSize: settings.fontSize,
+      onDefinitionWordClick: (click: DefinitionWordClick): void =>
+        openDefinitionWordPopup(null, click, sourceIndex, contextForCard(analysis, target)),
+      onMarkKnown: (): void => markLemma(target.lemma, true, sourceIndex),
+      onMarkUnknown: (): void => markLemma(target.lemma, false, sourceIndex),
+      isMarkedKnown: observation === 1,
+      isMarkedUnknown: observation === 0,
+      pronunciationVariant: settings.englishVariant,
+      compact: true,
+    };
+    return (
+      <div
+        key={readerTargetDomKey(target, sourceIndex)}
+        className="w-[266px] shrink-0 [&>[data-definition-card]]:w-[250px]"
+        data-reader-card-target={readerTargetDomKey(target, sourceIndex)}
+        aria-hidden={!active}
+        inert={!active}
+        style={active ? undefined : { position: 'absolute', left: '-10000px', visibility: 'hidden' }}
+      >
+        <ContextualDefinitionCard
+          preparedScores={activePreparedOpeningRef.current?.chapter === currentChapter
+            ? activePreparedOpeningRef.current.scores.get(`${sourceIndex}:${definitionTargetKey(target)}`)
+            : undefined}
+          onReadinessChange={(ready) => recordInitialCardReadiness(sourceIndex, definitionTargetKey(target), ready)}
+          definition={definition}
+          context={contextForCard(analysis, target)}
+          contextParagraphs={chapterParagraphs}
+          contextParagraphIndex={sourceIndex}
+          wsdMode={settings.wsdMode}
+          wsdPriority="card"
+          getPriorityTarget={getParagraphElement}
+          priorityTargetIndex={sourceIndex}
+          wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
+          wsdContextUnit={settings.wsdContextUnit}
+          wsdContextSize={settings.wsdContextSize}
+          definitionStatus={definitionStatus}
+          pendingIndicator={<WordDefinitionCard definition={definition} definitionStatus="loading" {...sharedCardProps} />}
+          {...sharedCardProps}
+        />
+      </div>
+    );
+  };
   const canGoToPreviousChapter = adjacentReadingChapter(book.chapters, currentChapterNumber, -1) !== currentChapterNumber;
   const canGoToNextChapter = adjacentReadingChapter(book.chapters, currentChapterNumber, 1) !== currentChapterNumber;
   const openChapterStudy = (): void => {
@@ -3380,19 +3488,28 @@ export default function ReaderPage() {
       >
         <div
           className={cn(settings.readingMode === 'page' ? 'py-0' : 'py-12 md:py-20')}
-          style={settings.readingMode === 'page' && activePage ? {
-            height: `${Math.max(1, activePage.endY - activePage.startY)}px`,
+          style={settings.readingMode === 'page' ? {
+            height: `${activePagePresentationHeight}px`,
             overflow: 'clip',
-          } : undefined}
+            position: 'relative',
+            '--reader-page-height': `${paginationPageHeight}px`,
+            '--reader-page-card-height': `${Math.min(240, paginationPageHeight * 0.35)}px`,
+          } as CSSProperties : undefined}
           data-testid="reading-row"
         >
           <div
+            className={settings.readingMode === 'page' ? 'reader-page-text-clip' : 'contents'}
+            style={settings.readingMode === 'page' ? {
+              height: `${Math.max(1, activePage ? activePageTextHeight : paginationPageHeight)}px`,
+              overflow: 'clip',
+            } : undefined}
+          >
+          <div
             ref={readerRootRef}
-            className={cn('flex-1 min-w-0 flex flex-col', settings.readingMode === 'page' && 'reader-page-content')}
+            className={cn('relative flex-1 min-w-0 flex flex-col', settings.readingMode === 'page' && 'reader-page-content')}
             style={settings.readingMode === 'page' ? {
               transform: `translateY(${-(activePage?.startY ?? 0)}px)`,
               visibility: pageModeReady ? 'visible' : 'hidden',
-              '--reader-page-height': `${paginationPageHeight}px`,
             } as CSSProperties : undefined}
             data-testid="left-column"
           >
@@ -3439,9 +3556,20 @@ export default function ReaderPage() {
               }}
             >
               {chapterReaderBlocks.map((block, blockIndex) => {
+                const presentation = readerBlockPresentation(blockIndex);
+                const blockPresentationProps = {
+                  'data-reader-pagination-offset': presentation.offset,
+                  'data-reader-page-fragment-top': presentation.fragmentTop,
+                  'data-reader-page-fragment-bottom': presentation.fragmentBottom,
+                  style: settings.readingMode === 'page' ? {
+                    translate: `0 ${presentation.offset}px`,
+                    clipPath: presentation.clipPath,
+                    visibility: presentation.visibility,
+                  } as CSSProperties : undefined,
+                };
                 if (block.type === 'image') {
                   return (
-                    <figure key={`reader-image-${blockIndex}`} data-reader-block-index={blockIndex} className="my-6 w-full">
+                    <figure key={`reader-image-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex} className="my-6 w-full">
                       {block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}
                       <img
                         src={block.src}
@@ -3457,17 +3585,17 @@ export default function ReaderPage() {
                   );
                 }
                 if (block.type === 'spacer') {
-                  return <div key={`reader-spacer-${blockIndex}`} data-reader-block-index={blockIndex} aria-hidden="true" style={{ height: '1em', ...block.style } as CSSProperties}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}</div>;
+                  return <div key={`reader-spacer-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex} aria-hidden="true" style={{ height: '1em', ...block.style, ...(blockPresentationProps.style ?? {}) } as CSSProperties}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}</div>;
                 }
                 if (block.type === 'rule') {
-                  return <div key={`reader-rule-${blockIndex}`} data-reader-block-index={blockIndex}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}<hr className="my-8 border-border" style={block.style as CSSProperties | undefined} /></div>;
+                  return <div key={`reader-rule-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}<hr className="my-8 border-border" style={block.style as CSSProperties | undefined} /></div>;
                 }
                 const sourceIndex = block.paragraphIndex;
                 const visibleIndex = sourceIndex;
                 const paragraphText = chapterParagraphs[sourceIndex] ?? '';
                 const analysis = chapterAnalysis[sourceIndex] ?? { paragraphText, tokens: [], cardTargets: [] };
                 return (
-                <div key={`paragraph-${sourceIndex}`} className="mb-2" data-reader-block-index={blockIndex} data-testid={`paragraph-block-${visibleIndex}`}>
+                <div key={`paragraph-${sourceIndex}`} {...blockPresentationProps} className="mb-2" data-reader-block-index={blockIndex} data-testid={`paragraph-block-${visibleIndex}`}>
                   <ReaderParagraphText
                     analysis={analysis}
                     block={block}
@@ -3477,49 +3605,9 @@ export default function ReaderPage() {
                     onElementChange={setParagraphElement}
                     onOpenWordPopup={openRootWordPopup}
                   />
-                  {assistanceEnabled && analysis.cardTargets.length > 0 && (
-                    <div className="mt-3 flex flex-wrap items-start gap-3 [&>[data-definition-card]]:w-[250px]" data-testid={`mobile-card-group-${visibleIndex}`}>
-                      {analysis.cardTargets.map((target) => {
-                        const rawDefinition = definitionsByLemma.get(target.lemma)
-                          ?? createFallbackLexiconEntry(target.lemma);
-                        const definition = resolveLexiconEntry(rawDefinition, target);
-                        const definitionStatus: DefinitionLoadStatus = loadingDefinitionLemmas.has(target.lemma)
-                          ? 'loading'
-                          : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
-                        const observation = observationLabels[target.lemma];
-                        return (
-                          <ContextualDefinitionCard
-                            key={definitionTargetKey(target)}
-                            preparedScores={activePreparedOpeningRef.current?.chapter === currentChapter
-                              ? activePreparedOpeningRef.current.scores.get(`${sourceIndex}:${definitionTargetKey(target)}`)
-                              : undefined}
-                            onReadinessChange={(ready) => recordInitialCardReadiness(sourceIndex, definitionTargetKey(target), ready)}
-                            definition={definition}
-                            context={contextForCard(analysis, target)}
-                            contextParagraphs={chapterParagraphs}
-                            contextParagraphIndex={sourceIndex}
-                            wsdMode={settings.wsdMode}
-                            wsdPriority="card"
-                            getPriorityTarget={getParagraphElement}
-                            priorityTargetIndex={visibleIndex}
-                            wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
-                            wsdContextUnit={settings.wsdContextUnit}
-                            wsdContextSize={settings.wsdContextSize}
-                            activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
-                            fontSize={settings.fontSize}
-                            definitionStatus={definitionStatus}
-                            onDefinitionWordClick={(click) => {
-                              openDefinitionWordPopup(null, click, sourceIndex, contextForCard(analysis, target));
-                            }}
-                            onMarkKnown={() => markLemma(target.lemma, true, sourceIndex)}
-                            onMarkUnknown={() => markLemma(target.lemma, false, sourceIndex)}
-                            isMarkedKnown={observation === 1}
-                            isMarkedUnknown={observation === 0}
-                            pronunciationVariant={settings.englishVariant}
-                            compact
-                          />
-                        );
-                      })}
+                  {settings.readingMode === 'scroll' && assistanceEnabled && analysis.cardTargets.length > 0 && (
+                    <div className="mt-3 flex flex-wrap items-start gap-3" data-testid={`mobile-card-group-${visibleIndex}`}>
+                      {analysis.cardTargets.map((target) => renderDefinitionCard(sourceIndex, analysis, target, true))}
                     </div>
                   )}
                 </div>
@@ -3557,6 +3645,43 @@ export default function ReaderPage() {
               </div>
             )}
           </div>
+          </div>
+
+          {settings.readingMode === 'page' && assistanceEnabled && chapterReaderBlocks.map((block, blockIndex) => {
+            if (block.type !== 'paragraph') return null;
+            const sourceIndex = block.paragraphIndex;
+            const analysis = chapterAnalysis[sourceIndex];
+            if (!analysis || analysis.cardTargets.length === 0) return null;
+            const group = activePageCardGroups.get(blockIndex);
+            const groupIsActive = pageModeReady && group !== undefined;
+            const activeKeys = new Set(group?.targetKeys ?? []);
+            return (
+              <div
+                key={`page-card-group-${blockIndex}`}
+                className={cn(
+                  'absolute inset-x-0 flex flex-wrap items-start gap-3 px-1',
+                  groupIsActive
+                    ? 'reader-page-card-group z-10 bg-background/95'
+                    : 'reader-page-card-measurements',
+                )}
+                style={{
+                  top: `${group?.topOffset ?? 0}px`,
+                  visibility: groupIsActive ? 'visible' : 'hidden',
+                  pointerEvents: groupIsActive ? 'auto' : 'none',
+                } as CSSProperties}
+                aria-hidden={!groupIsActive}
+                inert={!groupIsActive}
+                data-testid={`reader-page-card-group-${blockIndex}`}
+              >
+                {analysis.cardTargets.map((target) => renderDefinitionCard(
+                  sourceIndex,
+                  analysis,
+                  target,
+                  groupIsActive && activeKeys.has(readerTargetDomKey(target, sourceIndex)),
+                ))}
+              </div>
+            );
+          })}
 
         </div>
         {settings.readingMode === 'page' && !pageModeReady && (
