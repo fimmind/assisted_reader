@@ -1,5 +1,5 @@
 import {
-  createElement, memo, useState, useEffect, useRef, useLayoutEffect, useCallback,
+  createElement, memo, useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo,
 } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
@@ -978,6 +978,9 @@ export default function ReaderPage() {
     ? 1.375
     : settings.lineSpacing === 'Relaxed' ? 2 : 1.625));
   const paginationPageHeight = Math.max(1, viewportSize.height - (fullscreenPageMode ? fullscreenTopSpacing + 36 : 136));
+  const paginationAnchor = useMemo(() => book
+    ? book.location ?? readerLocationFromLegacyProgress(book, book.currentChapter, book.currentChapterProgress)
+    : null, [book]);
   const pageCardsSettled = !assistanceEnabled || chapterAnalysis.every((analysis, paragraphIndex) =>
     analysis.cardTargets.every((target) => {
       const key = `${paragraphIndex}:${definitionTargetKey(target)}`;
@@ -1017,6 +1020,7 @@ export default function ReaderPage() {
     layoutKey: paginationLayoutKey,
     chapterIndex: paginationChapterIndex,
     pageHeight: paginationPageHeight,
+    anchor: paginationAnchor,
   });
   const paginationErrorMessage = pageAnalysisError ?? pagination.error?.message ?? null;
   const pageModeReady = settings.readingMode === 'page'

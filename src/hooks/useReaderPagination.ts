@@ -6,6 +6,7 @@ import {
   type ReaderPaginationPage,
   type ReaderPaginationSegment,
 } from '@/core/reader-pagination';
+import type { ReaderLocation } from '@/core/types';
 
 interface UseReaderPaginationOptions {
   rootRef: RefObject<HTMLElement | null>;
@@ -14,6 +15,7 @@ interface UseReaderPaginationOptions {
   layoutKey: string;
   chapterIndex: number;
   pageHeight: number;
+  anchor: ReaderLocation | null;
 }
 
 interface ReaderPaginationErrorState {
@@ -26,6 +28,52 @@ export interface UseReaderPaginationResult {
   isReady: boolean;
   error: Error | null;
   settledMeasurementRevision: number;
+}
+
+function readAnchorPage(
+  root: HTMLElement,
+  pageHeight: number,
+  chapterIndex: number,
+  anchor: ReaderLocation | null,
+): ReaderPaginationPage | null {
+  const markedBlocks = Array.from(root.querySelectorAll<HTMLElement>('[data-reader-block-index]'));
+  const targetBlock = anchor
+    ? markedBlocks.find((element) => Number(element.dataset.readerBlockIndex) === anchor.blockIndex)
+    : markedBlocks[0];
+  if (!targetBlock) return null;
+
+  const blockIndex = Number(targetBlock.dataset.readerBlockIndex);
+  const rootTop = root.getBoundingClientRect().top;
+  const targetBlockIndex = markedBlocks.indexOf(targetBlock);
+  const segments: ReaderPaginationSegment[] = [];
+  let firstSegmentIndex = 0;
+  let pageStartY: number | null = null;
+  let pageEndY: number | null = null;
+  for (const [elementIndex, element] of markedBlocks.entries()) {
+    if (elementIndex < targetBlockIndex) continue;
+    const currentBlockIndex = Number(element.dataset.readerBlockIndex);
+    const blockSegments = measuredBlockSegments(element, rootTop, currentBlockIndex);
+    if (elementIndex === targetBlockIndex) {
+      const targetSegmentIndex = anchor && anchor.chapterIndex === chapterIndex && anchor.blockIndex === blockIndex
+        ? blockSegments.findIndex((segment) => segment.endOffset > anchor.textOffset
+          || (segment.kind === 'atomic' && segment.startOffset >= anchor.textOffset))
+        : 0;
+      firstSegmentIndex = targetSegmentIndex >= 0
+        ? targetSegmentIndex
+        : Math.max(0, blockSegments.length - 1);
+    }
+    const remainingSegments = elementIndex === targetBlockIndex
+      ? blockSegments.slice(firstSegmentIndex)
+      : blockSegments;
+    segments.push(...remainingSegments);
+    remainingSegments.forEach((segment) => {
+      pageStartY = pageStartY === null ? segment.startY : Math.min(pageStartY, segment.startY);
+      pageEndY = pageEndY === null ? segment.endY : Math.max(pageEndY, segment.endY);
+    });
+    if (pageStartY !== null && pageEndY !== null && pageEndY - pageStartY >= pageHeight) break;
+  }
+  const page = buildReaderPages(segments, pageHeight, chapterIndex)[0];
+  return page ?? null;
 }
 
 interface TextLineFragment {
@@ -319,24 +367,6 @@ function segmentsSignature(segments: readonly ReaderPaginationSegment[]): string
   ].join(':')).join('|');
 }
 
-async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
-  return new Promise<T | undefined>((resolve, reject) => {
-    if (signal.aborted) {
-      resolve(undefined);
-      return;
-    }
-    const onAbort = (): void => resolve(undefined);
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then((value) => {
-      signal.removeEventListener('abort', onAbort);
-      resolve(value);
-    }, (failure: unknown) => {
-      signal.removeEventListener('abort', onAbort);
-      reject(failure);
-    });
-  });
-}
-
 function waitForNextFrame(signal: AbortSignal): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     if (signal.aborted) {
@@ -355,35 +385,12 @@ function waitForNextFrame(signal: AbortSignal): Promise<boolean> {
   });
 }
 
-async function waitForRenderedResources(root: HTMLElement, signal: AbortSignal): Promise<boolean> {
-  const imagePromises = Array.from(root.querySelectorAll<HTMLImageElement>('img')).map(async (image) => {
-    try {
-      await image.decode();
-    } catch (failure) {
-      if (!image.complete) {
-        throw readerPaginationMeasurementError(
-          `Reader image did not settle before pagination measurement: src=${image.currentSrc || image.src}, error=${String(failure)}`,
-        );
-      }
-      console.warn('reader-pagination-image-decode-failed', {
-        src: image.currentSrc || image.src,
-        error: failure,
-      });
-    }
-  });
-  const resourcesPromise = Promise.all([document.fonts.ready, ...imagePromises]).then(() => true);
-  return (await raceWithAbort(resourcesPromise, signal)) === true;
-}
-
 async function measureStablePages(
   root: HTMLElement,
   pageHeight: number,
   chapterIndex: number,
   signal: AbortSignal,
 ): Promise<ReaderPaginationPage[] | null> {
-  const resourcesSettled = await waitForRenderedResources(root, signal);
-  if (!resourcesSettled) return null;
-
   let previousSignature: string | null = null;
   for (let measurementIndex = 0; measurementIndex < MAX_STABILITY_MEASUREMENTS; measurementIndex += 1) {
     if (signal.aborted) return null;
@@ -447,6 +454,7 @@ export function useReaderPagination({
   layoutKey,
   chapterIndex,
   pageHeight,
+  anchor,
 }: UseReaderPaginationOptions): UseReaderPaginationResult {
   const [layout, setLayout] = useState<ReaderPaginationLayout | null>(null);
   const [measurementError, setMeasurementError] = useState<ReaderPaginationErrorState | null>(null);
@@ -484,16 +492,8 @@ export function useReaderPagination({
     let measurementFailed = false;
     let scheduledFrame = 0;
 
-    const hasCompatibleLayout = (): boolean => {
-      const currentLayout = layoutRef.current;
-      return currentLayout?.layoutKey === layoutKey
-        && currentLayout.chapterIndex === chapterIndex
-        && currentLayout.pageHeight === pageHeight;
-    };
-
     const scheduleMeasurement = (): void => {
       if (!active || controller.signal.aborted) return;
-      if (!settledRef.current && !hasCompatibleLayout()) return;
       if (running) {
         runPending = true;
         return;
@@ -512,6 +512,31 @@ export function useReaderPagination({
       runPending = false;
       const measurementStartedSettled = settledRef.current;
       try {
+        const currentLayout = layoutRef.current;
+        const needsInitialLayout = currentLayout?.layoutKey !== layoutKey
+          || currentLayout.chapterIndex !== chapterIndex
+          || currentLayout.pageHeight !== pageHeight;
+        const anchorPage = needsInitialLayout
+          ? readAnchorPage(root, pageHeight, chapterIndex, anchor)
+          : null;
+        if (active && anchorPage) {
+          const anchorPages = [anchorPage];
+          const anchorLayout: ReaderPaginationLayout = {
+            chapterIndex,
+            layoutKey,
+            signature: layoutSignature(layoutKey, chapterIndex, pageHeight, anchorPages),
+            pageHeight,
+            pages: anchorPages,
+          };
+          if (layoutRef.current?.layoutKey !== layoutKey
+            || layoutRef.current.signature !== anchorLayout.signature) {
+            layoutRef.current = anchorLayout;
+            setLayout(anchorLayout);
+          }
+          if (!await waitForNextFrame(controller.signal)
+            || !await waitForNextFrame(controller.signal)) return;
+        }
+
         const pages = await measureStablePages(root, pageHeight, chapterIndex, controller.signal);
         if (active && pages) {
           const nextLayout: ReaderPaginationLayout = {
@@ -598,7 +623,7 @@ export function useReaderPagination({
       window.removeEventListener('resize', scheduleMeasurement);
       if (scheduledFrame !== 0) window.cancelAnimationFrame(scheduledFrame);
     };
-  }, [rootRef, enabled, layoutKey, chapterIndex, pageHeight]);
+  }, [rootRef, enabled, layoutKey, chapterIndex, pageHeight, anchor]);
 
   const error = measurementError?.layoutKey === layoutKey ? measurementError.error : null;
   const isReady = enabled && error === null
