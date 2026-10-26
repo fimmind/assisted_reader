@@ -1,7 +1,7 @@
 import {
   createElement, memo, useState, useEffect, useRef, useLayoutEffect, useCallback,
 } from 'react';
-import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
 import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2, List, BookmarkPlus, CornerUpLeft } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -218,6 +218,12 @@ interface PopupAnchorRect {
   right: number;
   bottom: number;
   left: number;
+}
+
+interface PageSwipeStart {
+  pointerId: number;
+  x: number;
+  y: number;
 }
 
 interface ReaderActivityIndicatorProps {
@@ -923,6 +929,8 @@ export default function ReaderPage() {
   const isRestoringProgressRef = useRef(false);
   const readerRootRef = useRef<HTMLDivElement | null>(null);
   const pageViewportRef = useRef<HTMLElement | null>(null);
+  const pageSwipeStartRef = useRef<PageSwipeStart | null>(null);
+  const suppressPageSwipeClickUntilRef = useRef(0);
   const currentPageIndexRef = useRef(0);
   const pageAnchorLocationRef = useRef<ReaderLocation | null>(null);
   const pendingPageAnchorRef = useRef<ReaderLocation | null>(null);
@@ -2092,6 +2100,35 @@ export default function ReaderPage() {
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, [commitReaderPage, openReaderChapter, pagination.isReady, pagination.layout, persistCurrentChapterProgress, saveReaderBookProgress]);
 
+  const handlePagePointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
+    if (settings.readingMode !== 'page' || event.pointerType !== 'touch' || !event.isPrimary) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('button, a, input, textarea, select, [role="dialog"], [data-definition-card="true"]')) return;
+    pageSwipeStartRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+  };
+
+  const handlePagePointerUp = (event: ReactPointerEvent<HTMLElement>): void => {
+    const start = pageSwipeStartRef.current;
+    pageSwipeStartRef.current = null;
+    if (!start || start.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - start.x;
+    const deltaY = event.clientY - start.y;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) return;
+    suppressPageSwipeClickUntilRef.current = performance.now() + 500;
+    navigatePage(deltaX < 0 ? 1 : -1);
+  };
+
+  const handlePagePointerCancel = (event: ReactPointerEvent<HTMLElement>): void => {
+    if (pageSwipeStartRef.current?.pointerId === event.pointerId) pageSwipeStartRef.current = null;
+  };
+
+  const suppressClickAfterPageSwipe = (event: ReactMouseEvent<HTMLElement>): void => {
+    if (performance.now() > suppressPageSwipeClickUntilRef.current) return;
+    suppressPageSwipeClickUntilRef.current = 0;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   useEffect(() => {
     if (!book || isLoading) {
       return;
@@ -3018,7 +3055,17 @@ export default function ReaderPage() {
 
   return (
     <>
-    <div className="min-h-screen bg-background text-foreground" style={!initialViewportReady && settings.readingMode === 'scroll' ? { visibility: 'hidden' } : undefined}>
+    <div
+      className="min-h-screen bg-background text-foreground"
+      style={{
+        ...(settings.readingMode === 'page' ? { touchAction: 'pan-y' } : {}),
+        ...(!initialViewportReady && settings.readingMode === 'scroll' ? { visibility: 'hidden' as const } : {}),
+      }}
+      onPointerDown={handlePagePointerDown}
+      onPointerUp={handlePagePointerUp}
+      onPointerCancel={handlePagePointerCancel}
+      onClickCapture={suppressClickAfterPageSwipe}
+    >
       {readerSettingsOpen && (
         <div
           className="fixed inset-0 z-10 bg-black/20"
@@ -3212,6 +3259,7 @@ export default function ReaderPage() {
         style={settings.readingMode === 'page' ? {
           overflowX: 'clip',
           overflowY: pageHasOversizedSegment ? 'auto' : 'clip',
+          touchAction: 'pan-y',
         } : undefined}
         data-testid={settings.readingMode === 'page' ? 'reader-page-viewport' : undefined}
         data-page-index={pageModeReady ? currentPageIndex : undefined}
