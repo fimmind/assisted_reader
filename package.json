@@ -11,7 +11,7 @@
     "ensure:lexicon": "node scripts/ensure-lexicon-generated.mjs",
     "ensure:wsd": "python3 wsd/scripts/ensure_wsd_web.py",
     "check:wsd": "node scripts/check-wsd-assets.mjs",
-    "predev": "pnpm run ensure:lexicon && pnpm run verify:wordnet && pnpm run check:wsd && pnpm run sync:data",
+    "predev": "pnpm run ensure:lexicon && pnpm run verify:wordnet && pnpm run ensure:wsd && pnpm run check:wsd && pnpm run sync:data",
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
     "prebuild": "pnpm run ensure:lexicon && pnpm run verify:wordnet && pnpm run ensure:wsd && pnpm run sync:data",
     "build": "pnpm run typecheck && vite build --config vite.config.ts",

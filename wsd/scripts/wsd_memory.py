@@ -51,7 +51,11 @@ def available_memory() -> int:
 
 
 def generation_budget() -> MemoryBudget:
-    if not Path("/sys/fs/cgroup/cgroup.controllers").is_file() or shutil.which("systemd-run") is None:
+    try:
+        has_cgroup_v2 = Path("/sys/fs/cgroup/cgroup.controllers").is_file()
+    except OSError:
+        has_cgroup_v2 = False
+    if not has_cgroup_v2 or shutil.which("systemd-run") is None:
         raise MemorySafetyError("WSD generation needs Linux cgroup v2 and systemd-run --user to enforce its RAM limit. Generate on a supported host; unsafe unbounded generation is disabled.")
     requested = os.environ.get("WSD_MAX_MEMORY_MIB", "4096")
     if not requested.isdigit() or int(requested) < 2048:
