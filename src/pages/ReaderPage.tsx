@@ -3,7 +3,7 @@ import {
 } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
-import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2, List, BookmarkPlus, CornerUpLeft } from 'lucide-react';
+import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2, List, BookmarkPlus, CornerUpLeft, Maximize2, Minimize2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Slider } from '@/components/ui/slider';
@@ -883,6 +883,8 @@ export default function ReaderPage() {
   const [assistanceEnabled, setAssistanceEnabled] = useState(true);
   const [headerVisible, setHeaderVisible] = useState(true);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
+  const [fullscreenPageMode, setFullscreenPageMode] = useState(false);
+  const [fullscreenToolbarOpen, setFullscreenToolbarOpen] = useState(false);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [navigationSearchRequested, setNavigationSearchRequested] = useState(false);
   const [bookmarks, setBookmarks] = useState<ReaderBookmark[]>([]);
@@ -972,7 +974,10 @@ export default function ReaderPage() {
   }, []);
 
   const paginationChapterIndex = book ? clampChapterNumber(book, book.currentChapter) - 1 : 0;
-  const paginationPageHeight = Math.max(1, viewportSize.height - 136);
+  const fullscreenTopSpacing = Math.ceil(settings.fontSize * (settings.lineSpacing === 'Compact'
+    ? 1.375
+    : settings.lineSpacing === 'Relaxed' ? 2 : 1.625));
+  const paginationPageHeight = Math.max(1, viewportSize.height - (fullscreenPageMode ? fullscreenTopSpacing + 36 : 136));
   const pageCardsSettled = !assistanceEnabled || chapterAnalysis.every((analysis, paragraphIndex) =>
     analysis.cardTargets.every((target) => {
       const key = `${paragraphIndex}:${definitionTargetKey(target)}`;
@@ -1626,6 +1631,10 @@ export default function ReaderPage() {
       pageAnchorLocationRef.current = capturedLocation ?? currentLocationRef.current;
       setHeaderVisible(true);
     }
+    if (readingMode === 'scroll') {
+      setFullscreenPageMode(false);
+      setFullscreenToolbarOpen(false);
+    }
     updateSetting('readingMode', readingMode);
     if (readingMode === 'scroll' && capturedLocation) {
       window.requestAnimationFrame(() => {
@@ -2055,6 +2064,7 @@ export default function ReaderPage() {
     if (!pagination.isReady || !pagination.layout) return;
     const targetPageIndex = currentPageIndexRef.current + delta;
     if (targetPageIndex >= 0 && targetPageIndex < pagination.layout.pages.length) {
+      setFullscreenToolbarOpen(false);
       const pageRefreshAnchor = pageRefreshAnchorRef.current;
       const targetPage = pagination.layout.pages[targetPageIndex];
       if (pageRefreshAnchor && targetPage) {
@@ -2069,6 +2079,7 @@ export default function ReaderPage() {
     const currentChapterNumber = clampChapterNumber(currentBook, currentBook.currentChapter);
     const nextChapterNumber = adjacentReadingChapter(currentBook.chapters, currentChapterNumber, delta);
     if (nextChapterNumber === currentChapterNumber) return;
+    setFullscreenToolbarOpen(false);
     persistCurrentChapterProgress(true);
     const chapterIndex = nextChapterNumber - 1;
     const location = delta < 0
@@ -2113,9 +2124,27 @@ export default function ReaderPage() {
     if (!start || start.pointerId !== event.pointerId) return;
     const deltaX = event.clientX - start.x;
     const deltaY = event.clientY - start.y;
+    if (fullscreenPageMode && fullscreenToolbarOpen
+      && deltaY < -48 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
+      setFullscreenToolbarOpen(false);
+      suppressPageSwipeClickUntilRef.current = performance.now() + 500;
+      return;
+    }
     if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) return;
     suppressPageSwipeClickUntilRef.current = performance.now() + 500;
     navigatePage(deltaX < 0 ? 1 : -1);
+  };
+
+  const handlePagePointerMove = (event: ReactPointerEvent<HTMLElement>): void => {
+    const start = pageSwipeStartRef.current;
+    if (!start || start.pointerId !== event.pointerId || !fullscreenPageMode || !fullscreenToolbarOpen) return;
+    const deltaX = event.clientX - start.x;
+    const deltaY = event.clientY - start.y;
+    if (deltaY < -48 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
+      pageSwipeStartRef.current = null;
+      setFullscreenToolbarOpen(false);
+      suppressPageSwipeClickUntilRef.current = performance.now() + 500;
+    }
   };
 
   const handlePagePointerCancel = (event: ReactPointerEvent<HTMLElement>): void => {
@@ -2129,8 +2158,28 @@ export default function ReaderPage() {
       event.stopPropagation();
       return;
     }
-    if (settings.readingMode !== 'page' || !pageModeReady) return;
     const target = event.target;
+    const clickedHeader = target instanceof Element && target.closest('header');
+    const clickedReaderText = target instanceof Element
+      && target.closest('[data-reader-text-block], .reader-text, [data-word-popup-trigger="true"]');
+    if (fullscreenPageMode) {
+      if (fullscreenToolbarOpen) {
+        if (clickedHeader) return;
+        setFullscreenToolbarOpen(false);
+        if (clickedReaderText) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.clientY <= fullscreenTopSpacing) {
+        setFullscreenToolbarOpen(true);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (clickedReaderText) return;
+    }
+    if (settings.readingMode !== 'page' || !pageModeReady) return;
     if (target instanceof Element && target.closest('button, a, input, textarea, select, [role="button"], [role="dialog"], [data-definition-card="true"], [data-word-popup-index]')) return;
     const edgeWidth = Math.min(120, Math.max(56, window.innerWidth * 0.14));
     if (event.clientX <= edgeWidth) {
@@ -2145,6 +2194,17 @@ export default function ReaderPage() {
       navigatePage(1);
     }
   };
+
+  useEffect(() => {
+    if (!fullscreenPageMode || !fullscreenToolbarOpen) return;
+    const handleFullscreenEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      setFullscreenToolbarOpen(false);
+      event.preventDefault();
+    };
+    window.addEventListener('keydown', handleFullscreenEscape);
+    return () => window.removeEventListener('keydown', handleFullscreenEscape);
+  }, [fullscreenPageMode, fullscreenToolbarOpen]);
 
   useEffect(() => {
     if (!book || isLoading) {
@@ -3079,6 +3139,7 @@ export default function ReaderPage() {
         ...(!initialViewportReady && settings.readingMode === 'scroll' ? { visibility: 'hidden' as const } : {}),
       }}
       onPointerDown={handlePagePointerDown}
+      onPointerMove={handlePagePointerMove}
       onPointerUp={handlePagePointerUp}
       onPointerCancel={handlePagePointerCancel}
       onClickCapture={handlePageScreenClick}
@@ -3092,9 +3153,14 @@ export default function ReaderPage() {
       )}
       <header className={cn(
         'fixed top-0 inset-x-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border transition-transform duration-300',
-        settings.readingMode === 'page' || headerVisible ? 'translate-y-0' : '-translate-y-full'
+        fullscreenPageMode
+          ? fullscreenToolbarOpen ? 'translate-y-0 z-30 pointer-events-none' : '-translate-y-full pointer-events-none'
+          : settings.readingMode === 'page' || headerVisible ? 'translate-y-0' : '-translate-y-full'
       )}>
-        <div className="container mx-auto px-4 h-14 flex items-center justify-between [&_button]:cursor-pointer [&_a]:cursor-pointer">
+        <div className={cn(
+          'container mx-auto px-4 h-14 flex items-center justify-between [&_button]:cursor-pointer [&_a]:cursor-pointer',
+          fullscreenPageMode && fullscreenToolbarOpen && 'pointer-events-none [&_button]:pointer-events-auto [&_a]:pointer-events-auto',
+        )}>
           <div className="flex items-center gap-0 sm:gap-1">
             <Link href="/">
               <Button
@@ -3113,6 +3179,21 @@ export default function ReaderPage() {
             {book.title} — {chapterDisplayTitle ?? `Chapter ${currentChapterNumber}`} · {Math.round(readingProgressPercent)}%
           </div>
           <div className="flex items-center gap-0 sm:gap-1">
+            {settings.readingMode === 'page' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground"
+                aria-label={fullscreenPageMode ? 'Exit fullscreen reader' : 'Enter fullscreen reader'}
+                data-testid="button-reader-fullscreen"
+                onClick={() => {
+                  setFullscreenPageMode((current) => !current);
+                  setFullscreenToolbarOpen(false);
+                }}
+              >
+                {fullscreenPageMode ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+              </Button>
+            )}
             <Button variant="ghost" size="icon" className="text-muted-foreground" aria-label="Add bookmark at current position"
               onClick={addCurrentBookmark} data-testid="button-add-bookmark">
               <BookmarkPlus size={18} />
@@ -3271,9 +3352,13 @@ export default function ReaderPage() {
         className={cn(
           'mx-auto px-4 sm:px-6',
           getOuterWidthClass(),
-          settings.readingMode === 'page' && 'reader-page-mode fixed left-0 right-0 top-[72px] bottom-16 z-10',
+          settings.readingMode === 'page' && cn(
+            'reader-page-mode fixed left-0 right-0 z-10',
+            fullscreenPageMode ? 'top-0 bottom-9' : 'top-[72px] bottom-16',
+          ),
         )}
         style={settings.readingMode === 'page' ? {
+          ...(fullscreenPageMode ? { top: `${fullscreenTopSpacing}px` } : {}),
           overflowX: 'clip',
           overflowY: pageHasOversizedSegment ? 'auto' : 'clip',
           touchAction: 'pan-y',
@@ -3488,8 +3573,16 @@ export default function ReaderPage() {
         )}
       </main>
       {settings.readingMode === 'page' && (
-        <footer className="fixed inset-x-0 bottom-0 z-20 h-16 border-t border-border bg-background/95 backdrop-blur-sm">
-          <div className={cn('mx-auto flex h-full items-center justify-between px-4 sm:px-6', getOuterWidthClass())}>
+        <footer className={cn(
+          'fixed inset-x-0 bottom-0 z-20',
+          fullscreenPageMode ? 'h-9' : 'h-16 border-t border-border bg-background/95 backdrop-blur-sm',
+        )}>
+          <div className={cn(
+            'mx-auto flex h-full items-center px-4 sm:px-6',
+            getOuterWidthClass(),
+            fullscreenPageMode ? 'justify-center pointer-events-none' : 'justify-between',
+          )}>
+            {!fullscreenPageMode && <>
             <Button
               variant="ghost"
               className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
@@ -3517,6 +3610,14 @@ export default function ReaderPage() {
               <span>Next</span>
               <ChevronLeft size={16} className="rotate-180" />
             </Button>
+            </>}
+            {fullscreenPageMode && (
+              <span className="rounded-full bg-background/75 px-3 py-1 text-center text-[11px] text-muted-foreground backdrop-blur-sm" data-testid="text-page-info">
+                {pageModeReady && pageLayout
+                  ? `Ch. ${currentChapterNumber} · ${currentPageIndex + 1}/${pageLayout.pages.length}`
+                  : `Ch. ${currentChapterNumber} · Preparing`}
+              </span>
+            )}
           </div>
         </footer>
       )}
