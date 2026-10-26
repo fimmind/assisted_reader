@@ -4853,7 +4853,7 @@ export default function ReaderPage() {
               className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
               aria-label="Previous page"
               data-testid="button-prev-page"
-              disabled={!pageModeReady || (currentPageIndex === 0 && !canGoToPreviousChapter)}
+              disabled={currentPageIndex === 0 && !canGoToPreviousChapter}
               onClick={() => navigatePage(-1)}
             >
               <ChevronLeft size={16} />
@@ -4869,7 +4869,7 @@ export default function ReaderPage() {
               className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
               aria-label="Next page"
               data-testid="button-next-page"
-              disabled={!pageModeReady || (currentPageIndex >= (pageLayout?.pages.length ?? 1) - 1 && !canGoToNextChapter)}
+              disabled={currentPageIndex >= (pageLayout?.pages.length ?? 1) - 1 && !canGoToNextChapter}
               onClick={() => navigatePage(1)}
             >
               <span>Next</span>
