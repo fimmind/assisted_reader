@@ -81,11 +81,12 @@ function NavigationTree({ entries, activeId, open, onNavigate }: NavigationTreeP
   }, [activeId, entries, open]);
 
   return (
-    <ul className="space-y-0 pt-2">
+    <ul className="space-y-0 px-2 pt-2">
       {entries.map((entry) => (
         <NavigationTreeEntry
           key={entry.id}
           entry={entry}
+          depth={0}
           activeId={activeId}
           expandedIds={expandedIds}
           treeId={treeId}
@@ -99,6 +100,7 @@ function NavigationTree({ entries, activeId, open, onNavigate }: NavigationTreeP
 
 interface NavigationTreeEntryProps {
   entry: BookNavigationEntry;
+  depth: number;
   activeId: string | null;
   expandedIds: Set<string>;
   treeId: string;
@@ -106,16 +108,16 @@ interface NavigationTreeEntryProps {
   onNavigate: (location: ReaderLocation) => void;
 }
 
-function NavigationTreeEntry({ entry, activeId, expandedIds, treeId, onToggle, onNavigate }: NavigationTreeEntryProps) {
+function NavigationTreeEntry({ entry, depth, activeId, expandedIds, treeId, onToggle, onNavigate }: NavigationTreeEntryProps) {
   const isExpanded = expandedIds.has(entry.id);
   const contentId = `${treeId}-children-${encodeURIComponent(entry.id)}`;
   return (
     <li>
-      <div className="flex h-8 items-stretch">
+      <div className={`flex h-8 items-stretch hover:!bg-muted ${entry.id === activeId ? 'bg-black/10 dark:bg-black/30' : ''}`} style={{ paddingLeft: `${8 + depth * 12}px` }}>
         {entry.children.length > 0 && (
           <button
             type="button"
-            className="flex w-8 shrink-0 cursor-pointer items-center justify-center text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex w-8 shrink-0 cursor-pointer items-center justify-center text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${entry.title}`}
             aria-expanded={isExpanded}
             aria-controls={contentId}
@@ -127,7 +129,7 @@ function NavigationTreeEntry({ entry, activeId, expandedIds, treeId, onToggle, o
         {entry.children.length === 0 && <span className="w-8 shrink-0" aria-hidden="true" />}
         <button
           type="button"
-          className="min-w-0 flex-1 cursor-pointer rounded-none px-2 text-left text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-[current=location]:font-medium aria-[current=location]:text-foreground"
+          className="min-w-0 flex-1 cursor-pointer rounded-none px-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-[current=location]:font-medium aria-[current=location]:text-foreground"
           aria-current={entry.id === activeId ? 'location' : undefined}
           title={entry.title}
           data-testid={`navigation-entry-${entry.id}`}
@@ -137,9 +139,9 @@ function NavigationTreeEntry({ entry, activeId, expandedIds, treeId, onToggle, o
         </button>
       </div>
       {entry.children.length > 0 && (
-        <ul id={contentId} className="ml-3 space-y-0" hidden={!isExpanded}>
+        <ul id={contentId} className="space-y-0" hidden={!isExpanded}>
           {entry.children.map((child) => (
-            <NavigationTreeEntry key={child.id} entry={child} activeId={activeId} expandedIds={expandedIds} treeId={treeId} onToggle={onToggle} onNavigate={onNavigate} />
+            <NavigationTreeEntry key={child.id} entry={child} depth={depth + 1} activeId={activeId} expandedIds={expandedIds} treeId={treeId} onToggle={onToggle} onNavigate={onNavigate} />
           ))}
         </ul>
       )}
@@ -412,10 +414,10 @@ export function ReaderNavigationSheet({
           </TabsList>
 
           <TabsContent value="contents" className="mt-0 min-h-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-full px-4">
+            <ScrollArea className="h-full">
               {navigation.length > 0
                 ? <NavigationTree entries={navigation} activeId={activeId} open={open} onNavigate={onNavigate} />
-                : <p className="py-6 text-sm text-muted-foreground">This book has no table of contents.</p>}
+                : <p className="px-4 py-6 text-sm text-muted-foreground">This book has no table of contents.</p>}
             </ScrollArea>
           </TabsContent>
 
