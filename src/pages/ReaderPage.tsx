@@ -2122,11 +2122,28 @@ export default function ReaderPage() {
     if (pageSwipeStartRef.current?.pointerId === event.pointerId) pageSwipeStartRef.current = null;
   };
 
-  const suppressClickAfterPageSwipe = (event: ReactMouseEvent<HTMLElement>): void => {
-    if (performance.now() > suppressPageSwipeClickUntilRef.current) return;
-    suppressPageSwipeClickUntilRef.current = 0;
-    event.preventDefault();
-    event.stopPropagation();
+  const handlePageScreenClick = (event: ReactMouseEvent<HTMLElement>): void => {
+    if (performance.now() <= suppressPageSwipeClickUntilRef.current) {
+      suppressPageSwipeClickUntilRef.current = 0;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (settings.readingMode !== 'page' || !pageModeReady) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('button, a, input, textarea, select, [role="button"], [role="dialog"], [data-definition-card="true"], [data-word-popup-index]')) return;
+    const edgeWidth = Math.min(120, Math.max(56, window.innerWidth * 0.14));
+    if (event.clientX <= edgeWidth) {
+      event.preventDefault();
+      event.stopPropagation();
+      navigatePage(-1);
+      return;
+    }
+    if (event.clientX >= window.innerWidth - edgeWidth) {
+      event.preventDefault();
+      event.stopPropagation();
+      navigatePage(1);
+    }
   };
 
   useEffect(() => {
@@ -3064,7 +3081,7 @@ export default function ReaderPage() {
       onPointerDown={handlePagePointerDown}
       onPointerUp={handlePagePointerUp}
       onPointerCancel={handlePagePointerCancel}
-      onClickCapture={suppressClickAfterPageSwipe}
+      onClickCapture={handlePageScreenClick}
     >
       {readerSettingsOpen && (
         <div
