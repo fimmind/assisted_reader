@@ -668,7 +668,9 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
 
   return (
     <>
-      {includeDocumentIds && block.anchorIds?.map((anchorId) => <span key={anchorId} id={anchorId} className="reader-anchor" />)}
+      {block.anchorIds?.map((anchorId) => (
+        <span key={anchorId} id={includeDocumentIds ? anchorId : undefined} className="reader-anchor" />
+      ))}
       {createElement(
         blockTag,
         {
@@ -858,7 +860,9 @@ const ReaderChapterBlockList = memo(function ReaderChapterBlockList({
     if (block.type === 'image') {
       return (
         <figure key={`reader-image-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex} className="my-6 w-full">
-          {includeDocumentIds && block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}
+          {block.anchorIds?.map((id) => (
+            <span key={id} id={includeDocumentIds ? id : undefined} className="reader-anchor" />
+          ))}
           <img
             src={block.src}
             alt={block.alt}
@@ -875,14 +879,18 @@ const ReaderChapterBlockList = memo(function ReaderChapterBlockList({
     if (block.type === 'spacer') {
       return (
         <div key={`reader-spacer-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex} aria-hidden="true" style={{ height: '1em', ...block.style, ...(blockPresentationProps.style ?? {}) } as CSSProperties}>
-          {includeDocumentIds && block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}
+          {block.anchorIds?.map((id) => (
+            <span key={id} id={includeDocumentIds ? id : undefined} className="reader-anchor" />
+          ))}
         </div>
       );
     }
     if (block.type === 'rule') {
       return (
         <div key={`reader-rule-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex}>
-          {includeDocumentIds && block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}
+          {block.anchorIds?.map((id) => (
+            <span key={id} id={includeDocumentIds ? id : undefined} className="reader-anchor" />
+          ))}
           <hr className="my-8 border-border" style={block.style as CSSProperties | undefined} />
         </div>
       );
@@ -1744,6 +1752,7 @@ export default function ReaderPage() {
         ? prepared : null);
     bookRef.current = nextBook;
     beginReaderLoading(initialPageIndex);
+    if (hasPageLayout) pageModeWasRevealedRef.current = true;
     const analyses = buildPlainChapterAnalysis(nextBook);
     activePreparedOpeningRef.current = readyOpening;
     instantChapterTransitionRef.current = settingsRef.current.readingMode === 'scroll' ? readyOpening : null;

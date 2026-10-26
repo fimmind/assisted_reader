@@ -792,7 +792,9 @@ export function useReaderPagination({
 
   const error = measurementError?.layoutKey === layoutKey ? measurementError.error : null;
   const renderedLayout = internalLayoutIsCompatible ? layout : compatibleInitialLayout ?? layout;
-  const renderedMeasurementKey = measuredMeasurementKey;
+  const renderedMeasurementKey = compatibleInitialLayout && !internalLayoutIsCompatible
+    ? getMeasurementKey(compatibleInitialLayout) ?? measuredMeasurementKey
+    : measuredMeasurementKey;
   const isReady = enabled && error === null
     && renderedLayout?.layoutKey === layoutKey
     && renderedLayout.chapterIndex === chapterIndex
