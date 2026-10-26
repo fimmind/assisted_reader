@@ -94,6 +94,16 @@ function calculateProgressPercent(book: ImportedBook): number {
   return bookProgressAtLocation(book, location) * 100;
 }
 
+function totalParagraphCharacterCount(book: ImportedBook): number {
+  return book.chapters.reduce(
+    (bookTotal, chapter) => bookTotal + chapter.paragraphs.reduce(
+      (chapterTotal, paragraph) => chapterTotal + paragraph.length,
+      0,
+    ),
+    0,
+  );
+}
+
 function hashTokenSegment(value: string, seed: number): number {
   let hash = seed >>> 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -368,6 +378,10 @@ export default function LibraryPage() {
           booksNeedingRefresh.push(book);
         }
       }
+      const booksOrderedByTextSize = booksNeedingRefresh
+        .map((book, originalIndex) => ({ book, originalIndex, textSize: totalParagraphCharacterCount(book) }))
+        .sort((left, right) => left.textSize - right.textSize || left.originalIndex - right.originalIndex)
+        .map(({ book }) => book);
       setStatsByBookId(cachedStatsByBookId);
       setIsLoading(false);
       hasLoadedOnceRef.current = true;
@@ -405,7 +419,7 @@ export default function LibraryPage() {
               if (refreshRunIdRef.current !== runId) {
                 return;
               }
-              const book = booksNeedingRefresh[bookIndex];
+              const book = booksOrderedByTextSize[bookIndex];
               if (!book) {
                 return;
               }
