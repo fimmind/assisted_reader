@@ -9,19 +9,21 @@ import { VocabularyTestOnboarding, VocabularyTestReminder } from '../components/
 import { importBookFromFile } from '@/core/book-parser';
 import { deleteBookById, getBookById, listBooks, seedBooksIfEmpty, upsertBook } from '@/core/books-store';
 import { createSeedBook } from '@/core/seed-book';
-import { buildResumableBookLemmaHistogramAsync, calculateBookStatsFromLemmaHistogram } from '@/core/reader-analysis';
+import { calculateBookStatsFromLemmaHistogram } from '@/core/reader-analysis';
+import { buildBookLemmaHistogramWithWorkersAsync } from '@/core/book-histogram-worker-client';
+import { getBookAnalysisContentKey } from '@/core/book-analysis-content-key';
 import { getActiveProfile, listenStateUpdated, loadProfileState, loadReaderSettings } from '@/core/profile-store';
 import { loadVocabularyModel } from '@/core/model';
 import { withBookReadingProgress } from '@/core/reading-progress-store';
 import { bookProgressAtLocation, readerLocationFromLegacyProgress } from '@/core/reader-location';
 import { loadLemmaDict } from '@/core/lemma';
 import { LEXICAL_ANALYSIS_VERSION } from '@/core/nlp';
-import { loadCompromise } from '@/core/external';
 import { getCachedBookLemmaHistogram } from '@/core/book-lemma-histogram-cache';
 import {
   clearTaggedBookChapterCheckpoints,
   completeBookLemmaHistogram,
   loadBookLemmaHistogramCheckpoints,
+  loadCompletedBookLemmaHistogramByContentKey,
   loadCompletedBookLemmaHistogram,
   saveBookLemmaHistogramCheckpoint,
 } from '@/core/book-lemma-histogram-checkpoint';
@@ -47,7 +49,8 @@ interface CachedBookStatsEntry {
 
 type CachedBookStatsMap = Record<string, CachedBookStatsEntry>;
 
-const BOOK_STATS_CACHE_KEY = `easeword-book-stats-cache-v2-lexical-${LEXICAL_ANALYSIS_VERSION}`;
+const BOOK_HISTOGRAM_ENGINE_VERSION = 'compromise-14.15.1-worker-v1';
+const BOOK_STATS_CACHE_KEY = `easeword-book-stats-cache-v2-lexical-${LEXICAL_ANALYSIS_VERSION}-${BOOK_HISTOGRAM_ENGINE_VERSION}`;
 
 function statsCacheKey(profileId: string, bookId: string): string {
   return JSON.stringify([profileId, bookId]);
@@ -211,9 +214,11 @@ export default function LibraryPage() {
       };
     }
     try {
-      const analysisModelKey = `${model.modelKey}:lexical-analysis-${LEXICAL_ANALYSIS_VERSION}`;
-      const cachedHistogram = getCachedBookLemmaHistogram(book.id, book.createdAt, book.updatedAt, analysisModelKey)
-        ?? await loadCompletedBookLemmaHistogram(book.id, book.createdAt, analysisModelKey);
+      const analysisModelKey = `${model.modelKey}:lexical-analysis-${LEXICAL_ANALYSIS_VERSION}:histogram-engine-${BOOK_HISTOGRAM_ENGINE_VERSION}`;
+      const contentKey = await getBookAnalysisContentKey(book);
+      if (refreshRunIdRef.current !== runId) return null;
+      const cachedHistogram = getCachedBookLemmaHistogram(book.id, contentKey, book.updatedAt, analysisModelKey)
+        ?? await loadCompletedBookLemmaHistogram(book.id, contentKey, analysisModelKey);
       if (cachedHistogram) {
         const cachedStats = calculateBookStatsFromLemmaHistogram(cachedHistogram, settings, model, activeProfile);
         return {
@@ -222,9 +227,20 @@ export default function LibraryPage() {
         };
       }
 
+      const sharedHistogram = await loadCompletedBookLemmaHistogramByContentKey(contentKey, analysisModelKey);
+      if (sharedHistogram) {
+        if (refreshRunIdRef.current !== runId) return null;
+        await completeBookLemmaHistogram(book.id, contentKey, analysisModelKey, sharedHistogram);
+        const sharedStats = calculateBookStatsFromLemmaHistogram(sharedHistogram, settings, model, activeProfile);
+        return {
+          ...sharedStats,
+          progressPercent,
+        };
+      }
+
       const bundledHistogram = await loadBundledBookLemmaHistogram(book.id);
+      if (refreshRunIdRef.current !== runId) return null;
       if (bundledHistogram) {
-        await completeBookLemmaHistogram(book.id, book.createdAt, analysisModelKey, bundledHistogram);
         const bundledStats = calculateBookStatsFromLemmaHistogram(bundledHistogram, settings, model, activeProfile);
         return {
           ...bundledStats,
@@ -232,18 +248,16 @@ export default function LibraryPage() {
         };
       }
 
-      const [lemmaDict, nlp] = await Promise.all([loadLemmaDict(), loadCompromise()]);
+      const lemmaDict = await loadLemmaDict();
       if (refreshRunIdRef.current !== runId) return null;
       let lastReportedPercent = -1;
       onProgress(0);
-      const savedSegments = await loadBookLemmaHistogramCheckpoints(book.id, book.createdAt, analysisModelKey);
-      const histogram = await buildResumableBookLemmaHistogramAsync(
+      const histogram = await buildBookLemmaHistogramWithWorkersAsync(
         book,
         model,
         lemmaDict,
-        nlp,
-        savedSegments,
         {
+          bookId: book.id,
           shouldContinue: () => refreshRunIdRef.current === runId,
           onWorkUnitProcessed: (processedUnits, totalUnits) => {
             if (totalUnits <= 0) {
@@ -255,15 +269,15 @@ export default function LibraryPage() {
               lastReportedPercent = percent;
             }
           },
-          onYield: yieldToEventLoop,
-          saveSegment: (segment) => saveBookLemmaHistogramCheckpoint(book.id, book.createdAt, analysisModelKey, segment),
+          loadSegments: () => loadBookLemmaHistogramCheckpoints(book.id, contentKey, analysisModelKey),
+          saveSegment: (segment) => saveBookLemmaHistogramCheckpoint(book.id, contentKey, analysisModelKey, segment),
           clearTaggedChapter: (chapterIndex) => clearTaggedBookChapterCheckpoints(book.id, chapterIndex),
         },
       );
       if (histogram === null) {
         return null;
       }
-      await completeBookLemmaHistogram(book.id, book.createdAt, analysisModelKey, histogram);
+      await completeBookLemmaHistogram(book.id, contentKey, analysisModelKey, histogram);
       const stats = calculateBookStatsFromLemmaHistogram(histogram, settings, model, activeProfile);
       return {
         ...stats,

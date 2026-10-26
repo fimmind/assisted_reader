@@ -2036,6 +2036,7 @@ test('book histogram resumes from saved tagging and counting batches', async () 
     { reads: 'read' },
     nlp,
     [...segments],
+    new Map<string, string[]>(),
     {
       shouldContinue: () => shouldContinue,
       onWorkUnitProcessed: (processedUnits) => {

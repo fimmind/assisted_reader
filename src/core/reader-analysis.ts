@@ -770,12 +770,12 @@ export async function buildResumableBookLemmaHistogramAsync(
   lemmaDict: Record<string, string>,
   nlp: ChapterAnalysisInput['nlp'],
   savedSegments: BookLemmaHistogramSegment[],
+  lemmaCandidateCache: Map<string, string[]>,
   hooks: BookLemmaHistogramCheckpointHooks,
 ): Promise<BookLemmaHistogram | null> {
   const totalParagraphs = book.chapters.reduce((total, chapter) => total + chapter.paragraphs.length, 0);
   const totalWorkUnits = totalParagraphs * 2;
   const aggregateLemmaCounts = new Map<string, number>();
-  const lemmaCandidateCache = new Map<string, string[]>();
   let totalTokenCount = 0;
   let processedWorkUnits = 0;
   hooks.onWorkUnitProcessed(0, totalWorkUnits);

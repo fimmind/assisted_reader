@@ -11,7 +11,12 @@ type StoredSegment = BookLemmaHistogramSegment & {
 const DATABASE_NAME = 'easeword-book-lemma-histogram-checkpoints-v1';
 const STORE_NAME = 'segments';
 const COMPLETED_STORE_NAME = 'completed';
+const CONTENT_MODEL_VERSION_INDEX = 'contentModelVersion';
 const ANALYSIS_VERSION = 2;
+const DATABASE_VERSION = 2;
+
+let liveDatabase: IDBDatabase | null = null;
+let pendingDatabaseOpen: Promise<IDBDatabase> | null = null;
 
 interface CompletedHistogram {
   bookId: string;
@@ -22,17 +27,103 @@ interface CompletedHistogram {
 }
 
 function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, 1);
-    request.onerror = () => reject(new Error(`Could not open histogram checkpoint database: name=${DATABASE_NAME} error=${request.error?.message}`));
-    request.onsuccess = () => resolve(request.result);
+  if (liveDatabase) {
+    return Promise.resolve(liveDatabase);
+  }
+  if (pendingDatabaseOpen) {
+    return pendingDatabaseOpen;
+  }
+
+  const pending = new Promise<IDBDatabase>((resolve, reject) => {
+    let settled = false;
+    let request: IDBOpenDBRequest;
+    try {
+      request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    } catch (error) {
+      reject(new Error(`Could not open histogram checkpoint database: name=${DATABASE_NAME}`, { cause: error }));
+      return;
+    }
+    request.onerror = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (pendingDatabaseOpen === pending) {
+        pendingDatabaseOpen = null;
+      }
+      reject(new Error(`Could not open histogram checkpoint database: name=${DATABASE_NAME} error=${request.error?.message}`));
+    };
+    request.onblocked = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (pendingDatabaseOpen === pending) {
+        pendingDatabaseOpen = null;
+      }
+      reject(new Error(`Could not upgrade histogram checkpoint database: name=${DATABASE_NAME} is blocked by another open connection. Close other Easeword tabs and retry.`));
+    };
+    request.onsuccess = () => {
+      const database = request.result;
+      if (settled) {
+        database.close();
+        return;
+      }
+      settled = true;
+      database.onversionchange = () => {
+        if (liveDatabase === database) {
+          liveDatabase = null;
+        }
+        database.close();
+      };
+      database.addEventListener('close', () => {
+        if (liveDatabase === database) {
+          liveDatabase = null;
+        }
+      });
+      liveDatabase = database;
+      if (pendingDatabaseOpen === pending) {
+        pendingDatabaseOpen = null;
+      }
+      resolve(database);
+    };
     request.onupgradeneeded = () => {
-      const store = request.result.createObjectStore(STORE_NAME, { keyPath: 'key' });
-      store.createIndex('bookId', 'bookId');
-      store.createIndex('bookChapterKind', ['bookId', 'chapterIndex', 'kind']);
-      request.result.createObjectStore(COMPLETED_STORE_NAME, { keyPath: 'bookId' });
+      const database = request.result;
+      const segmentStore = database.objectStoreNames.contains(STORE_NAME)
+        ? request.transaction?.objectStore(STORE_NAME)
+        : database.createObjectStore(STORE_NAME, { keyPath: 'key' });
+      if (!segmentStore) {
+        reject(new Error(`Could not upgrade histogram checkpoint database: missing transaction for store=${STORE_NAME}`));
+        return;
+      }
+      if (!segmentStore.indexNames.contains('bookId')) {
+        segmentStore.createIndex('bookId', 'bookId');
+      }
+      if (!segmentStore.indexNames.contains('bookChapterKind')) {
+        segmentStore.createIndex('bookChapterKind', ['bookId', 'chapterIndex', 'kind']);
+      }
+      const completedStore = database.objectStoreNames.contains(COMPLETED_STORE_NAME)
+        ? request.transaction?.objectStore(COMPLETED_STORE_NAME)
+        : database.createObjectStore(COMPLETED_STORE_NAME, { keyPath: 'bookId' });
+      if (!completedStore) {
+        reject(new Error(`Could not upgrade histogram checkpoint database: missing transaction for store=${COMPLETED_STORE_NAME}`));
+        return;
+      }
+      if (!completedStore.indexNames.contains(CONTENT_MODEL_VERSION_INDEX)) {
+        completedStore.createIndex(
+          CONTENT_MODEL_VERSION_INDEX,
+          ['contentKey', 'modelKey', 'analysisVersion'],
+        );
+      }
     };
   });
+  pendingDatabaseOpen = pending;
+  void pending.catch(() => {
+    if (pendingDatabaseOpen === pending) {
+      pendingDatabaseOpen = null;
+    }
+  });
+  return pending;
 }
 
 function requestResult<T>(request: IDBRequest<T>, context: string): Promise<T> {
@@ -48,19 +139,15 @@ async function withStore<T>(
   operation: (store: IDBObjectStore) => Promise<T>,
 ): Promise<T> {
   const database = await openDatabase();
-  try {
-    const transaction = database.transaction(storeName, mode);
-    const completed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error(`Histogram checkpoint transaction failed: error=${transaction.error?.message}`));
-      transaction.onabort = () => reject(new Error(`Histogram checkpoint transaction aborted: error=${transaction.error?.message}`));
-    });
-    const result = await operation(transaction.objectStore(storeName));
-    await completed;
-    return result;
-  } finally {
-    database.close();
-  }
+  const transaction = database.transaction(storeName, mode);
+  const completed = new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(new Error(`Histogram checkpoint transaction failed: error=${transaction.error?.message}`));
+    transaction.onabort = () => reject(new Error(`Histogram checkpoint transaction aborted: error=${transaction.error?.message}`));
+  });
+  const result = await operation(transaction.objectStore(storeName));
+  await completed;
+  return result;
 }
 
 function isStoredSegment(value: unknown): value is StoredSegment {
@@ -148,6 +235,30 @@ export async function loadCompletedBookLemmaHistogram(
   return completed.histogram;
 }
 
+export async function loadCompletedBookLemmaHistogramByContentKey(
+  contentKey: string,
+  modelKey: string,
+): Promise<BookLemmaHistogram | null> {
+  const value = await withStore(COMPLETED_STORE_NAME, 'readonly', (store) =>
+    requestResult(
+      store.index(CONTENT_MODEL_VERSION_INDEX).get([contentKey, modelKey, ANALYSIS_VERSION]) as IDBRequest<unknown>,
+      `load completed histogram contentKey=${contentKey} modelKey=${modelKey}`,
+    ));
+  if (value === undefined) {
+    return null;
+  }
+  if (!value || typeof value !== 'object') {
+    throw new TypeError(`Invalid completed book histogram: contentKey=${contentKey} modelKey=${modelKey}`);
+  }
+  const completed = value as Partial<CompletedHistogram>;
+  if (typeof completed.bookId !== 'string' || completed.contentKey !== contentKey
+    || completed.modelKey !== modelKey || completed.analysisVersion !== ANALYSIS_VERSION
+    || !isValidHistogram(completed.histogram)) {
+    throw new TypeError(`Invalid completed book histogram: contentKey=${contentKey} modelKey=${modelKey}`);
+  }
+  return completed.histogram;
+}
+
 export async function completeBookLemmaHistogram(
   bookId: string,
   contentKey: string,
@@ -155,29 +266,25 @@ export async function completeBookLemmaHistogram(
   histogram: BookLemmaHistogram,
 ): Promise<void> {
   const database = await openDatabase();
-  try {
-    const transaction = database.transaction([STORE_NAME, COMPLETED_STORE_NAME], 'readwrite');
-    const completed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error(`Completing book histogram failed: bookId=${bookId} error=${transaction.error?.message}`));
-      transaction.onabort = () => reject(new Error(`Completing book histogram aborted: bookId=${bookId} error=${transaction.error?.message}`));
-    });
-    const segmentStore = transaction.objectStore(STORE_NAME);
-    const keys = await requestResult(segmentStore.index('bookId').getAllKeys(bookId), `list completed checkpoints bookId=${bookId}`);
-    for (const key of keys) {
-      segmentStore.delete(key);
-    }
-    transaction.objectStore(COMPLETED_STORE_NAME).put({
-      bookId,
-      contentKey,
-      modelKey,
-      analysisVersion: ANALYSIS_VERSION,
-      histogram,
-    } satisfies CompletedHistogram);
-    await completed;
-  } finally {
-    database.close();
+  const transaction = database.transaction([STORE_NAME, COMPLETED_STORE_NAME], 'readwrite');
+  const completed = new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(new Error(`Completing book histogram failed: bookId=${bookId} error=${transaction.error?.message}`));
+    transaction.onabort = () => reject(new Error(`Completing book histogram aborted: bookId=${bookId} error=${transaction.error?.message}`));
+  });
+  const segmentStore = transaction.objectStore(STORE_NAME);
+  const keys = await requestResult(segmentStore.index('bookId').getAllKeys(bookId), `list completed checkpoints bookId=${bookId}`);
+  for (const key of keys) {
+    segmentStore.delete(key);
   }
+  transaction.objectStore(COMPLETED_STORE_NAME).put({
+    bookId,
+    contentKey,
+    modelKey,
+    analysisVersion: ANALYSIS_VERSION,
+    histogram,
+  } satisfies CompletedHistogram);
+  await completed;
 }
 
 export async function clearBookLemmaHistogramCheckpoints(bookId: string): Promise<void> {
