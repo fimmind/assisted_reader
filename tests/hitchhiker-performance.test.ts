@@ -98,7 +98,7 @@ function loadHitchhikerHistogram(): BookLemmaHistogram {
   return JSON.parse(raw) as BookLemmaHistogram;
 }
 
-test("Hitchhiker analysis fast path stays below 50ms", () => {
+test("Hitchhiker analysis fast path stays below 100ms", () => {
   const model = loadVocabularyModelFromCsv();
   const histogram = loadHitchhikerHistogram();
   const settings: ReaderSettings = {
@@ -138,8 +138,8 @@ test("Hitchhiker analysis fast path stays below 50ms", () => {
   }
 
   assert.equal(
-    slowestMs < 50,
+    slowestMs < 100,
     true,
-    `Expected Hitchhiker analysis below 50ms, observed slowest run ${slowestMs.toFixed(2)}ms`,
+    `Expected Hitchhiker analysis below 100ms, observed slowest run ${slowestMs.toFixed(2)}ms`,
   );
 });

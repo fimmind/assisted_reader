@@ -24,7 +24,7 @@ export async function createSeedBook(): Promise<ImportedBook> {
       updatedAt: nowIso,
       currentChapter: 1,
       currentChapterProgress: 0,
-      chapters: epub.chapters.map((chapter) => ({ ...chapter, titlePresentation: 'generated' })),
+      chapters: epub.chapters,
       navigation: epub.navigation,
     };
   } catch (error) {

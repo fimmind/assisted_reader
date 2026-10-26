@@ -324,7 +324,9 @@ export default function LibraryPage() {
 
       const hasLegacySeedAlice = loadedBooks.some((book) => book.id === 'seed-alice');
       const hasNewSeedHitchhiker = loadedBooks.some((book) => book.id === 'seed-hitchhiker');
-      const hasTextSeedHitchhiker = loadedBooks.some((book) => book.id === 'seed-hitchhiker' && book.sourceType === 'txt');
+      const hasOutdatedSeedHitchhiker = loadedBooks.some((book) => book.id === 'seed-hitchhiker'
+        && (book.sourceType === 'txt'
+          || (book.title === "The Hitchhiker's Guide to the Galaxy" && book.author === 'Douglas Adams')));
       if (hasLegacySeedAlice && !hasNewSeedHitchhiker) {
         seedHandleRef.current = scheduleDeferredTask(() => {
           void (async () => {
@@ -340,13 +342,14 @@ export default function LibraryPage() {
           })();
         }, 1500);
       }
-      if (hasTextSeedHitchhiker) {
+      if (hasOutdatedSeedHitchhiker) {
         seedHandleRef.current = scheduleDeferredTask(() => {
           void (async () => {
             try {
               const epub = await createSeedBook();
               const previous = await getBookById(epub.id);
-              if (!previous || previous.sourceType !== 'txt') return;
+              if (!previous || (previous.sourceType !== 'txt'
+                && !(previous.title === "The Hitchhiker's Guide to the Galaxy" && previous.author === 'Douglas Adams'))) return;
               await upsertBook({
                 ...epub,
                 createdAt: previous.createdAt,

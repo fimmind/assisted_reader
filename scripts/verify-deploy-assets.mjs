@@ -172,7 +172,7 @@ async function verifySeedBook() {
   }
   const containerXml = await container.async('string');
   if (!containerXml.includes('<container ') || !containerXml.includes('<rootfile ')
-    || !containerXml.includes('EPUB/package.opf')) {
+    || !/<rootfile\b[^>]*full-path="[^"]+\.opf"/.test(containerXml)) {
     throw new Error(`Invalid deployed seed book container: file=${relativePath}`);
   }
   try {
