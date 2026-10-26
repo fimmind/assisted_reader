@@ -138,8 +138,8 @@ function collectRangeFragments(
     rects.forEach((rect) => output.push({
       startOffset: baseOffset + localStart,
       endOffset: baseOffset + localEnd,
-      top: rect.top - rootTop - presentationOffset - PAGE_EDGE_EPSILON,
-      bottom: rect.bottom - rootTop - presentationOffset + PAGE_EDGE_EPSILON,
+      top: rect.top - rootTop - presentationOffset,
+      bottom: rect.bottom - rootTop - presentationOffset,
     }));
     return;
   }
@@ -185,7 +185,11 @@ function textLineFragments(textElement: HTMLElement, rootTop: number, presentati
   }
 
   Array.from(textElement.querySelectorAll('img')).forEach((image) => {
-    const bounds = rectBounds(image, rootTop, presentationOffset);
+    const rect = image.getBoundingClientRect();
+    const bounds = {
+      top: rect.top - rootTop - presentationOffset,
+      bottom: rect.bottom - rootTop - presentationOffset,
+    };
     if (bounds.bottom <= bounds.top) return;
     const offset = textOffsetBeforeElement(textElement, image);
     fragments.push({ startOffset: offset, endOffset: offset, ...bounds });
@@ -249,8 +253,8 @@ function mergeTextLineFragments(
   });
 
   return bands.map((band) => ({
-    startY: band.top,
-    endY: band.bottom,
+    startY: band.top - PAGE_EDGE_EPSILON,
+    endY: band.bottom + PAGE_EDGE_EPSILON,
     blockIndex,
     startOffset: band.startOffset,
     endOffset: band.endOffset,
