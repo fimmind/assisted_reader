@@ -219,7 +219,7 @@
   text-indent: 0;
   cursor: pointer;
   border-bottom: 2px solid hsl(var(--primary) / 0.4);
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-bottom-color 0.2s ease;
 }
 .unknown-word:hover {
   background-color: hsl(var(--primary) / 0.1);

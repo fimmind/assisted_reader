@@ -262,7 +262,9 @@ export function loadReaderSettings(): ReaderSettings {
       wordSenseDisambiguationEnabled?: boolean;
     };
     const settings: ReaderSettings = {
-      readingMode: parsed.readingMode === 'page' ? 'page' : 'scroll',
+      readingMode: parsed.readingMode === 'page' ? 'page'
+        : parsed.readingMode === 'scroll' ? 'scroll'
+        : DEFAULT_READER_SETTINGS.readingMode,
       fontSize: sanitizeNumeric(parsed.fontSize, DEFAULT_READER_SETTINGS.fontSize, 12, 32),
       lineSpacing: parsed.lineSpacing ?? DEFAULT_READER_SETTINGS.lineSpacing,
       fontChoice: parsed.fontChoice ?? DEFAULT_READER_SETTINGS.fontChoice,
