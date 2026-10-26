@@ -147,10 +147,10 @@ function collectRangeFragments(
   collectRangeFragments(node, middle, localEnd, baseOffset, rootTop, presentationOffset, output);
 }
 
-function inlineImageOffset(textElement: HTMLElement, image: HTMLImageElement): number {
+function textOffsetBeforeElement(textElement: HTMLElement, element: HTMLElement): number {
   const range = textElement.ownerDocument.createRange();
   range.selectNodeContents(textElement);
-  range.setEndBefore(image);
+  range.setEndBefore(element);
   return range.toString().length;
 }
 
@@ -185,11 +185,38 @@ function textLineFragments(textElement: HTMLElement, rootTop: number, presentati
   Array.from(textElement.querySelectorAll('img')).forEach((image) => {
     const bounds = rectBounds(image, rootTop, presentationOffset);
     if (bounds.bottom <= bounds.top) return;
-    const offset = inlineImageOffset(textElement, image);
+    const offset = textOffsetBeforeElement(textElement, image);
     fragments.push({ startOffset: offset, endOffset: offset, ...bounds });
   });
 
   return fragments;
+}
+
+function includeSelectedWordBounds(
+  segments: readonly ReaderPaginationSegment[],
+  textElement: HTMLElement,
+  rootTop: number,
+  presentationOffset: number,
+): ReaderPaginationSegment[] {
+  const expandedSegments = segments.map((segment) => ({ ...segment }));
+  Array.from(textElement.querySelectorAll<HTMLElement>('.unknown-word')).forEach((word) => {
+    const bounds = rectBounds(word, rootTop, presentationOffset);
+    if (bounds.bottom <= bounds.top) return;
+    const startOffset = textOffsetBeforeElement(textElement, word);
+    const endOffset = startOffset + (word.textContent?.length ?? 0);
+    const matchingLines = expandedSegments.filter((segment) =>
+      segment.endOffset > startOffset && segment.startOffset < endOffset);
+    const firstLine = matchingLines[0];
+    const lastLine = matchingLines[matchingLines.length - 1];
+    if (!firstLine || !lastLine) {
+      throw readerPaginationMeasurementError(
+        `Selected word has no measured text line: startOffset=${startOffset}, endOffset=${endOffset}`,
+      );
+    }
+    firstLine.startY = Math.min(firstLine.startY, bounds.top);
+    lastLine.endY = Math.max(lastLine.endY, bounds.bottom);
+  });
+  return expandedSegments;
 }
 
 function mergeTextLineFragments(
@@ -282,9 +309,11 @@ function measuredBlockSegments(
     return [{ ...atomicSegment(blockBounds, blockIndex, 0), ...sourceBlockBounds }];
   }
 
-  const textSegments = mergeTextLineFragments(
-    textLineFragments(textElement, rootTop, presentationOffset),
-    blockIndex,
+  const textSegments = includeSelectedWordBounds(
+    mergeTextLineFragments(textLineFragments(textElement, rootTop, presentationOffset), blockIndex),
+    textElement,
+    rootTop,
+    presentationOffset,
   );
   if (textSegments.length === 0) {
     return [{ ...atomicSegment(blockBounds, blockIndex, 0), ...sourceBlockBounds }];
