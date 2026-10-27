@@ -20,6 +20,7 @@ interface UseReaderPaginationOptions {
   chapterIndex: number;
   pageHeight: number;
   anchor: ReaderLocation | null;
+  chapterEdge: 'start' | 'end' | null;
 }
 
 interface ReaderPaginationErrorState {
@@ -774,6 +775,41 @@ function readPageWindow(
   };
 }
 
+function readChapterEndPageStartLocation(
+  root: HTMLElement,
+  pageHeight: number,
+  chapterIndex: number,
+  cardColumnCapacity: number,
+): ReaderLocation | null {
+  const markedBlocks = Array.from(root.querySelectorAll<HTMLElement>('[data-reader-block-index]'));
+  const lastBlock = markedBlocks[markedBlocks.length - 1];
+  if (!lastBlock) return null;
+  const blockIndex = Number(lastBlock.dataset.readerBlockIndex);
+  const textElement = lastBlock.querySelector<HTMLElement>('[data-reader-text-block], .reader-text');
+  const endLocation: ReaderLocation = {
+    chapterIndex,
+    blockIndex,
+    textOffset: textElement?.textContent?.length ?? 0,
+  };
+  const tailPage = readAnchorPage(root, pageHeight, chapterIndex, endLocation, cardColumnCapacity, null);
+  if (!tailPage) return null;
+  const { segments } = readRenderedSegmentsAroundAnchor(root, pageHeight, tailPage);
+  const orderedSegments = [...segments].sort((left, right) =>
+    left.startY - right.startY
+    || left.endY - right.endY
+    || left.blockIndex - right.blockIndex
+    || left.startOffset - right.startOffset);
+  const cardTargetKeys = new Set(orderedSegments.flatMap((segment) => segment.selectedTargetKeys ?? []));
+  const pages = buildPreviousReaderPages(
+    orderedSegments,
+    pageHeight,
+    chapterIndex,
+    readCardMetrics(root, cardTargetKeys),
+    cardColumnCapacity,
+  );
+  return pages[pages.length - 1]?.startLocation ?? null;
+}
+
 async function measureStablePageWindow(
   root: HTMLElement,
   pageHeight: number,
@@ -891,6 +927,7 @@ export function useReaderPagination({
   chapterIndex,
   pageHeight,
   anchor,
+  chapterEdge,
 }: UseReaderPaginationOptions): UseReaderPaginationResult {
   const [layout, setLayout] = useState<ReaderPaginationLayout | null>(null);
   const [measurementError, setMeasurementError] = useState<ReaderPaginationErrorState | null>(null);
@@ -1002,7 +1039,13 @@ export function useReaderPagination({
       try {
         measurementStartedKey = measurementKeyRef.current(layoutRef.current);
         const currentLayout = layoutRef.current;
-        const targetAnchor = boundaryRequestRef.current?.anchor ?? anchor;
+        const requestedAnchor = boundaryRequestRef.current?.anchor ?? null;
+        const targetAnchor = requestedAnchor
+          ?? (chapterEdge === 'start'
+            ? null
+            : chapterEdge === 'end'
+              ? readChapterEndPageStartLocation(root, pageHeight, chapterIndex, cardColumnCapacityForRoot(root))
+              : anchor);
         const endBoundary = currentLayout?.layoutKey === layoutKey
           ? currentLayout.pages.find((page) => targetAnchor
             && equalReaderLocations(page.startLocation, targetAnchor))?.endLocation ?? null
@@ -1187,7 +1230,7 @@ export function useReaderPagination({
       window.removeEventListener('resize', scheduleMeasurement);
       if (scheduledFrame !== 0) window.cancelAnimationFrame(scheduledFrame);
     };
-  }, [rootRef, enabled, layoutKey, chapterIndex, pageHeight, anchor]);
+  }, [rootRef, enabled, layoutKey, chapterIndex, pageHeight, anchor, chapterEdge]);
 
   const error = measurementError?.layoutKey === layoutKey ? measurementError.error : null;
   const renderedLayout = internalLayoutIsCompatible ? layout : compatibleInitialLayout ?? layout;
