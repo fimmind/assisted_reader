@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
+  buildPreviousReaderPages,
   buildReaderPages,
   type ReaderPaginationCardMetric,
   type ReaderPaginationLayout,
@@ -716,15 +717,16 @@ function readPageWindow(
     || left.startOffset - right.startOffset);
   const anchorSegmentIndex = orderedSegments.findIndex((segment) =>
     segment.blockIndex === anchorPage.startLocation.blockIndex
-    && segment.startOffset === anchorPage.startLocation.textOffset);
+    && segment.startOffset === anchorPage.startLocation.textOffset
+    && segment.startY === anchorPage.startY);
   if (anchorSegmentIndex < 0) {
     throw readerPaginationMeasurementError(
-      `Measured reader window lost its anchor segment: blockIndex=${anchorPage.startLocation.blockIndex}, textOffset=${anchorPage.startLocation.textOffset}`,
+      `Measured reader window lost its anchor segment: blockIndex=${anchorPage.startLocation.blockIndex}, textOffset=${anchorPage.startLocation.textOffset}, startY=${anchorPage.startY}`,
     );
   }
   const cardTargetKeys = new Set(orderedSegments.flatMap((segment) => segment.selectedTargetKeys ?? []));
   const cardMetrics = readCardMetrics(root, cardTargetKeys);
-  const previousPages = buildReaderPages(
+  const previousPages = buildPreviousReaderPages(
     orderedSegments.slice(0, anchorSegmentIndex),
     pageHeight,
     chapterIndex,

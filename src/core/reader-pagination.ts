@@ -87,8 +87,7 @@ function validateSegment(segment: ReaderPaginationSegment): void {
   }
 }
 
-/** Pack measured lines into pages while reserving measured selected-word card groups. */
-export function buildReaderPages(
+function buildReaderPagesInInputOrder(
   segments: readonly ReaderPaginationSegment[],
   pageHeight: number,
   chapterIndex: number,
@@ -118,15 +117,12 @@ export function buildReaderPages(
     cardOrderByTarget.set(metric.targetKey, cardOrderByTarget.size);
   });
 
-  const orderedSegments = [...segments].sort((left, right) =>
-    left.startY - right.startY
-    || left.endY - right.endY
-    || left.blockIndex - right.blockIndex
-    || left.startOffset - right.startOffset);
   const pages: ReaderPaginationPage[] = [];
   let pageSegments: ReaderPaginationSegment[] = [];
   let pageIssues: ReaderPaginationIssue[] = [];
   let pageCardTargetsByBlock = new Map<number, Set<string>>();
+  let pageStartY: number | null = null;
+  let pageEndY: number | null = null;
   const paragraphCardGap = 8;
   const cardRowGap = 12;
   const cardGroupHeight = (targetKeys: ReadonlySet<string>): number => {
@@ -159,10 +155,15 @@ export function buildReaderPages(
       total + (targetKeys.size > 0 ? cardGroupHeight(targetKeys) + paragraphCardGap : 0), 0);
 
   const finishPage = (): void => {
-    const first = pageSegments[0];
-    const last = pageSegments[pageSegments.length - 1];
+    const orderedPageSegments = [...pageSegments].sort((left, right) =>
+      left.startY - right.startY
+      || left.endY - right.endY
+      || left.blockIndex - right.blockIndex
+      || left.startOffset - right.startOffset);
+    const first = orderedPageSegments[0];
+    const last = orderedPageSegments[orderedPageSegments.length - 1];
     if (!first || !last) return;
-    const blockIndices = [...new Set(pageSegments.map((segment) => segment.blockIndex))];
+    const blockIndices = [...new Set(orderedPageSegments.map((segment) => segment.blockIndex))];
     const groupBlocks = blockIndices.filter((blockIndex) => (pageCardTargetsByBlock.get(blockIndex)?.size ?? 0) > 0);
     const groupHeights = new Map(groupBlocks.map((blockIndex) => {
       const targets = pageCardTargetsByBlock.get(blockIndex);
@@ -181,7 +182,7 @@ export function buildReaderPages(
       offset: displayOffsetByBlock.get(blockIndex) ?? 0,
     }));
     const blockFragments = blockIndices.map((blockIndex) => {
-      const blockSegments = pageSegments.filter((segment) => segment.blockIndex === blockIndex);
+      const blockSegments = orderedPageSegments.filter((segment) => segment.blockIndex === blockIndex);
       const firstBlockSegment = blockSegments[0];
       const lastBlockSegment = blockSegments[blockSegments.length - 1];
       if (!firstBlockSegment || !lastBlockSegment) {
@@ -221,7 +222,15 @@ export function buildReaderPages(
         reservedHeight,
       };
     });
-    const cardTargetKeys = [...pageCardTargetsByBlock.values()].flatMap((targetKeys) => [...targetKeys]);
+    const orderedCardTargetsByBlock = new Map<number, Set<string>>();
+    orderedPageSegments.forEach((segment) => {
+      const targetKeys = orderedCardTargetsByBlock.get(segment.blockIndex) ?? new Set<string>();
+      segment.selectedTargetKeys?.forEach((targetKey) => targetKeys.add(targetKey));
+      orderedCardTargetsByBlock.set(segment.blockIndex, targetKeys);
+    });
+    const cardTargetKeys = blockIndices.flatMap((blockIndex) => [
+      ...(orderedCardTargetsByBlock.get(blockIndex) ?? []),
+    ]);
     const reservedHeight = pageReservedHeight(pageCardTargetsByBlock);
     const textClipHeight = Math.max(...blockFragments.map((fragment) =>
       fragment.endY - first.startY + fragment.displayOffset));
@@ -254,10 +263,11 @@ export function buildReaderPages(
     pageSegments = [];
     pageIssues = [];
     pageCardTargetsByBlock = new Map<number, Set<string>>();
+    pageStartY = null;
+    pageEndY = null;
   };
 
-  orderedSegments.forEach((segment) => {
-    const first = pageSegments[0];
+  segments.forEach((segment) => {
     const nextTargetsByBlock = new Map([...pageCardTargetsByBlock].map(([blockIndex, targetKeys]) => [blockIndex, new Set(targetKeys)]));
     if (segment.selectedTargetKeys?.length) {
       const targetKeys = nextTargetsByBlock.get(segment.blockIndex) ?? new Set<string>();
@@ -265,10 +275,14 @@ export function buildReaderPages(
       nextTargetsByBlock.set(segment.blockIndex, targetKeys);
     }
     const projectedReservedHeight = pageReservedHeight(nextTargetsByBlock);
-    if (first && segment.endY - first.startY + projectedReservedHeight > pageHeight) {
+    const projectedStartY = pageStartY === null ? segment.startY : Math.min(pageStartY, segment.startY);
+    const projectedEndY = pageEndY === null ? segment.endY : Math.max(pageEndY, segment.endY);
+    if (pageSegments.length > 0 && projectedEndY - projectedStartY + projectedReservedHeight > pageHeight) {
       finishPage();
     }
     pageSegments.push(segment);
+    pageStartY = pageStartY === null ? segment.startY : Math.min(pageStartY, segment.startY);
+    pageEndY = pageEndY === null ? segment.endY : Math.max(pageEndY, segment.endY);
     if (segment.selectedTargetKeys?.length) {
       const targetKeys = pageCardTargetsByBlock.get(segment.blockIndex) ?? new Set<string>();
       segment.selectedTargetKeys.forEach((targetKey) => targetKeys.add(targetKey));
@@ -290,6 +304,38 @@ export function buildReaderPages(
   finishPage();
 
   return pages;
+}
+
+/** Pack measured lines into pages while reserving measured selected-word card groups. */
+export function buildReaderPages(
+  segments: readonly ReaderPaginationSegment[],
+  pageHeight: number,
+  chapterIndex: number,
+  cardMetrics: readonly ReaderPaginationCardMetric[],
+  cardColumnCapacity: number,
+): ReaderPaginationPage[] {
+  const orderedSegments = [...segments].sort((left, right) =>
+    left.startY - right.startY
+    || left.endY - right.endY
+    || left.blockIndex - right.blockIndex
+    || left.startOffset - right.startOffset);
+  return buildReaderPagesInInputOrder(orderedSegments, pageHeight, chapterIndex, cardMetrics, cardColumnCapacity);
+}
+
+/** Pack preceding measured lines backward from the anchor to keep the nearest page full. */
+export function buildPreviousReaderPages(
+  segments: readonly ReaderPaginationSegment[],
+  pageHeight: number,
+  chapterIndex: number,
+  cardMetrics: readonly ReaderPaginationCardMetric[],
+  cardColumnCapacity: number,
+): ReaderPaginationPage[] {
+  const reverseOrderedSegments = [...segments].sort((left, right) =>
+    right.startY - left.startY
+    || right.endY - left.endY
+    || right.blockIndex - left.blockIndex
+    || right.startOffset - left.startOffset);
+  return buildReaderPagesInInputOrder(reverseOrderedSegments, pageHeight, chapterIndex, cardMetrics, cardColumnCapacity).reverse();
 }
 
 /** Find the page at or immediately before a canonical reader location. */

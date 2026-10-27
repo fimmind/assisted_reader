@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReaderPages, readerPageIndexForLocation } from '../src/core/reader-pagination.js';
+import { buildPreviousReaderPages, buildReaderPages, readerPageIndexForLocation } from '../src/core/reader-pagination.js';
 import type { ReaderPaginationCardMetric, ReaderPaginationSegment } from '../src/core/reader-pagination.js';
 
 test('pagination keeps wrapped card rows whole when their heights differ', () => {
@@ -36,6 +36,139 @@ test('paragraph lines span consecutive pages without losing canonical offsets', 
   assert.deepEqual(pages.map((page) => [page.startLocation.textOffset, page.endLocation.textOffset]), [[0, 21], [21, 42]]);
   assert.equal(readerPageIndexForLocation(pages, { chapterIndex: 2, blockIndex: 3, textOffset: 21 }), 1);
   assert.equal(readerPageIndexForLocation(pages, { chapterIndex: 3, blockIndex: 3, textOffset: 21 }), null);
+});
+
+test('preceding pages pack backward from the anchor while keeping adjacent offsets', () => {
+  const segments: ReaderPaginationSegment[] = [
+    { kind: 'text-line', blockIndex: 2, startOffset: 20, endOffset: 30, startY: 40, endY: 58 },
+    { kind: 'text-line', blockIndex: 2, startOffset: 30, endOffset: 40, startY: 60, endY: 78 },
+    { kind: 'text-line', blockIndex: 2, startOffset: 40, endOffset: 50, startY: 80, endY: 98 },
+    { kind: 'text-line', blockIndex: 2, startOffset: 50, endOffset: 60, startY: 100, endY: 118 },
+    { kind: 'text-line', blockIndex: 2, startOffset: 60, endOffset: 70, startY: 120, endY: 138 },
+  ];
+
+  const forwardPages = buildReaderPages(segments, 42, 1, [], 1);
+  const previousPages = buildPreviousReaderPages(segments, 42, 1, [], 1);
+  const anchorPage = buildReaderPages([{
+    kind: 'text-line',
+    blockIndex: 2,
+    startOffset: 70,
+    endOffset: 80,
+    startY: 140,
+    endY: 158,
+  }], 42, 1, [], 1)[0];
+
+  assert.deepEqual(forwardPages.map((page) => [page.startLocation.textOffset, page.endLocation.textOffset]), [
+    [20, 40],
+    [40, 60],
+    [60, 70],
+  ]);
+  assert.deepEqual(previousPages.map((page) => [page.startLocation.textOffset, page.endLocation.textOffset]), [
+    [20, 30],
+    [30, 50],
+    [50, 70],
+  ]);
+  assert.deepEqual(previousPages.slice(1).map((page) => page.endLocation.textOffset), [
+    previousPages[2]?.startLocation.textOffset,
+    70,
+  ]);
+  const nearestPreviousPage = previousPages.at(-1);
+  assert.ok(nearestPreviousPage);
+  assert.ok(nearestPreviousPage.endY - nearestPreviousPage.startY <= 42);
+  assert.ok(anchorPage);
+  assert.deepEqual(nearestPreviousPage.endLocation, anchorPage.startLocation);
+});
+
+test('backward packing reserves deduplicated card groups and retains source geometry', () => {
+  const segments: ReaderPaginationSegment[] = [
+    {
+      kind: 'atomic',
+      blockIndex: 4,
+      startOffset: 0,
+      endOffset: 0,
+      startY: 0,
+      endY: 28,
+      blockTopY: -4,
+      blockBottomY: 110,
+    },
+    {
+      kind: 'text-line',
+      blockIndex: 4,
+      startOffset: 0,
+      endOffset: 10,
+      startY: 30,
+      endY: 48,
+      blockTopY: -4,
+      blockBottomY: 110,
+      selectedTargetKeys: ['target-a'],
+    },
+    {
+      kind: 'text-line',
+      blockIndex: 4,
+      startOffset: 10,
+      endOffset: 20,
+      startY: 50,
+      endY: 68,
+      blockTopY: -4,
+      blockBottomY: 110,
+      selectedTargetKeys: ['target-a', 'target-b'],
+    },
+    {
+      kind: 'text-line',
+      blockIndex: 4,
+      startOffset: 20,
+      endOffset: 30,
+      startY: 70,
+      endY: 88,
+      blockTopY: -4,
+      blockBottomY: 110,
+      selectedTargetKeys: ['target-a'],
+    },
+  ];
+  const cardMetrics: ReaderPaginationCardMetric[] = [
+    { targetKey: 'target-a', height: 40 },
+    { targetKey: 'target-b', height: 60 },
+  ];
+
+  const pages = buildPreviousReaderPages(segments, 110, 1, cardMetrics, 2);
+  const forwardPages = buildReaderPages(segments, 110, 1, cardMetrics, 2);
+  const nearestPage = pages.at(-1);
+  const matchingForwardPage = forwardPages.find((page) => (
+    page.startLocation.blockIndex === nearestPage?.startLocation.blockIndex
+    && page.startLocation.textOffset === nearestPage.startLocation.textOffset
+    && page.endLocation.blockIndex === nearestPage.endLocation.blockIndex
+    && page.endLocation.textOffset === nearestPage.endLocation.textOffset
+  ));
+
+  assert.ok(nearestPage);
+  assert.equal(nearestPage.startLocation.textOffset, 10);
+  assert.equal(nearestPage.endLocation.textOffset, 30);
+  assert.deepEqual(nearestPage.cardGroups.map((group) => [group.targetKeys, group.reservedHeight]), [
+    [['target-a', 'target-b'], 60],
+  ]);
+  assert.equal(nearestPage.reservedCardHeight, 68);
+  assert.ok(nearestPage.presentationHeight <= 110);
+  assert.ok(matchingForwardPage);
+  assert.deepEqual({
+    cardTargetKeys: nearestPage.cardTargetKeys,
+    cardGroups: nearestPage.cardGroups,
+    blockDisplayOffsets: nearestPage.blockDisplayOffsets,
+    blockFragments: nearestPage.blockFragments,
+    textClipHeight: nearestPage.textClipHeight,
+    presentationHeight: nearestPage.presentationHeight,
+  }, {
+    cardTargetKeys: matchingForwardPage.cardTargetKeys,
+    cardGroups: matchingForwardPage.cardGroups,
+    blockDisplayOffsets: matchingForwardPage.blockDisplayOffsets,
+    blockFragments: matchingForwardPage.blockFragments,
+    textClipHeight: matchingForwardPage.textClipHeight,
+    presentationHeight: matchingForwardPage.presentationHeight,
+  });
+  assert.deepEqual(pages[0]?.issues, []);
+  assert.equal(pages[0]?.blockFragments[0]?.blockTopY, -4);
+  assert.equal(pages[0]?.blockFragments[0]?.blockBottomY, 110);
+  assert.equal(pages[0]?.startLocation.textOffset, 0);
+  assert.equal(pages[0]?.blockFragments[0]?.startY, 0);
 });
 
 test('a selected word at the bottom of a page moves with its card tray', () => {

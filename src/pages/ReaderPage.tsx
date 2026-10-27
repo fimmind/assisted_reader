@@ -1348,7 +1348,6 @@ function readerTargetDomKey(target: DefinitionTarget, sourceParagraphIndex: numb
 function readerPaginationLayoutKey(
   book: ImportedBook,
   profileId: string | null,
-  profileKey: string,
   chapterIndex: number,
   viewportWidth: number,
   viewportHeight: number,
@@ -1360,7 +1359,6 @@ function readerPaginationLayoutKey(
     book.id,
     book.updatedAt,
     profileId,
-    profileKey,
     chapterIndex,
     viewportWidth,
     viewportHeight,
@@ -1444,6 +1442,8 @@ export default function ReaderPage() {
   const pageAnchorLocationRef = useRef<ReaderLocation | null>(null);
   const pendingPageAnchorRef = useRef<ReaderLocation | null>(null);
   const pageRefreshAnchorRef = useRef<PageRefreshAnchor | null>(null);
+  const keepRevealedPageDuringRefreshRef = useRef(false);
+  const refreshPageLayoutKeyRef = useRef('');
   const paginationInertStateRef = useRef(new WeakMap<HTMLElement, { inert: boolean; ariaHidden: string | null }>());
   const persistCurrentChapterProgressRef = useRef<(force: boolean) => void>(() => {});
   const currentLocationRef = useRef<ReaderLocation | null>(null);
@@ -1470,6 +1470,7 @@ export default function ReaderPage() {
   const activePreparedOpeningRef = useRef<PreparedChapterOpening | null>(null);
   const instantChapterTransitionRef = useRef<PreparedChapterOpening | null>(null);
   const pageModeWasRevealedRef = useRef(false);
+  const pageModeReadyRef = useRef(false);
   const previousReadingModeRef = useRef(settings.readingMode);
   const chapterPrerenderControllersRef = useRef<Map<number, AbortController>>(new Map());
   const [, setNextChapterPreloadRevision] = useState(0);
@@ -1511,7 +1512,6 @@ export default function ReaderPage() {
     ? readerPaginationLayoutKey(
       book,
       readerProfileIdRef.current,
-      paginationProfileKey,
       paginationChapterIndex,
       viewportSize.width,
       viewportSize.height,
@@ -1586,6 +1586,7 @@ export default function ReaderPage() {
     && preparedActiveChapter.bookId === book?.id
     && preparedActiveChapter.bookUpdatedAt === book?.updatedAt
     && preparedActiveChapter.layoutKey === paginationLayoutKey
+    && preparedActiveChapter.profileKey === paginationProfileKey
     && preparedActiveChapter.analysisComplete
     && preparedActiveChapter.previewError === null
     ? preparedActiveChapter.layout
@@ -1636,10 +1637,23 @@ export default function ReaderPage() {
     && pagination.isReady
     && initialViewportReady
     && pendingPageTurns === 0
-    && openingPageMeasurementKey !== null
-    && (pageModeWasRevealedRef.current
-      || pagination.measuredMeasurementKey === openingPageMeasurementKey)
+    && ((openingPageMeasurementKey !== null
+      && (pageModeWasRevealedRef.current
+        || pagination.measuredMeasurementKey === openingPageMeasurementKey))
+      || keepRevealedPageDuringRefreshRef.current)
     && paginationErrorMessage === null;
+
+  useLayoutEffect(() => {
+    if (keepRevealedPageDuringRefreshRef.current
+      && paginationLayoutKey !== refreshPageLayoutKeyRef.current) {
+      keepRevealedPageDuringRefreshRef.current = false;
+    }
+    if (keepRevealedPageDuringRefreshRef.current
+      && openingPageMeasurementKey !== null
+      && pagination.measuredMeasurementKey === openingPageMeasurementKey) {
+      keepRevealedPageDuringRefreshRef.current = false;
+    }
+  }, [openingPageMeasurementKey, pagination.measuredMeasurementKey, paginationLayoutKey]);
 
   useLayoutEffect(() => {
     const chapter = book?.chapters[paginationChapterIndex];
@@ -1648,7 +1662,8 @@ export default function ReaderPage() {
       || currentPaginationLayout.chapterIndex !== paginationChapterIndex) return;
     const chapterIndex = paginationChapterIndex;
     const existing = preparedChapterOpeningsRef.current.get(chapterIndex);
-    const compatibleExisting = existing?.layoutKey === paginationLayoutKey ? existing : undefined;
+    const compatibleExisting = existing?.layoutKey === paginationLayoutKey
+      && existing.profileKey === paginationProfileKey ? existing : undefined;
     const scores = compatibleExisting?.scores ?? activePreparedOpeningRef.current?.scores ?? new Map<string, ScoredDefinition>();
     const prepared: PreparedChapterOpening = {
       bookId: book.id,
@@ -1698,6 +1713,7 @@ export default function ReaderPage() {
   ]);
 
   useLayoutEffect(() => {
+    pageModeReadyRef.current = pageModeReady;
     if (pageModeReady) pageModeWasRevealedRef.current = true;
   }, [pageModeReady]);
 
@@ -1711,6 +1727,8 @@ export default function ReaderPage() {
     pendingPageTurnsRef.current = 0;
     setPendingPageTurns(0);
     pageRefreshAnchorRef.current = null;
+    keepRevealedPageDuringRefreshRef.current = false;
+    pageModeReadyRef.current = false;
     analysisRunIdRef.current += 1;
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
@@ -1736,6 +1754,8 @@ export default function ReaderPage() {
 
   const openReaderChapter = useCallback((nextBook: ImportedBook, entryDirection: ReaderChapterEntryDirection): void => {
     const currentBook = bookRef.current;
+    const profile = getActiveProfile(loadProfileState());
+    const profileKey = JSON.stringify(profile);
     const currentLayout = paginationLayoutRef.current;
     const currentChapterIndex = currentBook ? clampChapterNumber(currentBook, currentBook.currentChapter) - 1 : -1;
     const capturedLayoutKey = paginationLayoutKeyRef.current;
@@ -1749,7 +1769,8 @@ export default function ReaderPage() {
       && candidate.bookId === currentBook.id
       && candidate.bookUpdatedAt === currentBook.updatedAt
       && candidate.chapterIndex === currentChapterIndex
-      && candidate.layoutKey === capturedLayoutKey);
+      && candidate.layoutKey === capturedLayoutKey
+      && candidate.profileKey === profileKey);
     if (settingsRef.current.readingMode === 'page'
       && currentBook
       && currentLayout
@@ -1764,7 +1785,6 @@ export default function ReaderPage() {
 
     const chapterIndex = clampChapterNumber(nextBook, nextBook.currentChapter) - 1;
     const prepared = preparedChapterOpeningsRef.current.get(chapterIndex) ?? null;
-    const profile = getActiveProfile(loadProfileState());
     const chapter = nextBook.chapters[chapterIndex];
     const currentPageHeight = Math.max(1, window.innerHeight - (fullscreenPageMode
       ? Math.ceil(settingsRef.current.fontSize * (settingsRef.current.lineSpacing === 'Compact'
@@ -1775,7 +1795,6 @@ export default function ReaderPage() {
       ? readerPaginationLayoutKey(
         nextBook,
         readerProfileIdRef.current,
-        JSON.stringify(profile),
         chapterIndex,
         window.innerWidth,
         window.innerHeight,
@@ -1998,23 +2017,31 @@ export default function ReaderPage() {
     const canReusePublishedAnalysis = pageAnalysisContextRef.current === analysisContext;
     pageAnalysisContextRef.current = analysisContext;
     const currentPaginationLayout = paginationLayoutRef.current;
-    if (mode === 'preserve' && !pageRefreshAnchorRef.current
+    if (mode === 'preserve'
       && currentPaginationLayout?.layoutKey === paginationLayoutKeyRef.current
       && currentPaginationLayout.chapterIndex === selectedBook.currentChapter - 1) {
-      const currentPage = currentPaginationLayout.pages[currentPageIndexRef.current];
-      const location = pendingPageAnchorRef.current
-        ?? currentPage?.startLocation
-        ?? pageAnchorLocationRef.current
-        ?? currentLocationRef.current;
-      if (location) {
-        pageRefreshAnchorRef.current = {
-          location,
-          layout: currentPaginationLayout,
-          settledMeasurementRevision: paginationSettledMeasurementRevisionRef.current,
-        };
+      if (!canReusePublishedAnalysis
+        && settingsRef.current.readingMode === 'page' && pageModeReadyRef.current) {
+        keepRevealedPageDuringRefreshRef.current = true;
+        refreshPageLayoutKeyRef.current = currentPaginationLayout.layoutKey;
+      }
+      if (!pageRefreshAnchorRef.current) {
+        const currentPage = currentPaginationLayout.pages[currentPageIndexRef.current];
+        const location = pendingPageAnchorRef.current
+          ?? currentPage?.startLocation
+          ?? pageAnchorLocationRef.current
+          ?? currentLocationRef.current;
+        if (location) {
+          pageRefreshAnchorRef.current = {
+            location,
+            layout: currentPaginationLayout,
+            settledMeasurementRevision: paginationSettledMeasurementRevisionRef.current,
+          };
+        }
       }
     } else if (mode === 'reset') {
       pageRefreshAnchorRef.current = null;
+      keepRevealedPageDuringRefreshRef.current = false;
     }
     const currentRunId = analysisRunIdRef.current + 1;
     analysisRunIdRef.current = currentRunId;
@@ -2688,7 +2715,6 @@ export default function ReaderPage() {
     const layoutKey = readerPaginationLayoutKey(
       selectedBook,
       readerProfileIdRef.current,
-      profileKey,
       chapterIndex,
       viewportSize.width,
       viewportSize.height,
@@ -2709,8 +2735,8 @@ export default function ReaderPage() {
       }
     }
     const existing = preparedChapterOpeningsRef.current.get(chapterIndex);
-    if (existing?.layoutKey === layoutKey && existing.analysisComplete) return;
-    const entry: PreparedChapterOpening = existing?.layoutKey === layoutKey
+    if (existing?.layoutKey === layoutKey && existing.profileKey === profileKey && existing.analysisComplete) return;
+    const entry: PreparedChapterOpening = existing?.layoutKey === layoutKey && existing.profileKey === profileKey
       ? existing
       : {
         bookId: selectedBook.id,
@@ -2905,6 +2931,7 @@ export default function ReaderPage() {
   }, [settings.readingMode]);
 
   const navigateToReaderLocation = useCallback((rawLocation: ReaderLocation, pushHistory: boolean): void => {
+    keepRevealedPageDuringRefreshRef.current = false;
     const currentBook = bookRef.current;
     if (!currentBook) return;
     const location = resolveReaderLocation(currentBook, rawLocation);
@@ -3014,6 +3041,7 @@ export default function ReaderPage() {
   };
 
   const navigatePage = useCallback((delta: -1 | 1): void => {
+    keepRevealedPageDuringRefreshRef.current = false;
     const layout = paginationLayoutRef.current;
     const activeChapterIndex = bookRef.current ? bookRef.current.currentChapter - 1 : -1;
     if (pendingPageTurnsRef.current !== 0 || !pagination.isReady || !layout
@@ -4187,10 +4215,10 @@ export default function ReaderPage() {
         const chapterIndex = chapterNumber - 1;
         const entry = preparedChapterOpeningsRef.current.get(chapterIndex);
         if (!entry || entry.bookId !== book.id || entry.bookUpdatedAt !== book.updatedAt
+          || entry.profileKey !== paginationProfileKey
           || entry.layoutKey !== readerPaginationLayoutKey(
             book,
             readerProfileIdRef.current,
-            paginationProfileKey,
             chapterIndex,
             viewportSize.width,
             viewportSize.height,
