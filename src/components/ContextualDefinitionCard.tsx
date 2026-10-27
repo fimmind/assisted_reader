@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ComponentProps, ReactNode } from 'react';
 import { filterWordNetEntry, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
-import { getWsdModelStatus, promoteWsdWordSenses, scoreWordSenses, subscribeWsdModelStatus } from '@/core/wsd-runtime';
+import { getCachedWordSenseScores, getWsdModelStatus, promoteWsdWordSenses, scoreWordSenses, subscribeWsdModelStatus } from '@/core/wsd-runtime';
 import type { ReaderSettings } from '@/core/types';
 import { WordDefinitionCard } from './WordDefinitionCard';
 
@@ -77,7 +77,7 @@ export function ContextualDefinitionCard({
   const hasWordNetChoices = wsdEnabled && definitionStatus === 'ready' && glosses.length > 1;
   let scoringContext: WsdContext | null = null;
   let contextError: string | null = null;
-  if (hasWordNetChoices && modelPhase === 'ready') {
+  if (hasWordNetChoices) {
     if (!context) {
       contextError = `Missing WSD context for ${definition.word}`;
     } else {
@@ -96,7 +96,10 @@ export function ContextualDefinitionCard({
   }
   const requestKey = scoringContext ? JSON.stringify([wsdMode, scoringContext, definition.word, glosses]) : '';
   const matchingScores = scored?.key === requestKey ? scored : preparedScores?.key === requestKey ? preparedScores : null;
-  const readyScores = hasWordNetChoices && modelPhase === 'ready' ? matchingScores?.scores ?? null : null;
+  const cachedScores = scoringContext && wsdMode !== 'none'
+    ? getCachedWordSenseScores(wsdMode, scoringContext, definition)
+    : null;
+  const readyScores = hasWordNetChoices ? matchingScores?.scores ?? cachedScores : null;
   const shouldScore = hasWordNetChoices && modelPhase === 'ready' && !readyScores && !contextError;
   useEffect(() => {
     if (!wsdEnabled) {
@@ -104,6 +107,7 @@ export function ContextualDefinitionCard({
       return;
     }
     if (!hasWordNetChoices || readyScores || wsdPriority !== 'card' || !getPriorityTarget || priorityTargetIndex === undefined) {
+      setNearViewport(false);
       return;
     }
     const target = getPriorityTarget(priorityTargetIndex);
@@ -160,7 +164,7 @@ export function ContextualDefinitionCard({
   const visibleDefinition = readyScores
     ? filterWordNetEntry(definition, readyScores, wsdMargin)
     : definition;
-  const statusMessage = hasWordNetChoices && modelPhase === 'error'
+  const statusMessage = hasWordNetChoices && modelPhase === 'error' && !readyScores
     ? 'WSD unavailable. Showing all definitions; retry in Settings.'
     : currentError || contextError
       ? 'WSD could not filter this word. Showing all definitions.'

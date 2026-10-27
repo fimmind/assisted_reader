@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Tokenizer } from '@huggingface/tokenizers';
+import { JSDOM } from 'jsdom';
 import {
   combineDictionaryEntries, createLazyWordNet, createLazyWiktionaryLexicon, createLexicon,
   resolveLexiconBucketFileName, resolveLexiconEntry, resolveLexiconPronunciations,
@@ -14,6 +15,7 @@ import type { LexiconEntry } from '../src/core/types.js';
 import { filterWordNetEntry, fitNestedWsdContext, paragraphWindowForWsd, sentenceWindowForWsd, wordNetDefinitionIds, wordNetGlosses } from '../src/core/wsd-filter.js';
 import type { WsdContext } from '../src/core/wsd-filter.js';
 import { splitSentenceSpans } from '../src/core/nlp.js';
+import { getCachedWordSenseScores, getWsdModelStatus } from '../src/core/wsd-runtime.js';
 
 function loadWordNetEntry(word: string): WordNetEntry {
   const fileName = resolveLexiconBucketFileName(word);
@@ -214,6 +216,36 @@ test('nested WSD preserves passage and parent order, retaining nearest parents w
   assert.equal(limited.text, `${context.outerContexts?.[0]}\n\n${context.text}`);
   assert.equal(limited.text.slice(limited.start, limited.end), 'body');
   assert.equal(context.start, 2);
+});
+
+test('persisted WSD scores hydrate before model readiness and require matching mode and context', () => {
+  const entry: LexiconEntry = {
+    word: 'cache-wsd-case',
+    senses: [{ partOfSpeech: 'noun', ipa: '', source: 'wordnet',
+      definitions: ['A first sense.', 'A second sense.'], definitionIds: ['cache.1', 'cache.2'] }],
+  };
+  const context: WsdContext = { text: 'The target context.', start: 4, end: 10 };
+  const mode = 'sayedshaun';
+  const modelIdentity = '54e41c09c61ae8bd60c62e40bf483141c49ce0d3:684639e685d709b7ece92fb2f41c1c811b7fe2ec316403b82082130d98d0c11a';
+  const key = JSON.stringify([mode, modelIdentity, context, entry.word,
+    ['A first sense.', 'A second sense.'], ['cache.1', 'cache.2']]);
+  const dom = new JSDOM('', { url: 'https://reader.test/' });
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: dom.window.localStorage });
+  try {
+    localStorage.setItem('easeword-wsd-score-cache-v1', JSON.stringify([{ key, scores: [0.9, 0.1] }]));
+    assert.notEqual(getWsdModelStatus().phase, 'ready');
+    assert.deepEqual(getCachedWordSenseScores(mode, context, entry), [0.9, 0.1]);
+    assert.equal(getCachedWordSenseScores(mode, { ...context, outerContexts: ['Different passage.'] }, entry), null);
+    assert.equal(getCachedWordSenseScores('glite-lens', context, entry), null);
+  } finally {
+    if (previousStorage) {
+      Object.defineProperty(globalThis, 'localStorage', previousStorage);
+    } else {
+      Reflect.deleteProperty(globalThis, 'localStorage');
+    }
+    dom.window.close();
+  }
 });
 
 test('nested WSD keeps a late target when its own definition exceeds the budget', () => {

@@ -64,6 +64,8 @@ export interface ReaderPaginationLayout {
   signature: string;
   pageHeight: number;
   pages: ReaderPaginationPage[];
+  hasPreviousPages?: boolean;
+  hasNextPages?: boolean;
 }
 
 function compareLocations(left: ReaderLocation, right: ReaderLocation): number {
