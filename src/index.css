@@ -230,36 +230,3 @@
   border-bottom: 2px solid hsl(var(--primary));
   font-weight: 500;
 }
-
-.reader-page-text-clip {
-  min-width: 0;
-}
-
-.reader-page-card-measurements {
-  position: absolute;
-  top: 0;
-  left: -10000px;
-  right: auto;
-  width: 100%;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.reader-page-card-group [data-definition-card="true"][data-definition-height-limited="true"],
-.reader-page-card-measurements [data-definition-card="true"][data-definition-height-limited="true"] {
-  max-height: var(--reader-page-card-height);
-}
-
-.reader-page-content [data-reader-text-block],
-.reader-page-content .unknown-word {
-  overflow-wrap: anywhere;
-}
-
-.reader-page-content .unknown-word {
-  max-width: 100%;
-}
-
-.reader-page-content img {
-  max-height: max(1px, calc(var(--reader-page-height) - 4px)) !important;
-  object-fit: contain;
-}

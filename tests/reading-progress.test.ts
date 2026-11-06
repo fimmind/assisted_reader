@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { deleteBookById, getBookById, listBooks, upsertBook } from '../src/core/books-store.js';
-import { READING_PROGRESS_STORAGE_KEY } from '../src/core/constants.js';
-import { createProfile, deleteProfile, getActiveProfile, loadProfileState, resetProfileObservations, setActiveProfile } from '../src/core/profile-store.js';
+import { DEFAULT_READER_SETTINGS, READING_PROGRESS_STORAGE_KEY, SETTINGS_STORAGE_KEY } from '../src/core/constants.js';
+import { createProfile, deleteProfile, getActiveProfile, loadProfileState, loadReaderSettings, resetProfileObservations, setActiveProfile } from '../src/core/profile-store.js';
 import { saveBookReadingProgress, withBookReadingProgress } from '../src/core/reading-progress-store.js';
 import { createReaderBookmark, listReaderBookmarks, renameReaderBookmark } from '../src/core/reader-bookmarks.js';
 import type { ImportedBook } from '../src/core/types.js';
@@ -72,11 +72,17 @@ test('shared books retain independent positions across profile switches, reloads
       currentChapter: 1,
       currentChapterProgress: 0.01,
       location: { chapterIndex: 99, blockIndex: 99, textOffset: 99 },
-      pagePosition: { layoutKey: 'layout-signature', pageIndex: 4 },
     });
+    const legacyProgressStorage = localStorage.getItem(READING_PROGRESS_STORAGE_KEY);
+    assert.ok(legacyProgressStorage);
+    const legacyProgress = JSON.parse(legacyProgressStorage) as {
+      byProfile: Record<string, Record<string, Record<string, unknown>>>;
+    };
+    legacyProgress.byProfile[firstId][book.id].pagePosition = { layoutKey: 'old-layout', pageIndex: 4 };
+    localStorage.setItem(READING_PROGRESS_STORAGE_KEY, JSON.stringify(legacyProgress));
     const canonicalReload = withBookReadingProgress(storedBook, firstId);
     assert.deepEqual(canonicalReload.location, { chapterIndex: 2, blockIndex: 0, textOffset: 14 });
-    assert.deepEqual(canonicalReload.pagePosition, { layoutKey: 'layout-signature', pageIndex: 4 });
+    assert.equal('pagePosition' in canonicalReload, false);
     assert.equal(canonicalReload.currentChapter, 3);
     assert.equal(canonicalReload.currentChapterProgress, 1);
     assert.equal(withBookReadingProgress(storedBook, secondId).currentChapter, 3);
@@ -114,15 +120,30 @@ test('shared books retain independent positions across profile switches, reloads
     assert.throws(() => saveBookReadingProgress(firstId, book.id, {
       currentChapter: 1, currentChapterProgress: Number.NaN,
     }), RangeError);
-    assert.throws(() => saveBookReadingProgress(firstId, book.id, {
-      currentChapter: 1,
-      currentChapterProgress: 0,
-      pagePosition: { layoutKey: '', pageIndex: -1 },
-    }), RangeError);
     localStorage.setItem(READING_PROGRESS_STORAGE_KEY, '{broken');
     assert.throws(() => loadProfileState(), /Saved reading progress is invalid JSON/);
     localStorage.setItem(READING_PROGRESS_STORAGE_KEY, serialized);
     assert.equal(withBookReadingProgress(storedBook, firstId).currentChapterProgress, 0.9);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test('legacy pagination settings are ignored and removed when settings load', () => {
+  const dom = new JSDOM('', { url: 'https://reader.test/' });
+  globalThis.localStorage = dom.window.localStorage;
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
+      ...DEFAULT_READER_SETTINGS,
+      readingMode: 'page',
+      fullscreenPageMode: true,
+    }));
+
+    const settings = loadReaderSettings();
+    assert.equal('readingMode' in settings, false);
+    assert.equal('fullscreenPageMode' in settings, false);
+    assert.equal('readingMode' in JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) ?? '{}'), false);
+    assert.equal('fullscreenPageMode' in JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) ?? '{}'), false);
   } finally {
     dom.window.close();
   }

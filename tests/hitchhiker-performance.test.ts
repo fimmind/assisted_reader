@@ -102,8 +102,6 @@ test("Hitchhiker analysis fast path stays below 100ms", () => {
   const model = loadVocabularyModelFromCsv();
   const histogram = loadHitchhikerHistogram();
   const settings: ReaderSettings = {
-    readingMode: 'scroll',
-    fullscreenPageMode: false,
     fontSize: 18,
     lineSpacing: 'Normal',
     fontChoice: 'Serif',

@@ -26,7 +26,7 @@ Below, in the main body, there is a simple library screen. Every book is represe
 
 When the user clicks on a book in the Library screen, the contents of the book open in the reader screen
 
-The UI is minimal. There is a hidable top-bar with dedicated buttons for reader settings, bookmarking, assistance toggle, etc. The reader settings are the typical setting for a reader: font size, spacing, pagination, etc.
+The UI is minimal. There is a hidable top-bar with dedicated buttons for reader settings, bookmarking, assistance toggle, etc. The reader settings are the typical setting for a reader: font size, spacing, and text width. Reading uses continuous scrolling; definition cards load near the viewport.
 
 The text is displayed centered in the page. For every paragraph, the system identifies the list of words that are unknown by the user, picks up to 2 words which are estimated to be the most important (the exact upper bound for the number of displayed words is adjustable in the settings), highlights them and displays their definition next to the paragraph. The rest of the unknown words are only highlighted and their definition is only displayed when the user clicks on them. On larger screens the definitions are displayed on the right, in a separate dedicated column. The definition cards should align vertically with the corresponding paragraph where possible. On smaller mobile screens the definition cards are displayed right below the corresponding paragraph
 

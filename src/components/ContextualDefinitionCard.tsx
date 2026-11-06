@@ -21,10 +21,9 @@ interface ContextualDefinitionCardProps extends ComponentProps<typeof WordDefini
   pendingIndicator?: ReactNode;
   onWsdSettled?: () => void;
   onReadinessChange?: (ready: boolean) => void;
-  preparedScores?: ScoredDefinition;
 }
 
-export interface ScoredDefinition {
+interface ScoredDefinition {
   key: string;
   scores: number[];
 }
@@ -56,7 +55,6 @@ export function ContextualDefinitionCard({
   pendingIndicator,
   onWsdSettled,
   onReadinessChange,
-  preparedScores,
   definition,
   definitionStatus,
   ...cardProps
@@ -95,7 +93,7 @@ export function ContextualDefinitionCard({
     }
   }
   const requestKey = scoringContext ? JSON.stringify([wsdMode, scoringContext, definition.word, glosses]) : '';
-  const matchingScores = scored?.key === requestKey ? scored : preparedScores?.key === requestKey ? preparedScores : null;
+  const matchingScores = scored?.key === requestKey ? scored : null;
   const cachedScores = scoringContext && wsdMode !== 'none'
     ? getCachedWordSenseScores(wsdMode, scoringContext, definition)
     : null;

@@ -1,9 +1,9 @@
 import {
-  createElement, memo, useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo,
+  createElement, memo, useState, useEffect, useRef, useLayoutEffect, useCallback,
 } from 'react';
-import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
-import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2, List, BookmarkPlus, CornerUpLeft, Maximize2, Minimize2 } from 'lucide-react';
+import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2, List, BookmarkPlus, CornerUpLeft } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Slider } from '@/components/ui/slider';
@@ -12,14 +12,12 @@ import { Button } from '@/components/ui/button';
 import { useSettings } from '@/hooks/useSettings';
 import { useTheme } from '@/components/ThemeProvider';
 import { ContextualDefinitionCard } from '@/components/ContextualDefinitionCard';
-import type { ScoredDefinition } from '@/components/ContextualDefinitionCard';
-import { WordDefinitionCard } from '@/components/WordDefinitionCard';
 import { StudyFlow } from '@/components/StudyFlow';
 import { ReaderVocabularyTestOnboarding } from '@/components/ReaderVocabularyTestOnboarding';
 import type { DefinitionTextSelection, DefinitionWordClick } from '@/components/WordDefinitionCard';
-import { marginForReductionLevel, paragraphWindowForWsd, sentenceWindowForWsd, wordNetGlosses } from '@/core/wsd-filter';
+import { marginForReductionLevel, paragraphWindowForWsd, sentenceWindowForWsd } from '@/core/wsd-filter';
 import type { WsdContext } from '@/core/wsd-filter';
-import { getCachedWordSenseScores, scoreWordSenses, startWsdModel, stopWsdModel, waitForWsdModelReady } from '@/core/wsd-runtime';
+import { startWsdModel, stopWsdModel } from '@/core/wsd-runtime';
 import { cn } from '@/lib/utils';
 import { deleteBookById, getBookById, listBooks } from '@/core/books-store';
 import { saveBookReadingProgress, withBookReadingProgress } from '@/core/reading-progress-store';
@@ -32,10 +30,7 @@ import {
   resolveReaderLocation,
   restoreReaderLocation,
 } from '@/core/reader-location';
-import { readerPageIndexForLocation } from '@/core/reader-pagination';
-import type { ReaderPaginationLayout, ReaderPaginationPage } from '@/core/reader-pagination';
 import { ReaderNavigationSheet } from '@/components/ReaderNavigationSheet';
-import { useReaderPagination } from '@/hooks/useReaderPagination';
 import { WORD_RE } from '@/core/constants';
 import { createFallbackLexiconEntry, loadLexicon, resolveLexiconEntry } from '@/core/lexicon';
 import {
@@ -58,14 +53,12 @@ import type { DefinitionLookupCandidate } from '@/core/definition-target';
 import type { ChapterAnalyzer, LexicalAnalysisCache } from '@/core/reader-analysis';
 import type { StudyTextScope } from '@/core/study';
 import type {
-  BookChapter,
   DefinitionTarget,
   ImportedBook,
   LexiconEntry,
   ParagraphAnalysis,
   PartOfSpeech,
   ReaderInlineMark,
-  ReaderContentBlock,
   ReaderBookmark,
   ReaderParagraphBlock,
   ReaderLocation,
@@ -74,16 +67,6 @@ import type {
   UserProfile,
   VocabularyModel,
 } from '@/core/types';
-
-/** Return a prepared page only when its measured text actually contains the location. */
-function preparedPageIndexForLocation(pages: readonly ReaderPaginationPage[], location: ReaderLocation): number | null {
-  const index = readerPageIndexForLocation(pages, location);
-  if (index === null) return null;
-  const end = pages[index].endLocation;
-  return location.blockIndex < end.blockIndex
-    || (location.blockIndex === end.blockIndex && location.textOffset <= end.textOffset)
-    ? index : null;
-}
 
 function clampChapterNumber(book: ImportedBook, chapterNumber: number | undefined): number {
   if (typeof chapterNumber !== 'number' || !Number.isFinite(chapterNumber)) {
@@ -138,27 +121,6 @@ function lastLinearReaderLocation(book: ImportedBook): ReaderLocation {
   return { chapterIndex, blockIndex: Math.max(0, blocks.length - 1), textOffset: 0 };
 }
 
-function lastReaderLocationInChapter(book: ImportedBook, chapterIndex: number): ReaderLocation {
-  const chapter = book.chapters[chapterIndex];
-  if (!chapter) return { chapterIndex, blockIndex: 0, textOffset: 0 };
-  return lastReaderLocationForChapter(chapter, chapterIndex);
-}
-
-function lastReaderLocationForChapter(chapter: BookChapter, chapterIndex: number): ReaderLocation {
-  const blocks = readerBlocksForChapter(chapter.paragraphs, chapter.readerBlocks);
-  for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
-    const block = blocks[blockIndex];
-    if (block.type === 'paragraph') {
-      return {
-        chapterIndex,
-        blockIndex,
-        textOffset: chapter.paragraphs[block.paragraphIndex]?.length ?? 0,
-      };
-    }
-  }
-  return { chapterIndex, blockIndex: Math.max(0, blocks.length - 1), textOffset: 0 };
-}
-
 function bookmarkLabelAtLocation(book: ImportedBook, location: ReaderLocation): string {
   const chapter = book.chapters[location.chapterIndex];
   if (!chapter) return `Chapter ${location.chapterIndex + 1}`;
@@ -193,43 +155,6 @@ interface ReaderResources {
   lexicalAnalysisCache: LexicalAnalysisCache;
 }
 
-type ReaderChapterEdge = 'opening' | 'ending';
-
-interface PreparedChapterPageWindow {
-  direction: ReaderChapterEdge;
-  layout: ReaderPaginationLayout | null;
-  assetsLayoutSignature: string | null;
-  contentRevision: number;
-  measuredContentRevision: number;
-  requiredParagraphIndexes: Set<number>;
-  analysisComplete: boolean;
-  cardPreloadComplete: boolean;
-  revision: number;
-  previewError: Error | null;
-}
-
-interface PreparedChapterOpening {
-  bookId: string;
-  bookUpdatedAt: string;
-  chapterIndex: number;
-  chapter: BookChapter;
-  layoutKey: string;
-  settingsKey: string;
-  profileKey: string;
-  analyses: Map<number, ParagraphAnalysis>;
-  scores: Map<string, ScoredDefinition>;
-  readyCards: Set<string>;
-  analysisComplete: boolean;
-  cardPreloadComplete: boolean;
-  viewportWidth: number;
-  viewportHeight: number;
-  layout: ReaderPaginationLayout | null;
-  pageWindows: Map<ReaderChapterEdge, PreparedChapterPageWindow>;
-  previewError: Error | null;
-}
-
-type PreparedCardReadinessChange = (paragraphIndex: number, targetKey: string, ready: boolean) => void;
-
 interface WordPopupState {
   id: number;
   lookupCandidates: DefinitionLookupCandidate[];
@@ -260,12 +185,6 @@ interface PopupAnchorRect {
   left: number;
 }
 
-interface PageSwipeStart {
-  pointerId: number;
-  x: number;
-  y: number;
-}
-
 interface ReaderActivityIndicatorProps {
   ariaLabel: string;
   testId: string;
@@ -275,8 +194,6 @@ interface ReaderParagraphTextProps {
   analysis: ParagraphAnalysis;
   block: ReaderParagraphBlock;
   assistanceEnabled: boolean;
-  includeDocumentIds: boolean;
-  loadingImagesEager: boolean;
   sourceParagraphIndex: number;
   visibleParagraphIndex: number;
   onElementChange: (visibleParagraphIndex: number, element: HTMLElement | null) => void;
@@ -294,14 +211,7 @@ interface ParagraphWordClick {
   start: number;
 }
 
-interface PageRefreshAnchor {
-  location: ReaderLocation;
-  layout: ReaderPaginationLayout;
-  settledMeasurementRevision: number;
-}
-
 type AnalysisRefreshMode = 'reset' | 'preserve';
-type ReaderChapterEntryDirection = 'first' | 'last' | 'anchor' | null;
 
 function contextForCard(analysis: ParagraphAnalysis, target: DefinitionTarget): WsdContext | null {
   const key = definitionTargetKey(target);
@@ -310,142 +220,6 @@ function contextForCard(analysis: ParagraphAnalysis, target: DefinitionTarget): 
   return token
     ? { text: analysis.paragraphText, start: token.start, end: token.end }
     : null;
-}
-
-function createPreparedChapterPageWindow(direction: ReaderChapterEdge): PreparedChapterPageWindow {
-  return {
-    direction,
-    layout: null,
-    assetsLayoutSignature: null,
-    contentRevision: 0,
-    measuredContentRevision: 0,
-    requiredParagraphIndexes: new Set(),
-    analysisComplete: false,
-    cardPreloadComplete: false,
-    revision: 0,
-    previewError: null,
-  };
-}
-
-function paragraphIndexesForEdgeWindow(
-  chapter: BookChapter,
-  layout: ReaderPaginationLayout,
-  direction: ReaderChapterEdge,
-): Set<number> {
-  const blocks = readerBlocksForChapter(chapter.paragraphs, chapter.readerBlocks);
-  const pages = direction === 'opening'
-    ? layout.pages.slice(0, PRELOADED_EDGE_PAGE_COUNT)
-    : layout.pages.slice(-PRELOADED_EDGE_PAGE_COUNT);
-  return new Set(pages.flatMap((page) => page.blockFragments.flatMap((fragment) => {
-    const block = blocks[fragment.blockIndex];
-    return block?.type === 'paragraph' ? [block.paragraphIndex] : [];
-  })));
-}
-
-function isPreparedChapterPageWindowReady(
-  entry: PreparedChapterOpening,
-  window: PreparedChapterPageWindow,
-  assistanceEnabled: boolean,
-): boolean {
-  return window.layout !== null
-    && window.layout.pages.length > 0
-    && window.assetsLayoutSignature === window.layout.signature
-    && window.measuredContentRevision === window.contentRevision
-    && window.previewError === null
-    && (!assistanceEnabled || (window.analysisComplete && window.cardPreloadComplete));
-}
-
-function preparedPageWindowCardsAreReady(
-  entry: PreparedChapterOpening,
-  pageWindow: PreparedChapterPageWindow,
-): boolean {
-  return [...pageWindow.requiredParagraphIndexes].every((paragraphIndex) =>
-    (entry.analyses.get(paragraphIndex)?.cardTargets ?? []).every((target) =>
-      entry.readyCards.has(`${paragraphIndex}:${definitionTargetKey(target)}`)));
-}
-
-function readerEdgeImagesAreReady(
-  root: HTMLElement | null,
-  chapter: BookChapter,
-  layout: ReaderPaginationLayout,
-  direction: ReaderChapterEdge,
-): boolean {
-  if (!root) return false;
-  const blocks = readerBlocksForChapter(chapter.paragraphs, chapter.readerBlocks);
-  const pages = direction === 'opening'
-    ? layout.pages.slice(0, PRELOADED_EDGE_PAGE_COUNT)
-    : layout.pages.slice(-PRELOADED_EDGE_PAGE_COUNT);
-  const imageBlockIndexes = new Set(pages.flatMap((page) => page.blockFragments.flatMap((fragment) =>
-    blocks[fragment.blockIndex]?.type === 'image' ? [fragment.blockIndex] : [])));
-  return [...imageBlockIndexes].every((blockIndex) => {
-    const image = Array.from(root.querySelectorAll<HTMLElement>('[data-reader-block-index]'))
-      .find((element) => Number(element.dataset.readerBlockIndex) === blockIndex)
-      ?.querySelector<HTMLImageElement>('img');
-    return image !== undefined && image !== null && image.complete && image.naturalWidth > 0;
-  });
-}
-
-interface ReaderChapterPageWindowPlan {
-  chapterNumber: number;
-  chapterIndex: number;
-  direction: ReaderChapterEdge;
-  layoutKey: string;
-  entry: PreparedChapterOpening | null;
-  pageWindow: PreparedChapterPageWindow | null;
-}
-
-function planReaderChapterPageWindows(
-  book: ImportedBook,
-  currentChapterNumber: number,
-  delta: -1 | 1,
-  direction: ReaderChapterEdge,
-  preparedEntries: ReadonlyMap<number, PreparedChapterOpening>,
-  profileKey: string,
-  profileId: string | null,
-  viewportWidth: number,
-  viewportHeight: number,
-  pageHeight: number,
-  settings: ReaderSettings,
-  assistanceEnabled: boolean,
-): ReaderChapterPageWindowPlan[] {
-  const plans: ReaderChapterPageWindowPlan[] = [];
-  let pageCount = 0;
-  let chapterNumber = currentChapterNumber;
-  for (let chapterHop = 0; chapterHop < 3 && pageCount < PRELOADED_EDGE_PAGE_COUNT; chapterHop += 1) {
-    const nextChapterNumber = adjacentReadingChapter(book.chapters, chapterNumber, delta);
-    if (nextChapterNumber === chapterNumber || nextChapterNumber === currentChapterNumber) break;
-    chapterNumber = nextChapterNumber;
-    const chapterIndex = chapterNumber - 1;
-    const chapter = book.chapters[chapterIndex];
-    if (!chapter) break;
-    const layoutKey = readerPaginationLayoutKey(
-      book,
-      profileId,
-      chapterIndex,
-      viewportWidth,
-      viewportHeight,
-      pageHeight,
-      settings,
-      assistanceEnabled,
-    );
-    const candidate = preparedEntries.get(chapterIndex) ?? null;
-    const compatibleEntry = candidate?.bookId === book.id
-      && candidate.bookUpdatedAt === book.updatedAt
-      && candidate.chapter === chapter
-      && candidate.layoutKey === layoutKey
-      && candidate.settingsKey === JSON.stringify(settings)
-      && candidate.profileKey === profileKey
-      && candidate.viewportWidth === viewportWidth
-      && candidate.viewportHeight === viewportHeight
-      ? candidate
-      : null;
-    const pageWindow = compatibleEntry?.pageWindows.get(direction) ?? null;
-    plans.push({ chapterNumber, chapterIndex, direction, layoutKey, entry: compatibleEntry, pageWindow });
-    if (!compatibleEntry || !pageWindow
-      || !isPreparedChapterPageWindowReady(compatibleEntry, pageWindow, assistanceEnabled)) break;
-    pageCount += pageWindow.layout?.pages.length ?? 0;
-  }
-  return plans;
 }
 
 type DeferredHandle = {
@@ -469,10 +243,6 @@ function ReaderActivityIndicator({ ariaLabel, testId }: ReaderActivityIndicatorP
   );
 }
 
-const MAX_PRELOAD_PARAGRAPHS = 32;
-const MAX_PRELOAD_CARDS = 64;
-const MAX_PRELOAD_CHARACTERS = 12000;
-const PRELOADED_EDGE_PAGE_COUNT = 4;
 const ANALYSIS_TIME_SLICE_MS = 8;
 const ANALYSIS_PUBLISH_INTERVAL_MS = 1000;
 const ANALYSIS_SCROLL_SETTLE_MS = 150;
@@ -506,17 +276,6 @@ function yieldForAnalysisContinuation(): Promise<void> {
     const idleWindow = window as IdleWindow;
     if (typeof idleWindow.requestIdleCallback === 'function') {
       idleWindow.requestIdleCallback(resolve);
-      return;
-    }
-    window.setTimeout(resolve, 0);
-  });
-}
-
-function yieldForReaderPrerenderContinuation(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const idleWindow = window as IdleWindow;
-    if (typeof idleWindow.requestIdleCallback === 'function') {
-      idleWindow.requestIdleCallback(resolve, { timeout: 100 });
       return;
     }
     window.setTimeout(resolve, 0);
@@ -684,8 +443,6 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
   analysis,
   block,
   assistanceEnabled,
-  includeDocumentIds,
-  loadingImagesEager,
   sourceParagraphIndex,
   visibleParagraphIndex,
   onElementChange,
@@ -750,7 +507,7 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
           title={content.title}
           className="inline-block max-w-full align-middle"
           style={content.style as CSSProperties | undefined}
-          loading={loadingImagesEager ? 'eager' : 'lazy'}
+          loading="lazy"
         />,
       );
       return;
@@ -775,7 +532,6 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
         <span
           key={`${analyzedToken.lemma}-${analyzedToken.start}-${contentIndex}`}
           data-word-popup-trigger="true"
-          data-reader-selected-target={readerTargetDomKey(target, sourceParagraphIndex)}
           className={cn(
             'cursor-pointer rounded-sm px-0.5 -mx-0.5',
             isPriority ? 'unknown-word priority' : 'unknown-word',
@@ -835,16 +591,14 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
 
   return (
     <>
-      {block.anchorIds?.map((anchorId) => (
-        <span key={anchorId} id={includeDocumentIds ? anchorId : undefined} className="reader-anchor" />
-      ))}
+      {block.anchorIds?.map((anchorId) => <span key={anchorId} id={anchorId} className="reader-anchor" />)}
       {createElement(
         blockTag,
         {
           ref: (element: HTMLElement | null) => onElementChange(visibleParagraphIndex, element),
           className: blockClass,
           style: blockStyle,
-          'data-testid': includeDocumentIds ? `paragraph-${visibleParagraphIndex}` : undefined,
+          'data-testid': `paragraph-${visibleParagraphIndex}`,
           'data-reader-text-block': '',
           'data-reader-list-marker': block.listMarker,
           onClick: (event: ReactMouseEvent<HTMLElement>) => {
@@ -881,479 +635,6 @@ const ReaderParagraphText = memo(function ReaderParagraphText({
         nodes.length > 0 ? nodes : analysis.paragraphText,
       )}
     </>
-  );
-});
-
-interface ReaderBlockPresentation {
-  offset: number;
-  fragmentTop: number | undefined;
-  fragmentBottom: number | undefined;
-  clipPath: string | undefined;
-  visibility: CSSProperties['visibility'];
-}
-
-interface ReaderChapterBlockListProps {
-  paragraphs: readonly string[];
-  blocks: readonly ReaderContentBlock[];
-  analyses: readonly ParagraphAnalysis[];
-  assistanceEnabled: boolean;
-  pageMode: boolean;
-  pageHeight: number;
-  includeDocumentIds: boolean;
-  loadingImagesEager: boolean;
-  presentationForBlock: (blockIndex: number) => ReaderBlockPresentation;
-  renderParagraphSupplement: (sourceIndex: number, analysis: ParagraphAnalysis) => ReactNode;
-  onElementChange: (visibleParagraphIndex: number, element: HTMLElement | null) => void;
-  onOpenWordPopup: ReaderParagraphTextProps['onOpenWordPopup'];
-}
-
-interface ReaderDefinitionCardTargetProps {
-  sourceChapter: BookChapter | undefined;
-  sourceParagraphs: readonly string[];
-  preparedOpening: PreparedChapterOpening | null;
-  sourceIndex: number;
-  analysis: ParagraphAnalysis;
-  target: DefinitionTarget;
-  active: boolean;
-  definitionsByLemma: ReadonlyMap<string, LexiconEntry>;
-  loadingDefinitionLemmas: ReadonlySet<string>;
-  failedDefinitionLemmas: ReadonlySet<string>;
-  observationLabels: UserProfile['observations'];
-  settings: ReaderSettings;
-  activeDefinitionSelection: DefinitionTextSelection | undefined;
-  onReadinessChange: PreparedCardReadinessChange;
-  onDefinitionWordClick: (click: DefinitionWordClick) => void;
-  onMarkKnown: () => void;
-  onMarkUnknown: () => void;
-  getPriorityTarget: ((index: number) => HTMLElement | null) | undefined;
-}
-
-function ReaderDefinitionCardTarget({
-  sourceChapter,
-  sourceParagraphs,
-  preparedOpening,
-  sourceIndex,
-  analysis,
-  target,
-  active,
-  definitionsByLemma,
-  loadingDefinitionLemmas,
-  failedDefinitionLemmas,
-  observationLabels,
-  settings,
-  activeDefinitionSelection,
-  onReadinessChange,
-  onDefinitionWordClick,
-  onMarkKnown,
-  onMarkUnknown,
-  getPriorityTarget,
-}: ReaderDefinitionCardTargetProps) {
-  const rawDefinition = definitionsByLemma.get(target.lemma) ?? createFallbackLexiconEntry(target.lemma);
-  const definition = resolveLexiconEntry(rawDefinition, target);
-  const definitionStatus: DefinitionLoadStatus = loadingDefinitionLemmas.has(target.lemma)
-    ? 'loading'
-    : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
-  const observation = observationLabels[target.lemma];
-  const sharedCardProps = {
-    activeDefinitionSelection,
-    fontSize: settings.fontSize,
-    onDefinitionWordClick,
-    onMarkKnown,
-    onMarkUnknown,
-    isMarkedKnown: observation === 1,
-    isMarkedUnknown: observation === 0,
-    pronunciationVariant: settings.englishVariant,
-    compact: true,
-  };
-  return (
-    <div
-      key={readerTargetDomKey(target, sourceIndex)}
-      className="w-[266px] shrink-0 [&>[data-definition-card]]:w-[250px]"
-      data-reader-card-target={readerTargetDomKey(target, sourceIndex)}
-      aria-hidden={!active}
-      inert={!active}
-      style={active ? undefined : { position: 'absolute', left: '-10000px', visibility: 'hidden' }}
-    >
-      <ContextualDefinitionCard
-        preparedScores={preparedOpening && preparedOpening.chapter === sourceChapter
-          ? preparedOpening.scores.get(`${sourceIndex}:${definitionTargetKey(target)}`)
-          : undefined}
-        onReadinessChange={(ready) => onReadinessChange(sourceIndex, definitionTargetKey(target), ready)}
-        definition={definition}
-        context={contextForCard(analysis, target)}
-        contextParagraphs={sourceParagraphs}
-        contextParagraphIndex={sourceIndex}
-        wsdMode={settings.wsdMode}
-        wsdPriority="card"
-        getPriorityTarget={getPriorityTarget}
-        priorityTargetIndex={sourceIndex}
-        wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
-        wsdContextUnit={settings.wsdContextUnit}
-        wsdContextSize={settings.wsdContextSize}
-        definitionStatus={definitionStatus}
-        pendingIndicator={<WordDefinitionCard definition={definition} definitionStatus="loading" {...sharedCardProps} />}
-        {...sharedCardProps}
-      />
-    </div>
-  );
-}
-
-const ReaderChapterBlockList = memo(function ReaderChapterBlockList({
-  paragraphs,
-  blocks,
-  analyses,
-  assistanceEnabled,
-  pageMode,
-  pageHeight,
-  includeDocumentIds,
-  loadingImagesEager,
-  presentationForBlock,
-  renderParagraphSupplement,
-  onElementChange,
-  onOpenWordPopup,
-}: ReaderChapterBlockListProps) {
-  return blocks.map((block, blockIndex) => {
-    const presentation = presentationForBlock(blockIndex);
-    const blockPresentationProps = {
-      'data-reader-pagination-offset': presentation.offset,
-      'data-reader-page-fragment-top': presentation.fragmentTop,
-      'data-reader-page-fragment-bottom': presentation.fragmentBottom,
-      style: pageMode ? {
-        translate: `0 ${presentation.offset}px`,
-        clipPath: presentation.clipPath,
-        visibility: presentation.visibility,
-      } as CSSProperties : undefined,
-    };
-    if (block.type === 'image') {
-      return (
-        <figure key={`reader-image-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex} className="my-6 w-full">
-          {block.anchorIds?.map((id) => (
-            <span key={id} id={includeDocumentIds ? id : undefined} className="reader-anchor" />
-          ))}
-          <img
-            src={block.src}
-            alt={block.alt}
-            title={block.title}
-            className="mx-auto block max-w-full"
-            style={pageMode
-              ? { ...block.style, maxHeight: `${Math.max(1, pageHeight - 4)}px`, objectFit: 'contain' } as CSSProperties
-              : block.style as CSSProperties | undefined}
-            loading={pageMode ? 'eager' : 'lazy'}
-          />
-        </figure>
-      );
-    }
-    if (block.type === 'spacer') {
-      return (
-        <div key={`reader-spacer-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex} aria-hidden="true" style={{ height: '1em', ...block.style, ...(blockPresentationProps.style ?? {}) } as CSSProperties}>
-          {block.anchorIds?.map((id) => (
-            <span key={id} id={includeDocumentIds ? id : undefined} className="reader-anchor" />
-          ))}
-        </div>
-      );
-    }
-    if (block.type === 'rule') {
-      return (
-        <div key={`reader-rule-${blockIndex}`} {...blockPresentationProps} data-reader-block-index={blockIndex}>
-          {block.anchorIds?.map((id) => (
-            <span key={id} id={includeDocumentIds ? id : undefined} className="reader-anchor" />
-          ))}
-          <hr className="my-8 border-border" style={block.style as CSSProperties | undefined} />
-        </div>
-      );
-    }
-    const sourceIndex = block.paragraphIndex;
-    const paragraphText = paragraphs[sourceIndex] ?? '';
-    const analysis = analyses[sourceIndex] ?? { paragraphText, tokens: [], cardTargets: [] };
-    return (
-      <div
-        key={`paragraph-${sourceIndex}`}
-        {...blockPresentationProps}
-        className="mb-2"
-        data-reader-block-index={blockIndex}
-        data-testid={includeDocumentIds ? `paragraph-block-${sourceIndex}` : undefined}
-      >
-        <ReaderParagraphText
-          analysis={analysis}
-          block={block}
-          assistanceEnabled={assistanceEnabled}
-          includeDocumentIds={includeDocumentIds}
-          loadingImagesEager={loadingImagesEager}
-          sourceParagraphIndex={sourceIndex}
-          visibleParagraphIndex={sourceIndex}
-          onElementChange={onElementChange}
-          onOpenWordPopup={onOpenWordPopup}
-        />
-        {renderParagraphSupplement(sourceIndex, analysis)}
-      </div>
-    );
-  });
-});
-
-interface ReaderChapterPrerenderProps {
-  entry: PreparedChapterOpening;
-  pageWindow: PreparedChapterPageWindow;
-  layoutKey: string;
-  direction: ReaderChapterEdge;
-  pageHeight: number;
-  pageWidthClass: string;
-  textFontClass: string;
-  settings: ReaderSettings;
-  assistanceEnabled: boolean;
-  definitionsByLemma: ReadonlyMap<string, LexiconEntry>;
-  loadingDefinitionLemmas: ReadonlySet<string>;
-  failedDefinitionLemmas: ReadonlySet<string>;
-  observationLabels: UserProfile['observations'];
-  onLayoutReady: (
-    entry: PreparedChapterOpening,
-    direction: ReaderChapterEdge,
-    layout: ReaderPaginationLayout,
-    measuredContentRevision: number,
-  ) => void;
-  onAssetsReady: (entry: PreparedChapterOpening, direction: ReaderChapterEdge, layout: ReaderPaginationLayout) => void;
-  onCardReadinessChange: (
-    entry: PreparedChapterOpening,
-    direction: ReaderChapterEdge,
-    paragraphIndex: number,
-    targetKey: string,
-    ready: boolean,
-  ) => void;
-  onError: (entry: PreparedChapterOpening, direction: ReaderChapterEdge, error: Error) => void;
-}
-
-function ignoreParagraphElementChange(): void {}
-
-function ignoreRootWordPopup(): void {}
-
-function ignoreDefinitionWordClick(): void {}
-
-function ignoreCardAction(): void {}
-
-function noParagraphSupplement(): ReactNode {
-  return null;
-}
-
-function prerenderBlockPresentation(): ReaderBlockPresentation {
-  return { offset: 0, fragmentTop: undefined, fragmentBottom: undefined, clipPath: undefined, visibility: undefined };
-}
-
-function decodeReaderImage(image: HTMLImageElement): Promise<void> {
-  if (image.complete) {
-    if (image.naturalWidth === 0) {
-      return Promise.reject(new Error(`Reader prerender image failed to load: src=${image.currentSrc || image.src}`));
-    }
-    return image.decode();
-  }
-  return new Promise<void>((resolve, reject) => {
-    const handleLoad = (): void => {
-      image.removeEventListener('error', handleError);
-      void image.decode().then(resolve, reject);
-    };
-    const handleError = (): void => {
-      image.removeEventListener('load', handleLoad);
-      reject(new Error(`Reader prerender image failed to load: src=${image.currentSrc || image.src}`));
-    };
-    image.addEventListener('load', handleLoad, { once: true });
-    image.addEventListener('error', handleError, { once: true });
-  });
-}
-
-const ReaderChapterPrerender = memo(function ReaderChapterPrerender({
-  entry,
-  pageWindow,
-  layoutKey,
-  direction,
-  pageHeight,
-  pageWidthClass,
-  textFontClass,
-  settings,
-  assistanceEnabled,
-  definitionsByLemma,
-  loadingDefinitionLemmas,
-  failedDefinitionLemmas,
-  observationLabels,
-  onLayoutReady,
-  onAssetsReady,
-  onCardReadinessChange,
-  onError,
-}: ReaderChapterPrerenderProps) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [assetsReady, setAssetsReady] = useState(false);
-  const [readyCardKeys, setReadyCardKeys] = useState<Set<string>>(new Set());
-  const requestedEdgeImagesRef = useRef<WeakMap<HTMLImageElement, Promise<void>>>(new WeakMap());
-  const chapterParagraphs = entry.chapter.paragraphs;
-  const chapterBlocks = useMemo(() => readerBlocksForChapter(chapterParagraphs, entry.chapter.readerBlocks), [entry.chapter]);
-  const contentRevision = pageWindow.contentRevision;
-  const analyses = useMemo(() => chapterParagraphs.map((paragraphText, index) =>
-    entry.analyses.get(index) ?? { paragraphText, tokens: [], cardTargets: [] }), [chapterParagraphs, entry.analyses, pageWindow.revision]);
-  const cardReadinessKeys = useMemo(() => [...pageWindow.requiredParagraphIndexes].flatMap((paragraphIndex) =>
-    (analyses[paragraphIndex]?.cardTargets ?? []).map((target) => `${paragraphIndex}:${definitionTargetKey(target)}`)), [analyses, contentRevision, pageWindow.revision]);
-  const allCardsReady = cardReadinessKeys.every((key) => readyCardKeys.has(key) || entry.readyCards.has(key));
-  const measurementReady = assetsReady && allCardsReady;
-  const markCardReady = useCallback((paragraphIndex: number, targetKey: string, ready: boolean): void => {
-    const key = `${paragraphIndex}:${targetKey}`;
-    entry.readyCards[ready ? 'add' : 'delete'](key);
-    setReadyCardKeys((previous) => {
-      if (previous.has(key) === ready) return previous;
-      const next = new Set(previous);
-      if (ready) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  }, [entry]);
-  const getMeasurementKey = useCallback((layout: ReaderPaginationLayout | null): string | null => {
-    if (!measurementReady || !layout || layout.layoutKey !== layoutKey) return null;
-    return JSON.stringify([layoutKey, entry.chapterIndex, cardReadinessKeys, contentRevision]);
-  }, [cardReadinessKeys, contentRevision, entry.chapterIndex, layoutKey, measurementReady]);
-  const edgeAnchor = useMemo(() => direction === 'opening'
-    ? { chapterIndex: entry.chapterIndex, blockIndex: 0, textOffset: 0 }
-    : lastReaderLocationForChapter(entry.chapter, entry.chapterIndex), [direction, entry.chapter, entry.chapterIndex]);
-  const pagination = useReaderPagination({
-    rootRef,
-    initialLayout: pageWindow.layout,
-    enabled: settings.readingMode === 'page' && measurementReady,
-    settled: measurementReady,
-    getMeasurementKey,
-    layoutKey,
-    chapterIndex: entry.chapterIndex,
-    pageHeight,
-    anchor: edgeAnchor,
-    chapterEdge: direction === 'opening' ? 'start' : 'end',
-  });
-  const measuredKey = getMeasurementKey(pagination.layout);
-  const previewReady = pagination.isReady && measuredKey !== null && pagination.measuredMeasurementKey === measuredKey;
-
-  useEffect(() => {
-    void document.fonts.ready
-      .then(() => {
-        setAssetsReady(true);
-      })
-      .catch((failure: unknown) => {
-        const error = failure instanceof Error ? failure : new Error(`Reader prerender assets failed: ${String(failure)}`);
-        onError(entry, direction, error);
-      });
-  }, [direction, entry, onError]);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!assetsReady || !root || !pageWindow.layout) return;
-    const visibleBlockIndexes = new Set(pageWindow.layout.pages.flatMap((page) =>
-      page.blockFragments.map((fragment) => fragment.blockIndex)));
-    const edgeImages = Array.from(root.querySelectorAll<HTMLImageElement>('img')).filter((image) => {
-      const blockIndex = Number(image.closest<HTMLElement>('[data-reader-block-index]')?.dataset.readerBlockIndex);
-      return Number.isInteger(blockIndex) && visibleBlockIndexes.has(blockIndex);
-    });
-    const imageLoads = edgeImages.map((image) => {
-      const existingLoad = requestedEdgeImagesRef.current.get(image);
-      if (existingLoad) return existingLoad;
-      image.loading = 'eager';
-      const load = decodeReaderImage(image);
-      requestedEdgeImagesRef.current.set(image, load);
-      return load;
-    });
-    void Promise.all(imageLoads).then(() => {
-      onAssetsReady(entry, direction, pageWindow.layout as ReaderPaginationLayout);
-    }).catch((failure: unknown) => {
-      const error = failure instanceof Error ? failure : new Error(`Reader prerender assets failed: ${String(failure)}`);
-      onError(entry, direction, error);
-    });
-  }, [assetsReady, direction, entry, onAssetsReady, onError, pageWindow.layout, pageWindow.revision]);
-
-  useEffect(() => {
-    if (!previewReady || !pagination.layout) return;
-      onLayoutReady(entry, direction, pagination.layout, contentRevision);
-  }, [contentRevision, direction, entry, onLayoutReady, pagination.layout, previewReady]);
-
-  useEffect(() => {
-    if (!pagination.error) return;
-    onError(entry, direction, pagination.error);
-  }, [direction, entry, onError, pagination.error]);
-
-  return (
-    <div
-      className={cn('fixed inset-x-0 top-0 mx-auto px-4 sm:px-6', pageWidthClass)}
-      style={{
-        height: `${pageHeight}px`,
-        overflowY: 'hidden',
-        transform: 'translateX(-200vw)',
-        visibility: 'hidden',
-        pointerEvents: 'none',
-      }}
-      aria-hidden="true"
-      inert
-      data-reader-prerender-chapter={entry.chapterIndex}
-      data-reader-prerender-ready={isPreparedChapterPageWindowReady(entry, pageWindow, assistanceEnabled) ? 'true' : 'false'}
-    >
-      <div
-        data-reader-pagination-host=""
-        style={{
-          minHeight: '1px',
-          position: 'relative',
-          '--reader-page-height': `${pageHeight}px`,
-          '--reader-page-card-height': `${Math.min(240, pageHeight * 0.35)}px`,
-        } as CSSProperties}
-      >
-        <div ref={rootRef} className="relative flex min-w-0 flex-1 flex-col reader-page-content">
-          {chapterTitleForReader(entry.chapter, entry.chapterIndex + 1) && (
-            <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
-              {chapterTitleForReader(entry.chapter, entry.chapterIndex + 1)}
-            </h1>
-          )}
-          <div className={textFontClass} style={{ fontSize: `${settings.fontSize}px` }}>
-            <ReaderChapterBlockList
-              paragraphs={chapterParagraphs}
-              blocks={chapterBlocks}
-              analyses={analyses}
-              assistanceEnabled={assistanceEnabled}
-              pageMode
-              pageHeight={pageHeight}
-              includeDocumentIds={false}
-              loadingImagesEager={false}
-              presentationForBlock={prerenderBlockPresentation}
-              renderParagraphSupplement={noParagraphSupplement}
-              onElementChange={ignoreParagraphElementChange}
-              onOpenWordPopup={ignoreRootWordPopup}
-            />
-          </div>
-        </div>
-        {assistanceEnabled && chapterBlocks.map((block) => {
-          if (block.type !== 'paragraph') return null;
-          const sourceIndex = block.paragraphIndex;
-          const analysis = analyses[sourceIndex];
-          if (!analysis || analysis.cardTargets.length === 0) return null;
-          return (
-            <div key={`preview-card-group-${sourceIndex}`} className="reader-page-card-measurements" aria-hidden="true" inert>
-              {analysis.cardTargets.map((target) => (
-                <ReaderDefinitionCardTarget
-                  key={readerTargetDomKey(target, sourceIndex)}
-                  sourceChapter={entry.chapter}
-                  sourceParagraphs={chapterParagraphs}
-                  preparedOpening={entry}
-                  sourceIndex={sourceIndex}
-                  analysis={analysis}
-                  target={target}
-                  active={false}
-                  definitionsByLemma={definitionsByLemma}
-                  loadingDefinitionLemmas={loadingDefinitionLemmas}
-                  failedDefinitionLemmas={failedDefinitionLemmas}
-                  observationLabels={observationLabels}
-                  settings={settings}
-                  activeDefinitionSelection={undefined}
-                  onReadinessChange={(paragraphIndex, targetKey, ready) => {
-                    onCardReadinessChange(entry, direction, paragraphIndex, targetKey, ready);
-                    markCardReady(paragraphIndex, targetKey, ready);
-                  }}
-                  onDefinitionWordClick={ignoreDefinitionWordClick}
-                  onMarkKnown={ignoreCardAction}
-                  onMarkUnknown={ignoreCardAction}
-                  getPriorityTarget={undefined}
-                />
-              ))}
-            </div>
-          );
-        })}
-      </div>
-    </div>
   );
 });
 
@@ -1542,55 +823,16 @@ function deduplicateParagraphCardTargets(
   );
 }
 
-function readerTargetDomKey(target: DefinitionTarget, sourceParagraphIndex: number): string {
-  return `${sourceParagraphIndex}:${encodeURIComponent(definitionTargetKey(target))}`;
-}
-
-function readerPaginationLayoutKey(
-  book: ImportedBook,
-  profileId: string | null,
-  chapterIndex: number,
-  viewportWidth: number,
-  viewportHeight: number,
-  pageHeight: number,
-  settings: ReaderSettings,
-  assistanceEnabled: boolean,
-): string {
-  return JSON.stringify([
-    book.id,
-    book.updatedAt,
-    profileId,
-    chapterIndex,
-    viewportWidth,
-    viewportHeight,
-    pageHeight,
-    settings,
-    assistanceEnabled,
-  ]);
-}
-
-function abortReaderPrerenderControllers(controllers: Map<number, AbortController>): void {
-  controllers.forEach((controller) => controller.abort());
-  controllers.clear();
-}
-
-function abortPageWindowControllers(controllers: Map<string, AbortController>): void {
-  for (const controller of controllers.values()) controller.abort();
-  controllers.clear();
-}
-
 export default function ReaderPage() {
   const { bookId } = useParams();
   const [, setLocation] = useLocation();
   const { settings, updateSetting } = useSettings();
-  const fullscreenPageMode = settings.readingMode === 'page' && settings.fullscreenPageMode;
   const { theme, setTheme } = useTheme();
 
   const [book, setBook] = useState<ImportedBook | null>(null);
   const [assistanceEnabled, setAssistanceEnabled] = useState(true);
   const [headerVisible, setHeaderVisible] = useState(true);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
-  const [fullscreenToolbarOpen, setFullscreenToolbarOpen] = useState(false);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [navigationSearchRequested, setNavigationSearchRequested] = useState(false);
   const [bookmarks, setBookmarks] = useState<ReaderBookmark[]>([]);
@@ -1600,6 +842,7 @@ export default function ReaderPage() {
   const [returnLocation, setReturnLocation] = useState<ReaderLocation | null>(null);
   const [chapterAnalysis, setChapterAnalysis] = useState<ParagraphAnalysis[]>([]);
   const [definitionsByLemma, setDefinitionsByLemma] = useState<Map<string, LexiconEntry>>(new Map());
+  const [loadedCardParagraphs, setLoadedCardParagraphs] = useState<Set<number>>(new Set());
   const [loadingDefinitionLemmas, setLoadingDefinitionLemmas] = useState<Set<string>>(new Set());
   const [failedDefinitionLemmas, setFailedDefinitionLemmas] = useState<Set<string>>(new Set());
   const [wordPopups, setWordPopups] = useState<WordPopupState[]>([]);
@@ -1611,18 +854,6 @@ export default function ReaderPage() {
   const [initialAnalysisRevision, setInitialAnalysisRevision] = useState(0);
   const [studyOpen, setStudyOpen] = useState(false);
   const [studyScope, setStudyScope] = useState<StudyTextScope | null>(null);
-  const [currentPageIndex, setCurrentPageIndex] = useState(0);
-  const [pendingPageTurns, setPendingPageTurns] = useState(0);
-  const pendingPageTurnsRef = useRef(0);
-  const [pageAnalysisCompleteRunId, setPageAnalysisCompleteRunId] = useState<number | null>(null);
-  const [pageAnalysisError, setPageAnalysisError] = useState<string | null>(null);
-  const [viewportSize, setViewportSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
-  const pageAnalysisScopeRef = useRef<Set<number>>(new Set());
-  const pageAnalysisPriorityRef = useRef<Set<number>>(new Set());
-  const pageAnalysisContextRef = useRef('');
-  const paginationLayoutRef = useRef<ReaderPaginationLayout | null>(null);
-  const paginationLayoutKeyRef = useRef('');
-  const paginationSettledMeasurementRevisionRef = useRef(0);
   const resourcesRef = useRef<ReaderResources | null>(null);
   const bookRef = useRef<ImportedBook | null>(null);
   const readerProfileIdRef = useRef<string | null>(null);
@@ -1641,17 +872,6 @@ export default function ReaderPage() {
   const delayedRestoreTimeoutRef = useRef<number | null>(null);
   const isRestoringProgressRef = useRef(false);
   const readerRootRef = useRef<HTMLDivElement | null>(null);
-  const pageViewportRef = useRef<HTMLElement | null>(null);
-  const pageSwipeStartRef = useRef<PageSwipeStart | null>(null);
-  const suppressPageSwipeClickUntilRef = useRef(0);
-  const currentPageIndexRef = useRef(0);
-  const pageAnchorLocationRef = useRef<ReaderLocation | null>(null);
-  const pendingPageAnchorRef = useRef<ReaderLocation | null>(null);
-  const pageRefreshAnchorRef = useRef<PageRefreshAnchor | null>(null);
-  const keepRevealedPageDuringRefreshRef = useRef(false);
-  const refreshPageLayoutKeyRef = useRef('');
-  const paginationInertStateRef = useRef(new WeakMap<HTMLElement, { inert: boolean; ariaHidden: string | null }>());
-  const persistCurrentChapterProgressRef = useRef<(force: boolean) => void>(() => {});
   const currentLocationRef = useRef<ReaderLocation | null>(null);
   const lastStableLocationRef = useRef<ReaderLocation | null>(null);
   const isBookFinishedRef = useRef(false);
@@ -1672,318 +892,7 @@ export default function ReaderPage() {
   const publishedAnalysisParagraphsRef = useRef<Set<number>>(new Set());
   const initialAnalysisFailedRef = useRef(false);
   const readyInitialCardsRef = useRef<Set<string>>(new Set());
-  const preparedChapterOpeningsRef = useRef<Map<number, PreparedChapterOpening>>(new Map());
-  const activePreparedOpeningRef = useRef<PreparedChapterOpening | null>(null);
-  const instantChapterTransitionRef = useRef<PreparedChapterOpening | null>(null);
-  const pageModeWasRevealedRef = useRef(false);
-  const pageModeReadyRef = useRef(false);
-  const previousReadingModeRef = useRef(settings.readingMode);
-  const chapterPrerenderControllersRef = useRef<Map<number, AbortController>>(new Map());
-  const pageWindowAnalysisControllersRef = useRef<Map<string, AbortController>>(new Map());
-  const pageWindowContextKeyRef = useRef('');
-  const [nextChapterPreloadRevision, setNextChapterPreloadRevision] = useState(0);
-
-  useEffect(() => {
-    const updateViewportSize = (): void => {
-      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
-    };
-    window.addEventListener('resize', updateViewportSize);
-    return () => window.removeEventListener('resize', updateViewportSize);
-  }, []);
-
-  const paginationChapterIndex = book ? clampChapterNumber(book, book.currentChapter) - 1 : 0;
-  const fullscreenTopSpacing = Math.ceil(settings.fontSize * (settings.lineSpacing === 'Compact'
-    ? 1.375
-    : settings.lineSpacing === 'Relaxed' ? 2 : 1.625));
-  const paginationPageHeight = Math.max(1, viewportSize.height - (fullscreenPageMode ? fullscreenTopSpacing + 36 : 136));
-  const paginationProfileKey = JSON.stringify(getActiveProfile(loadProfileState()));
-  const paginationAnchor = useMemo(() => book
-    ? pageAnchorLocationRef.current?.chapterIndex === paginationChapterIndex ? pageAnchorLocationRef.current
-      : currentLocation.chapterIndex === paginationChapterIndex ? currentLocation
-      : book.location ?? readerLocationFromLegacyProgress(book, book.currentChapter, book.currentChapterProgress)
-    : null, [book, currentLocation, currentPageIndex, paginationChapterIndex]);
-  const pageCardsSettled = !assistanceEnabled || chapterAnalysis.every((analysis, paragraphIndex) =>
-    (settings.readingMode === 'page' && !pageAnalysisScopeRef.current.has(paragraphIndex)) || analysis.cardTargets.every((target) => {
-      const key = `${paragraphIndex}:${definitionTargetKey(target)}`;
-      const lemma = normalizeToken(target.lemma);
-      return readyInitialCardsRef.current.has(key)
-        && (definitionsByLemma.has(lemma) || failedDefinitionLemmas.has(lemma));
-    }));
-  const paginationSettled = Boolean(book)
-    && (settings.readingMode === 'page'
-      ? pageAnalysisScopeRef.current.size > 0
-        && [...pageAnalysisScopeRef.current].every((index) => publishedAnalysisParagraphsRef.current.has(index))
-      : pageAnalysisCompleteRunId === analysisRunIdRef.current)
-    && pageAnalysisError === null
-    && pageCardsSettled;
-  const paginationLayoutKey = book
-    ? readerPaginationLayoutKey(
-      book,
-      readerProfileIdRef.current,
-      paginationChapterIndex,
-      viewportSize.width,
-      viewportSize.height,
-      paginationPageHeight,
-      settings,
-      assistanceEnabled,
-    )
-    : '';
-  const getOpeningPageMeasurementKey = useCallback((layout: ReaderPaginationLayout | null): string | null => {
-    if (settings.readingMode !== 'page' || !layout
-      || layout.layoutKey !== paginationLayoutKey
-      || layout.chapterIndex !== paginationChapterIndex) return null;
-    const page = layout.pages[currentPageIndex] ?? layout.pages[0];
-    const chapter = book?.chapters[paginationChapterIndex];
-    if (!page || !chapter) return null;
-    const blocks = readerBlocksForChapter(chapter.paragraphs, chapter.readerBlocks);
-    const paragraphIndices = [...new Set(page.blockFragments.flatMap((fragment) => {
-      const block = blocks[fragment.blockIndex];
-      return block?.type === 'paragraph' ? [block.paragraphIndex] : [];
-    }))];
-    const pageTargets = new Set(page.cardTargetKeys);
-    const analyses = paragraphIndices.map((index) => {
-      const analysis = chapterAnalysis[index];
-      const analysisReady = pageAnalysisCompleteRunId === analysisRunIdRef.current
-        || publishedAnalysisParagraphsRef.current.has(index)
-        || initialAnalysisFailedRef.current;
-      if (!analysis || (assistanceEnabled && !analysisReady)) return null;
-      const targets = analysis.cardTargets.map((target) => {
-        const targetKey = definitionTargetKey(target);
-        const onPage = pageTargets.has(readerTargetDomKey(target, index));
-        const lemma = normalizeToken(target.lemma);
-        const ready = !assistanceEnabled || !onPage || (
-          !loadingDefinitionLemmas.has(lemma)
-          && (definitionsByLemma.has(lemma) || failedDefinitionLemmas.has(lemma))
-          && readyInitialCardsRef.current.has(`${index}:${targetKey}`)
-        );
-        return [targetKey, onPage, ready];
-      });
-      if (targets.some((target) => target[2] === false)) return null;
-      return [index, targets];
-    });
-    if (analyses.some((analysis) => analysis === null)) return null;
-    return JSON.stringify([
-      layout.layoutKey,
-      layout.chapterIndex,
-      page.startLocation,
-      page.endLocation,
-      page.blockFragments.map((fragment) => [fragment.blockIndex, fragment.startY, fragment.endY, fragment.startOffset, fragment.endOffset]),
-      page.cardTargetKeys,
-      page.cardGroups,
-      page.reservedCardHeight,
-      page.presentationHeight,
-      page.blockDisplayOffsets,
-      analyses,
-    ]);
-  }, [
-    settings.readingMode,
-    paginationLayoutKey,
-    paginationChapterIndex,
-    currentPageIndex,
-    book,
-    assistanceEnabled,
-    chapterAnalysis,
-    pageAnalysisCompleteRunId,
-    loadingDefinitionLemmas,
-    definitionsByLemma,
-    failedDefinitionLemmas,
-    initialAnalysisRevision,
-  ]);
-  const preparedActiveChapter = preparedChapterOpeningsRef.current.get(paginationChapterIndex);
-  const preRenderedActiveLayout = preparedActiveChapter !== undefined
-    && preparedActiveChapter.bookId === book?.id
-    && preparedActiveChapter.bookUpdatedAt === book?.updatedAt
-    && preparedActiveChapter.layoutKey === paginationLayoutKey
-    && preparedActiveChapter.profileKey === paginationProfileKey
-    && preparedActiveChapter.layout?.pageHeight === paginationPageHeight
-    && preparedPageIndexForLocation(preparedActiveChapter.layout?.pages ?? [], paginationAnchor ?? book?.location ?? { chapterIndex: paginationChapterIndex, blockIndex: 0, textOffset: 0 }) !== null
-    && preparedActiveChapter.previewError === null
-    ? preparedActiveChapter.layout
-    : null;
-  const pagination = useReaderPagination({
-    rootRef: readerRootRef,
-    initialLayout: preRenderedActiveLayout,
-    enabled: settings.readingMode === 'page' && book !== null && !isLoading,
-    settled: paginationSettled,
-    getMeasurementKey: getOpeningPageMeasurementKey,
-    layoutKey: paginationLayoutKey,
-    chapterIndex: paginationChapterIndex,
-    pageHeight: paginationPageHeight,
-    anchor: paginationAnchor,
-    chapterEdge: null,
-  });
-  const paginationErrorMessage = pageAnalysisError ?? pagination.error?.message ?? null;
-  const currentPaginationLayout = pagination.layout?.layoutKey === paginationLayoutKey
-    && pagination.layout.chapterIndex === paginationChapterIndex
-    ? pagination.layout
-    : null;
-  const displayedPage = currentPaginationLayout?.pages[currentPageIndex]
-    ?? currentPaginationLayout?.pages[0]
-    ?? null;
-  const displayedChapter = book?.chapters[paginationChapterIndex];
-  const displayedChapterBlocks = useMemo(() => displayedChapter
-    ? readerBlocksForChapter(displayedChapter.paragraphs, displayedChapter.readerBlocks)
-    : [], [displayedChapter]);
-  const displayedPageParagraphs = useMemo(() => displayedPage
-    ? [...new Set(displayedPage.blockFragments.flatMap((fragment) => {
-      const block = displayedChapterBlocks[fragment.blockIndex];
-      return block?.type === 'paragraph' ? [block.paragraphIndex] : [];
-    }))]
-    : [], [displayedPage, displayedChapterBlocks]);
-  const pageAnalysisScope = useMemo(() => {
-    if (!currentPaginationLayout) return [];
-    return [...new Set(currentPaginationLayout.pages
-      .slice(Math.max(0, currentPageIndex - 3), currentPageIndex + 4)
-      .flatMap((page) => page.blockFragments.flatMap((fragment) => {
-        const block = displayedChapterBlocks[fragment.blockIndex];
-        return block?.type === 'paragraph' ? [block.paragraphIndex] : [];
-      })))];
-  }, [currentPaginationLayout, currentPageIndex, displayedChapterBlocks]);
-  const pageAnalysisScopeKey = JSON.stringify(pageAnalysisScope);
-  pageAnalysisScopeRef.current = new Set(pageAnalysisScope);
-  pageAnalysisPriorityRef.current = new Set(displayedPageParagraphs);
-  const openingPageMeasurementKey = getOpeningPageMeasurementKey(currentPaginationLayout);
-  const pageModeReady = settings.readingMode === 'page'
-    && pagination.isReady
-    && initialViewportReady
-    && pendingPageTurns === 0
-    && ((openingPageMeasurementKey !== null
-      && (pageModeWasRevealedRef.current
-        || pagination.measuredMeasurementKey === openingPageMeasurementKey))
-      || keepRevealedPageDuringRefreshRef.current)
-    && paginationErrorMessage === null;
-
-  useLayoutEffect(() => {
-    if (keepRevealedPageDuringRefreshRef.current
-      && paginationLayoutKey !== refreshPageLayoutKeyRef.current) {
-      keepRevealedPageDuringRefreshRef.current = false;
-    }
-    if (keepRevealedPageDuringRefreshRef.current
-      && openingPageMeasurementKey !== null
-      && pagination.measuredMeasurementKey === openingPageMeasurementKey) {
-      keepRevealedPageDuringRefreshRef.current = false;
-    }
-  }, [openingPageMeasurementKey, pagination.measuredMeasurementKey, paginationLayoutKey]);
-
-  useLayoutEffect(() => {
-    const chapter = book?.chapters[paginationChapterIndex];
-    if (!pageModeReady || !book || !chapter || !currentPaginationLayout) return;
-    if (currentPaginationLayout.layoutKey !== paginationLayoutKey
-      || currentPaginationLayout.chapterIndex !== paginationChapterIndex) return;
-    const chapterIndex = paginationChapterIndex;
-    const existing = preparedChapterOpeningsRef.current.get(chapterIndex);
-    const compatibleExisting = existing?.layoutKey === paginationLayoutKey
-      && existing.profileKey === paginationProfileKey ? existing : undefined;
-    const scores = compatibleExisting?.scores ?? activePreparedOpeningRef.current?.scores ?? new Map<string, ScoredDefinition>();
-    const prepared: PreparedChapterOpening = {
-      bookId: book.id,
-      bookUpdatedAt: book.updatedAt,
-      chapterIndex,
-      chapter,
-      layoutKey: paginationLayoutKey,
-      settingsKey: JSON.stringify(settings),
-      profileKey: paginationProfileKey,
-      analyses: new Map([
-        ...compatibleExisting?.analyses ?? [],
-        ...chapterAnalysis.flatMap((analysis, index) =>
-          publishedAnalysisParagraphsRef.current.has(index) ? [[index, analysis] as const] : []),
-      ]),
-      scores,
-      readyCards: new Set([...compatibleExisting?.readyCards ?? [], ...readyInitialCardsRef.current]),
-      analysisComplete: publishedAnalysisParagraphsRef.current.size === chapter.paragraphs.length
-        || compatibleExisting?.analysisComplete === true,
-      cardPreloadComplete: pageCardsSettled || compatibleExisting?.cardPreloadComplete === true,
-      viewportWidth: viewportSize.width,
-      viewportHeight: viewportSize.height,
-      layout: currentPaginationLayout,
-      pageWindows: compatibleExisting?.pageWindows ?? new Map(),
-      previewError: null,
-    };
-    let seededEdgeWindow = false;
-    if (currentPaginationLayout) {
-      const edgeDirections: ReaderChapterEdge[] = [
-        ...(currentPaginationLayout.hasPreviousPages === false ? ['opening' as const] : []),
-        ...(currentPaginationLayout.hasNextPages === false ? ['ending' as const] : []),
-      ];
-      for (const direction of edgeDirections) {
-        if (!readerEdgeImagesAreReady(readerRootRef.current, chapter, currentPaginationLayout, direction)) continue;
-        const pageWindow = prepared.pageWindows.get(direction) ?? createPreparedChapterPageWindow(direction);
-        const requiredParagraphIndexes = paragraphIndexesForEdgeWindow(chapter, currentPaginationLayout, direction);
-        const analysisReady = !assistanceEnabled || [...requiredParagraphIndexes].every((index) => {
-          const analysis = prepared.analyses.get(index);
-          return publishedAnalysisParagraphsRef.current.has(index)
-            && analysis !== undefined
-            && analysis.cardTargets.every((target) =>
-              prepared.readyCards.has(`${index}:${definitionTargetKey(target)}`));
-        });
-        if (!analysisReady) continue;
-        const windowChanged = pageWindow.layout?.signature !== currentPaginationLayout.signature
-          || pageWindow.assetsLayoutSignature !== currentPaginationLayout.signature
-          || pageWindow.requiredParagraphIndexes.size !== requiredParagraphIndexes.size
-          || [...requiredParagraphIndexes].some((index) => !pageWindow.requiredParagraphIndexes.has(index))
-          || !pageWindow.analysisComplete
-          || !pageWindow.cardPreloadComplete
-          || pageWindow.measuredContentRevision !== pageWindow.contentRevision;
-        if (!windowChanged) continue;
-        pageWindow.layout = currentPaginationLayout;
-        pageWindow.assetsLayoutSignature = currentPaginationLayout.signature;
-        pageWindow.contentRevision += 1;
-        pageWindow.measuredContentRevision = pageWindow.contentRevision;
-        pageWindow.requiredParagraphIndexes = requiredParagraphIndexes;
-        pageWindow.analysisComplete = true;
-        pageWindow.cardPreloadComplete = true;
-        pageWindow.previewError = null;
-        pageWindow.revision += 1;
-        prepared.pageWindows.set(direction, pageWindow);
-        seededEdgeWindow = true;
-      }
-    }
-    if (compatibleExisting !== undefined
-      && compatibleExisting.layoutKey === prepared.layoutKey
-      && compatibleExisting.layout?.signature === prepared.layout?.signature
-      && compatibleExisting.analysisComplete === prepared.analysisComplete
-      && compatibleExisting.cardPreloadComplete === prepared.cardPreloadComplete
-      && compatibleExisting.analyses.size === prepared.analyses.size
-      && compatibleExisting.previewError === null) {
-      if (seededEdgeWindow) setNextChapterPreloadRevision((revision) => revision + 1);
-      return;
-    }
-    preparedChapterOpeningsRef.current.set(chapterIndex, prepared);
-    activePreparedOpeningRef.current = prepared;
-    setNextChapterPreloadRevision((revision) => revision + 1);
-  }, [
-    book,
-    chapterAnalysis,
-    book?.chapters,
-    currentPaginationLayout,
-    pageCardsSettled,
-    pageModeReady,
-    paginationChapterIndex,
-    paginationLayoutKey,
-    paginationProfileKey,
-    paginationSettled,
-    settings,
-    viewportSize.height,
-    viewportSize.width,
-  ]);
-
-  useLayoutEffect(() => {
-    pageModeReadyRef.current = pageModeReady;
-    if (pageModeReady) pageModeWasRevealedRef.current = true;
-  }, [pageModeReady]);
-
-  useLayoutEffect(() => {
-    paginationLayoutRef.current = pagination.layout;
-    paginationLayoutKeyRef.current = paginationLayoutKey;
-    paginationSettledMeasurementRevisionRef.current = pagination.settledMeasurementRevision;
-  }, [pagination.layout, pagination.settledMeasurementRevision, paginationLayoutKey]);
-
-  const beginReaderLoading = useCallback((initialPageIndex: number): void => {
-    pendingPageTurnsRef.current = 0;
-    setPendingPageTurns(0);
-    pageRefreshAnchorRef.current = null;
-    keepRevealedPageDuringRefreshRef.current = false;
-    pageModeReadyRef.current = false;
+  const beginReaderLoading = useCallback((): void => {
     analysisRunIdRef.current += 1;
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
@@ -1992,168 +901,28 @@ export default function ReaderPage() {
       delayedRestoreTimeoutRef.current = null;
     }
     initialReaderLoadPendingRef.current = true;
-    pageModeWasRevealedRef.current = false;
     initialViewportParagraphsRef.current = null;
     completedInitialAnalysisRef.current = new Set();
     publishedAnalysisParagraphsRef.current = new Set();
     initialAnalysisFailedRef.current = false;
     readyInitialCardsRef.current = new Set();
-    setPageAnalysisCompleteRunId(null);
-    setPageAnalysisError(null);
-    currentPageIndexRef.current = initialPageIndex;
-    setCurrentPageIndex(initialPageIndex);
+    setLoadedCardParagraphs(new Set());
     setInitialViewportReady(false);
     setInitialLoadingMessage('Loading reader...');
     setInitialProgressRestored(false);
   }, []);
 
-  const openReaderChapter = useCallback((nextBook: ImportedBook, entryDirection: ReaderChapterEntryDirection): void => {
-    const currentBook = bookRef.current;
-    const profile = getActiveProfile(loadProfileState());
-    const profileKey = JSON.stringify(profile);
-    const currentLayout = paginationLayoutRef.current;
-    const currentChapterIndex = currentBook ? clampChapterNumber(currentBook, currentBook.currentChapter) - 1 : -1;
-    const capturedLayoutKey = paginationLayoutKeyRef.current;
-    const currentPreparedCandidates = [
-      preparedChapterOpeningsRef.current.get(currentChapterIndex),
-      activePreparedOpeningRef.current,
-    ];
-    const currentPrepared = currentPreparedCandidates.find((candidate): candidate is PreparedChapterOpening => candidate !== undefined
-      && candidate !== null
-      && currentBook !== null
-      && candidate.bookId === currentBook.id
-      && candidate.bookUpdatedAt === currentBook.updatedAt
-      && candidate.chapterIndex === currentChapterIndex
-      && candidate.layoutKey === capturedLayoutKey
-      && candidate.profileKey === profileKey);
-    if (settingsRef.current.readingMode === 'page'
-      && currentBook
-      && currentLayout
-      && currentLayout.layoutKey === capturedLayoutKey
-      && currentLayout.chapterIndex === currentChapterIndex
-      && currentPrepared
-      && currentPrepared.previewError === null
-      && currentPrepared.layout?.signature !== currentLayout.signature) {
-      currentPrepared.layout = currentLayout;
-      preparedChapterOpeningsRef.current.set(currentChapterIndex, currentPrepared);
-    }
-
-    const chapterIndex = clampChapterNumber(nextBook, nextBook.currentChapter) - 1;
-    const prepared = preparedChapterOpeningsRef.current.get(chapterIndex) ?? null;
-    const chapter = nextBook.chapters[chapterIndex];
-    const currentPageHeight = Math.max(1, window.innerHeight - (fullscreenPageMode
-      ? Math.ceil(settingsRef.current.fontSize * (settingsRef.current.lineSpacing === 'Compact'
-        ? 1.375
-        : settingsRef.current.lineSpacing === 'Relaxed' ? 2 : 1.625)) + 36
-      : 136));
-    const currentLayoutKey = chapter
-      ? readerPaginationLayoutKey(
-        nextBook,
-        readerProfileIdRef.current,
-        chapterIndex,
-        window.innerWidth,
-        window.innerHeight,
-        currentPageHeight,
-        settingsRef.current,
-        assistanceEnabledRef.current,
-      )
-      : '';
-    const preparedIdentityMatches = prepared?.bookId === nextBook.id
-      && prepared.bookUpdatedAt === nextBook.updatedAt
-      && prepared.chapter === chapter
-      && prepared.chapterIndex === chapterIndex
-      && prepared.layoutKey === currentLayoutKey
-      && prepared.settingsKey === JSON.stringify(settingsRef.current)
-      && prepared.profileKey === JSON.stringify(profile)
-      && prepared.viewportWidth === window.innerWidth
-      && prepared.viewportHeight === window.innerHeight;
-    const edgeDirection = entryDirection === 'first' ? 'opening' : entryDirection === 'last' ? 'ending' : null;
-    const preparedPageWindow = preparedIdentityMatches && edgeDirection !== null
-      ? prepared?.pageWindows.get(edgeDirection) ?? null
-      : null;
-    const edgeWindowReady = prepared !== null && preparedPageWindow !== null
-      && isPreparedChapterPageWindowReady(prepared, preparedPageWindow, assistanceEnabledRef.current);
-    const anchorLayout = preparedIdentityMatches && edgeDirection === null && prepared?.layout
-      && preparedPageIndexForLocation(prepared.layout.pages, nextBook.location
-        ?? readerLocationFromLegacyProgress(nextBook, nextBook.currentChapter, nextBook.currentChapterProgress)) !== null
-      ? prepared.layout
-      : null;
-    const compatiblePageLayout = edgeWindowReady ? preparedPageWindow?.layout ?? null : anchorLayout;
-    const compatiblePrepared = preparedIdentityMatches
-      && (edgeWindowReady || anchorLayout !== null || settingsRef.current.readingMode === 'scroll')
-      ? prepared
-      : null;
-    const hasPageLayout = settingsRef.current.readingMode === 'page'
-      && compatiblePageLayout !== null
-      && compatiblePrepared?.previewError === null;
-    const initialPageIndex = hasPageLayout && compatiblePageLayout
-      ? entryDirection === 'first' ? 0
-        : entryDirection === 'last' ? Math.max(0, compatiblePageLayout.pages.length - 1)
-          : readerPageIndexForLocation(compatiblePageLayout.pages, nextBook.location
-            ?? readerLocationFromLegacyProgress(nextBook, nextBook.currentChapter, nextBook.currentChapterProgress)) ?? 0
-      : 0;
-    const readyOpening = compatiblePrepared
-      ?? (prepared?.bookId === nextBook.id && prepared.chapter === chapter
-        && prepared.settingsKey === JSON.stringify(settingsRef.current)
-        && prepared.profileKey === JSON.stringify(profile)
-        && (prepared.analysisComplete || prepared.analyses.size > 0)
-        && settingsRef.current.readingMode === 'scroll'
-        && nextBook.currentChapterProgress === 0
-        ? prepared : null);
-    const initialPage = hasPageLayout && compatiblePageLayout
-      ? compatiblePageLayout.pages[initialPageIndex] ?? null
-      : null;
-    const initialLocation = initialPage?.startLocation ?? nextBook.location ?? null;
-    const activeBook = initialPage && chapter && initialLocation
-      ? {
-        ...nextBook,
-        currentChapterProgress: chapterProgressAtLocation(chapter, initialLocation.blockIndex, initialLocation.textOffset),
-        location: initialLocation,
-        pagePosition: compatiblePageLayout ? { layoutKey: compatiblePageLayout.signature, pageIndex: initialPageIndex } : undefined,
-      }
-      : nextBook;
-    bookRef.current = activeBook;
-    beginReaderLoading(initialPageIndex);
-    if (hasPageLayout) {
-      pageModeWasRevealedRef.current = true;
-      if (initialLocation) {
-        currentLocationRef.current = initialLocation;
-        lastStableLocationRef.current = initialLocation;
-        pageAnchorLocationRef.current = initialLocation;
-        pendingPageAnchorRef.current = initialLocation;
-        setCurrentLocation(initialLocation);
-        setReadingProgressPercent(bookProgressAtLocation(activeBook, initialLocation) * 100);
-      }
-      if (prepared && compatiblePageLayout) prepared.layout = compatiblePageLayout;
-    }
-    const analyses = buildPlainChapterAnalysis(activeBook);
-    activePreparedOpeningRef.current = readyOpening;
-    instantChapterTransitionRef.current = settingsRef.current.readingMode === 'scroll' ? readyOpening : null;
-    if (readyOpening) {
-      for (const [index, analysis] of readyOpening.analyses) analyses[index] = analysis;
-    }
-    if (readyOpening && (settingsRef.current.readingMode === 'scroll' || hasPageLayout)) {
-      setDefinitionsByLemma(new Map(definitionsByLemmaRef.current));
-      initialReaderLoadPendingRef.current = false;
-      setInitialViewportReady(true);
-      setInitialProgressRestored(true);
-      if (settingsRef.current.readingMode === 'page') {
-        const preparedIndexes = new Set(readyOpening.analyses.keys());
-        publishedAnalysisParagraphsRef.current = preparedIndexes;
-        completedInitialAnalysisRef.current = preparedIndexes;
-        readyInitialCardsRef.current = new Set(readyOpening.readyCards);
-        if (readyOpening.analysisComplete && preparedIndexes.size === chapter?.paragraphs.length) {
-          setPageAnalysisCompleteRunId(analysisRunIdRef.current);
-        }
-        setInitialAnalysisRevision((revision) => revision + 1);
-      }
-    }
+  const openReaderChapter = useCallback((nextBook: ImportedBook): void => {
+    bookRef.current = nextBook;
+    beginReaderLoading();
+    const analyses = buildPlainChapterAnalysis(nextBook);
     setChapterAnalysis(analyses);
-    if (activeBook.currentChapterProgress === 0) setHeaderVisible(true);
-    setBook(activeBook);
-  }, [beginReaderLoading, fullscreenPageMode]);
+    if (nextBook.currentChapterProgress === 0) setHeaderVisible(true);
+    setBook(nextBook);
+  }, [beginReaderLoading]);
 
   const recordInitialCardReadiness = useCallback((paragraphIndex: number, targetKey: string, ready: boolean): void => {
+    if (!initialReaderLoadPendingRef.current) return;
     const key = `${paragraphIndex}:${targetKey}`;
     if (readyInitialCardsRef.current.has(key) === ready) return;
     if (ready) {
@@ -2175,10 +944,8 @@ export default function ReaderPage() {
     paraRefs.current[visibleParagraphIndex] = element;
   }, []);
   const getParagraphElement = useCallback((visibleParagraphIndex: number): HTMLElement | null => (
-    settings.readingMode === 'page'
-      ? pageViewportRef.current
-      : paraRefs.current[visibleParagraphIndex] ?? null
-  ), [settings.readingMode]);
+    paraRefs.current[visibleParagraphIndex] ?? null
+  ), []);
 
   const resolveAnalysisAnchorIndex = useCallback((paragraphCount: number, chapterProgress: number) => {
     if (paragraphCount <= 0) {
@@ -2295,6 +1062,35 @@ export default function ReaderPage() {
     automaticDefinitionRequestsRef.current.set(lemma, request);
   }, [waitForReaderScrollToSettle]);
 
+  useEffect(() => {
+    if (!book || isLoading || !initialProgressRestored || !assistanceEnabled) return;
+    const paragraphIndexes = new Map<Element, number>();
+    const observer = new IntersectionObserver((entries) => {
+      const intersectingIndexes = entries.flatMap((entry) => {
+        const index = paragraphIndexes.get(entry.target);
+        if (!entry.isIntersecting || index === undefined) return [];
+        observer.unobserve(entry.target);
+        return [index];
+      });
+      if (intersectingIndexes.length === 0) return;
+      setLoadedCardParagraphs((previous) => new Set([...previous, ...intersectingIndexes]));
+    }, { rootMargin: '500px' });
+    paraRefs.current.forEach((element, index) => {
+      if (!element) return;
+      paragraphIndexes.set(element, index);
+      observer.observe(element);
+    });
+    return () => observer.disconnect();
+  }, [book?.id, book?.currentChapter, isLoading, initialProgressRestored, assistanceEnabled]);
+
+  useEffect(() => {
+    const resources = resourcesRef.current;
+    if (!resources || !assistanceEnabled) return;
+    loadedCardParagraphs.forEach((index) => {
+      chapterAnalysis[index]?.cardTargets.forEach((target) => requestAutomaticDefinition(resources, target));
+    });
+  }, [assistanceEnabled, chapterAnalysis, loadedCardParagraphs, requestAutomaticDefinition]);
+
   const recomputeVisibleAnalysis = useCallback((
     selectedBook: ImportedBook,
     resources: ReaderResources,
@@ -2303,43 +1099,8 @@ export default function ReaderPage() {
   ) => {
     const profileState = loadProfileState();
     const activeProfile = getActiveProfile(profileState);
-    const analysisContext = JSON.stringify([
-      selectedBook.id, selectedBook.updatedAt, selectedBook.currentChapter,
-      settingsRef.current, activeProfile, assistanceEnabledRef.current,
-    ]);
-    const canReusePublishedAnalysis = pageAnalysisContextRef.current === analysisContext;
-    pageAnalysisContextRef.current = analysisContext;
-    const currentPaginationLayout = paginationLayoutRef.current;
-    if (mode === 'preserve'
-      && currentPaginationLayout?.layoutKey === paginationLayoutKeyRef.current
-      && currentPaginationLayout.chapterIndex === selectedBook.currentChapter - 1) {
-      if (!canReusePublishedAnalysis
-        && settingsRef.current.readingMode === 'page' && pageModeReadyRef.current) {
-        keepRevealedPageDuringRefreshRef.current = true;
-        refreshPageLayoutKeyRef.current = currentPaginationLayout.layoutKey;
-      }
-      if (!pageRefreshAnchorRef.current) {
-        const currentPage = currentPaginationLayout.pages[currentPageIndexRef.current];
-        const location = pendingPageAnchorRef.current
-          ?? currentPage?.startLocation
-          ?? pageAnchorLocationRef.current
-          ?? currentLocationRef.current;
-        if (location) {
-          pageRefreshAnchorRef.current = {
-            location,
-            layout: currentPaginationLayout,
-            settledMeasurementRevision: paginationSettledMeasurementRevisionRef.current,
-          };
-        }
-      }
-    } else if (mode === 'reset') {
-      pageRefreshAnchorRef.current = null;
-      keepRevealedPageDuringRefreshRef.current = false;
-    }
     const currentRunId = analysisRunIdRef.current + 1;
     analysisRunIdRef.current = currentRunId;
-    setPageAnalysisCompleteRunId(null);
-    setPageAnalysisError(null);
     const expectedParagraphCount = buildPlainChapterAnalysis(selectedBook).length;
 
     const plainAnalyses = buildPlainChapterAnalysis(selectedBook);
@@ -2348,49 +1109,7 @@ export default function ReaderPage() {
       && chapterAnalysisRef.current.length === expectedParagraphCount
       && chapterAnalysisRef.current.every((analysis, index) => analysis.paragraphText === (plainAnalyses[index]?.paragraphText ?? ''))
     );
-    const chapter = selectedBook.chapters[clampChapterNumber(selectedBook, selectedBook.currentChapter) - 1];
-    const prepared = activePreparedOpeningRef.current;
-    const preparedAnalyses = prepared?.bookId === selectedBook.id
-      && prepared.bookUpdatedAt === selectedBook.updatedAt
-      && prepared.chapter === chapter
-      && prepared.settingsKey === JSON.stringify(settingsRef.current)
-      && prepared.profileKey === JSON.stringify(activeProfile)
-      ? prepared.analyses : new Map<number, ParagraphAnalysis>();
-    const hasCompletePreparedAnalysis = settingsRef.current.readingMode === 'page'
-      && prepared?.analysisComplete === true
-      && prepared.analyses === preparedAnalyses
-      && preparedAnalyses.size === expectedParagraphCount
-      && Array.from({ length: expectedParagraphCount }, (_, index) => preparedAnalyses.has(index)).every(Boolean);
-    if (hasCompletePreparedAnalysis && prepared) {
-      const completeAnalyses = Array.from({ length: expectedParagraphCount }, (_, index) => preparedAnalyses.get(index))
-        .flatMap((analysis) => analysis ? [analysis] : []);
-      chapterAnalysisRef.current = completeAnalyses;
-      readyInitialCardsRef.current = new Set(prepared.readyCards);
-      publishedAnalysisParagraphsRef.current = new Set(completeAnalyses.map((_, index) => index));
-      completedInitialAnalysisRef.current = new Set(publishedAnalysisParagraphsRef.current);
-      setChapterAnalysis(completeAnalyses);
-      setPageAnalysisCompleteRunId(currentRunId);
-      setPageAnalysisError(null);
-      setInitialAnalysisRevision((revision) => revision + 1);
-      clearDeferredHandle(deferredAnalysisHandleRef.current);
-      deferredAnalysisHandleRef.current = null;
-      return;
-    }
-    if (mode === 'reset' || !canReusePublishedAnalysis) {
-      publishedAnalysisParagraphsRef.current = new Set(preparedAnalyses.keys());
-      readyInitialCardsRef.current = new Set(preparedAnalyses.size > 0 ? prepared?.readyCards : []);
-    }
     const initialAnalyses = canPreserveExisting ? chapterAnalysisRef.current.slice() : plainAnalyses;
-    if (!canPreserveExisting) {
-      for (const [index, analysis] of preparedAnalyses) initialAnalyses[index] = analysis;
-      if (initialReaderLoadPendingRef.current) {
-        for (const index of preparedAnalyses.keys()) publishedAnalysisParagraphsRef.current.add(index);
-        for (const index of initialViewportParagraphsRef.current ?? []) {
-          if (preparedAnalyses.has(index)) completedInitialAnalysisRef.current.add(index);
-        }
-        setInitialAnalysisRevision((revision) => revision + 1);
-      }
-    }
     if (mode === 'reset' || !canPreserveExisting) {
       setChapterAnalysis(initialAnalyses);
     }
@@ -2399,8 +1118,6 @@ export default function ReaderPage() {
 
     if (!assistanceEnabledRef.current) {
       setChapterAnalysis(plainAnalyses);
-      setPageAnalysisCompleteRunId(currentRunId);
-      setInitialAnalysisRevision((revision) => revision + 1);
       return;
     }
 
@@ -2417,13 +1134,7 @@ export default function ReaderPage() {
             return;
           }
           const nextAnalyses = initialAnalyses.slice();
-          const processedAnalyses = new Map(preparedAnalyses);
-          if (canPreserveExisting && canReusePublishedAnalysis) {
-            for (const index of publishedAnalysisParagraphsRef.current) {
-              const analysis = initialAnalyses[index];
-              if (analysis) processedAnalyses.set(index, analysis);
-            }
-          }
+          const processedAnalyses = new Map<number, ParagraphAnalysis>();
           const analyzeParagraph = createCachedChapterAnalyzer({
             settings: settingsRef.current,
             model: resources.model,
@@ -2435,34 +1146,11 @@ export default function ReaderPage() {
           }, resources.lexicalAnalysisCache);
           const resolvedAnchorIndex = typeof anchorParagraphIndex === 'number' && Number.isFinite(anchorParagraphIndex)
             ? clampParagraphIndex(anchorParagraphIndex, expectedParagraphCount)
-            : resolveAnalysisAnchorIndex(expectedParagraphCount, selectedBook.currentChapterProgress);
-          const pageModeAnalysis = settingsRef.current.readingMode === 'page';
-          const savedLocation = selectedBook.location
-            ?? readerLocationFromLegacyProgress(selectedBook, selectedBook.currentChapter, selectedBook.currentChapterProgress);
-          const selectedChapter = selectedBook.chapters[clampChapterNumber(selectedBook, selectedBook.currentChapter) - 1];
-          const readerBlocks = selectedChapter
-            ? readerBlocksForChapter(selectedChapter.paragraphs, selectedChapter.readerBlocks)
-            : [];
-          const locationBlockIndex = savedLocation.chapterIndex === selectedBook.currentChapter - 1
-            ? Math.min(savedLocation.blockIndex, Math.max(0, readerBlocks.length - 1))
-            : -1;
-          const locationParagraphIndex = locationBlockIndex >= 0
-            ? readerBlocks.slice(locationBlockIndex).find((block) => block.type === 'paragraph')?.paragraphIndex
-              ?? [...readerBlocks.slice(0, locationBlockIndex)].reverse().find((block) => block.type === 'paragraph')?.paragraphIndex
-            : undefined;
-          const analysisAnchorIndex = anchorParagraphIndex !== undefined
-            ? resolvedAnchorIndex
-            : pageModeAnalysis && locationParagraphIndex !== undefined
-              ? locationParagraphIndex
-              : resolveAnalysisAnchorIndex(expectedParagraphCount, selectedBook.currentChapterProgress);
-          const requestedParagraphs = pageAnalysisScopeRef.current;
-          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, analysisAnchorIndex)
-            .filter((index) => !processedAnalyses.has(index)
-              && (!pageModeAnalysis || requestedParagraphs.has(index)
-                || (requestedParagraphs.size === 0 && index >= analysisAnchorIndex && index < analysisAnchorIndex + 4)))
-            .sort((left, right) => pageModeAnalysis
-              ? Number(pageAnalysisPriorityRef.current.has(right)) - Number(pageAnalysisPriorityRef.current.has(left))
-              : 0);
+            : resolveAnalysisAnchorIndex(
+              expectedParagraphCount,
+              selectedBook.currentChapterProgress,
+            );
+          const paragraphOrder = buildParagraphProcessingOrder(expectedParagraphCount, resolvedAnchorIndex);
           let pendingParagraphIndices: number[] = [];
           let timeSliceStartedAt = performance.now();
           let lastPublishedAt = timeSliceStartedAt;
@@ -2481,7 +1169,7 @@ export default function ReaderPage() {
           };
 
           for (let orderIndex = 0; orderIndex < paragraphOrder.length; orderIndex += 1) {
-            if (!pageModeAnalysis && performance.now() - lastScrollActivityAtRef.current < ANALYSIS_SCROLL_SETTLE_MS) {
+            if (performance.now() - lastScrollActivityAtRef.current < ANALYSIS_SCROLL_SETTLE_MS) {
               if (!await waitForScrollToSettle()) {
                 return;
               }
@@ -2507,9 +1195,6 @@ export default function ReaderPage() {
               };
               nextAnalyses[paragraphIndex] = nextAnalysis;
 
-              for (const target of nextAnalysis.cardTargets) {
-                requestAutomaticDefinition(resources, target);
-              }
               processedAnalyses.set(paragraphIndex, nextAnalysis);
             } catch (error) {
               console.warn('reader-paragraph-analysis-failed', {
@@ -2518,14 +1203,12 @@ export default function ReaderPage() {
                 paragraphIndex,
                 bookId: selectedBook.id,
               });
-              const message = error instanceof Error ? error.message : String(error);
-              setPageAnalysisError(`Paragraph analysis failed at paragraph ${paragraphIndex + 1}: ${message}`);
             }
 
             if (analysisRunIdRef.current !== currentRunId) {
               return;
             }
-            if (!pageModeAnalysis && performance.now() - lastScrollActivityAtRef.current < ANALYSIS_SCROLL_SETTLE_MS) {
+            if (performance.now() - lastScrollActivityAtRef.current < ANALYSIS_SCROLL_SETTLE_MS) {
               if (!await waitForScrollToSettle()) {
                 return;
               }
@@ -2568,10 +1251,10 @@ export default function ReaderPage() {
                 }
                 return updated;
               });
-              for (const publishedIndex of publishedParagraphIndices) {
-                publishedAnalysisParagraphsRef.current.add(publishedIndex);
-              }
-              if (analysisRunIdRef.current === currentRunId) {
+              if (initialReaderLoadPendingRef.current && analysisRunIdRef.current === currentRunId) {
+                for (const publishedIndex of publishedParagraphIndices) {
+                  publishedAnalysisParagraphsRef.current.add(publishedIndex);
+                }
                 const initialViewportParagraphs = initialViewportParagraphsRef.current;
                 if (initialViewportParagraphs) {
                   for (const publishedIndex of publishedParagraphIndices) {
@@ -2592,8 +1275,6 @@ export default function ReaderPage() {
           }
         } catch (error) {
           console.warn('reader-analysis-failed', { error, chapter: selectedBook.currentChapter, bookId: selectedBook.id });
-          const message = error instanceof Error ? error.message : String(error);
-          setPageAnalysisError(`Chapter analysis failed: ${message}`);
           if (initialReaderLoadPendingRef.current && analysisRunIdRef.current === currentRunId) {
             initialAnalysisFailedRef.current = true;
             for (const paragraphIndex of initialViewportParagraphsRef.current ?? []) {
@@ -2602,66 +1283,26 @@ export default function ReaderPage() {
             setInitialAnalysisRevision((revision) => revision + 1);
           }
         } finally {
-          if (analysisRunIdRef.current === currentRunId) {
-            if (publishedAnalysisParagraphsRef.current.size === expectedParagraphCount) {
-              setPageAnalysisCompleteRunId(currentRunId);
-            }
-            setInitialAnalysisRevision((revision) => revision + 1);
-          }
           setActiveAnalysisRunId((activeRunId) => activeRunId === currentRunId ? null : activeRunId);
         }
       })();
     }, 700);
-  }, [requestAutomaticDefinition, resolveAnalysisAnchorIndex]);
-
-  useEffect(() => {
-    const selectedBook = bookRef.current;
-    const resources = resourcesRef.current;
-    if (settings.readingMode !== 'page' || !selectedBook || !resources || isLoading
-      || !assistanceEnabled || pageAnalysisScopeRef.current.size === 0) return;
-    const missing = [...pageAnalysisScopeRef.current]
-      .some((index) => !publishedAnalysisParagraphsRef.current.has(index));
-    if (!missing) return;
-    const block = displayedChapterBlocks[currentLocation.blockIndex];
-    recomputeVisibleAnalysis(selectedBook, resources, 'preserve',
-      block?.type === 'paragraph' ? block.paragraphIndex : undefined);
-  }, [pageAnalysisScopeKey, settings.readingMode, isLoading, assistanceEnabled,
-    currentLocation.blockIndex, displayedChapterBlocks, recomputeVisibleAnalysis]);
+  }, [resolveAnalysisAnchorIndex]);
 
   const captureCurrentReaderLocation = useCallback((): ReaderLocation | null => {
     const currentBook = bookRef.current;
     if (!currentBook) return null;
-    if (settings.readingMode === 'page') {
-      const currentPage = pagination.isReady
-        && pagination.layout?.layoutKey === paginationLayoutKey
-        ? pagination.layout.pages[currentPageIndexRef.current]
-        : undefined;
-      const location = currentPage?.startLocation
-        ?? pageAnchorLocationRef.current
-        ?? currentLocationRef.current;
-      if (location) {
-        currentLocationRef.current = location;
-        lastStableLocationRef.current = location;
-        canonicalAnchorCapturedRef.current = true;
-      }
-      return location;
-    }
     const location = readerRootRef.current
       ? captureVisibleReaderLocation(readerRootRef.current, currentBook.currentChapter - 1, 72, window.innerHeight)
       : null;
     if (location) {
-      const recentManualScroll = performance.now() - lastScrollActivityAtRef.current < 500;
-      if (isBookFinishedRef.current && !recentManualScroll
-        && !readerLocationsEqual(location, lastLinearReaderLocation(currentBook))) {
-        return currentBook.location ?? currentLocationRef.current;
-      }
       currentLocationRef.current = location;
       lastStableLocationRef.current = location;
       canonicalAnchorCapturedRef.current = true;
       return location;
     }
     return currentLocationRef.current;
-  }, [pagination.isReady, pagination.layout, paginationLayoutKey, settings.readingMode]);
+  }, []);
 
   const saveReaderBookProgress = useCallback((nextBook: ImportedBook): void => {
     const profileId = readerProfileIdRef.current;
@@ -2670,46 +1311,8 @@ export default function ReaderPage() {
       currentChapter: nextBook.currentChapter,
       currentChapterProgress: nextBook.currentChapterProgress,
       ...(nextBook.location ? { location: nextBook.location } : {}),
-      ...(nextBook.pagePosition ? { pagePosition: nextBook.pagePosition } : {}),
     });
   }, []);
-
-  const commitReaderPage = useCallback((pageIndex: number, layout: ReaderPaginationLayout): void => {
-    const currentBook = bookRef.current;
-    const page = layout.pages[pageIndex];
-    if (!currentBook || !page || page.startLocation.chapterIndex !== currentBook.currentChapter - 1) return;
-    const pageStartLocation = resolveReaderLocation(currentBook, page.startLocation);
-    const finishedLocation = lastLinearReaderLocation(currentBook);
-    const finishedAtPageEnd = readerLocationsEqual(page.endLocation, finishedLocation);
-    const location = finishedAtPageEnd ? finishedLocation : pageStartLocation;
-    const chapter = currentBook.chapters[location.chapterIndex];
-    const chapterProgress = chapter
-      ? chapterProgressAtLocation(chapter, location.blockIndex, location.textOffset)
-      : 0;
-    const nextBook: ImportedBook = {
-      ...currentBook,
-      currentChapter: location.chapterIndex + 1,
-      currentChapterProgress: chapterProgress,
-      location,
-      pagePosition: { layoutKey: layout.signature, pageIndex },
-    };
-    saveReaderBookProgress(nextBook);
-    bookRef.current = nextBook;
-    currentLocationRef.current = location;
-    lastStableLocationRef.current = location;
-    pageAnchorLocationRef.current = pageStartLocation;
-    pendingPageAnchorRef.current = null;
-    const pageRefreshAnchor = pageRefreshAnchorRef.current;
-    if (pageRefreshAnchor) {
-      pageRefreshAnchorRef.current = { ...pageRefreshAnchor, location: pageStartLocation };
-    }
-    currentPageIndexRef.current = pageIndex;
-    setCurrentPageIndex(pageIndex);
-    if (pageViewportRef.current) pageViewportRef.current.scrollTop = 0;
-    setCurrentLocation(location);
-    setReadingProgressPercent(bookProgressAtLocation(currentBook, location) * 100);
-    isBookFinishedRef.current = finishedAtPageEnd;
-  }, [saveReaderBookProgress]);
 
   const persistCurrentChapterProgress = useCallback((force: boolean): void => {
     const currentBook = bookRef.current;
@@ -2732,9 +1335,6 @@ export default function ReaderPage() {
       currentChapter: location.chapterIndex + 1,
       currentChapterProgress: chapterProgress,
       location,
-      ...(settings.readingMode === 'page' && pagination.isReady && pagination.layout
-        ? { pagePosition: { layoutKey: pagination.layout.signature, pageIndex: currentPageIndexRef.current } }
-        : { pagePosition: undefined }),
     };
     saveReaderBookProgress(nextBook);
     bookRef.current = nextBook;
@@ -2742,55 +1342,9 @@ export default function ReaderPage() {
     setCurrentLocation(location);
     setReadingProgressPercent(wholeBookProgress * 100);
     isBookFinishedRef.current = readerLocationsEqual(location, lastLinearReaderLocation(currentBook));
-  }, [captureCurrentReaderLocation, pagination.isReady, pagination.layout, saveReaderBookProgress, settings.readingMode]);
+  }, [captureCurrentReaderLocation, saveReaderBookProgress]);
 
-  persistCurrentChapterProgressRef.current = persistCurrentChapterProgress;
-  useLayoutEffect(() => () => persistCurrentChapterProgressRef.current(true), []);
-
-  const switchReadingMode = useCallback((readingMode: ReaderSettings['readingMode']): void => {
-    if (settings.readingMode === readingMode) return;
-    const currentBook = bookRef.current;
-    const capturedLocation = settings.readingMode === 'page' && isBookFinishedRef.current && currentBook?.location
-      ? currentBook.location
-      : captureCurrentReaderLocation();
-    if (currentBook && capturedLocation) {
-      const location = resolveReaderLocation(currentBook, capturedLocation);
-      const chapter = currentBook.chapters[location.chapterIndex];
-      const chapterProgress = chapter
-        ? chapterProgressAtLocation(chapter, location.blockIndex, location.textOffset)
-        : 0;
-      const nextBook: ImportedBook = {
-        ...currentBook,
-        currentChapter: location.chapterIndex + 1,
-        currentChapterProgress: chapterProgress,
-        location,
-        pagePosition: readingMode === 'scroll' ? undefined : currentBook.pagePosition,
-      };
-      saveReaderBookProgress(nextBook);
-      bookRef.current = nextBook;
-      currentLocationRef.current = location;
-      lastStableLocationRef.current = location;
-      pageAnchorLocationRef.current = location;
-      setCurrentLocation(location);
-      setReadingProgressPercent(bookProgressAtLocation(currentBook, location) * 100);
-      isBookFinishedRef.current = readerLocationsEqual(location, lastLinearReaderLocation(currentBook));
-    }
-    if (readingMode === 'page') {
-      setPageAnalysisCompleteRunId(null);
-      setPageAnalysisError(null);
-      pageAnchorLocationRef.current = capturedLocation ?? currentLocationRef.current;
-      setHeaderVisible(true);
-    }
-    if (readingMode === 'scroll') {
-      setFullscreenToolbarOpen(false);
-    }
-    updateSetting('readingMode', readingMode);
-    if (readingMode === 'scroll' && capturedLocation) {
-      window.requestAnimationFrame(() => {
-        if (readerRootRef.current) restoreReaderLocation(readerRootRef.current, capturedLocation, 72);
-      });
-    }
-  }, [captureCurrentReaderLocation, saveReaderBookProgress, settings.readingMode, updateSetting]);
+  useLayoutEffect(() => () => persistCurrentChapterProgress(true), [persistCurrentChapterProgress]);
 
   const loadReaderState = useCallback(async () => {
     const profileId = getActiveProfile(loadProfileState()).id;
@@ -2798,13 +1352,7 @@ export default function ReaderPage() {
     readerLoadRunIdRef.current = loadRunId;
     readerProfileIdRef.current = profileId;
     bookRef.current = null;
-    beginReaderLoading(0);
-    abortReaderPrerenderControllers(chapterPrerenderControllersRef.current);
-    abortPageWindowControllers(pageWindowAnalysisControllersRef.current);
-    pageWindowContextKeyRef.current = '';
-    preparedChapterOpeningsRef.current.clear();
-    activePreparedOpeningRef.current = null;
-    instantChapterTransitionRef.current = null;
+    beginReaderLoading();
     setIsLoading(true);
     setStudyOpen(false);
     setWordPopups([]);
@@ -2911,25 +1459,7 @@ export default function ReaderPage() {
       return;
     }
     recomputeVisibleAnalysis(book, resources, 'reset');
-  }, [
-    assistanceEnabled,
-    book,
-    isLoading,
-    recomputeVisibleAnalysis,
-    settings.readingMode,
-    settings.fontChoice,
-    settings.fontSize,
-    settings.lineSpacing,
-    settings.pageWidth,
-    settings.maxWordsPerParagraph,
-    settings.deduplicationRadius,
-    settings.knowledgeThreshold,
-    settings.englishVariant,
-    settings.wsdMode,
-    settings.wsdReductionLevel,
-    settings.wsdContextUnit,
-    settings.wsdContextSize,
-  ]);
+  }, [assistanceEnabled, book, isLoading, recomputeVisibleAnalysis, settings]);
 
   useEffect(() => {
     void loadReaderState();
@@ -2941,7 +1471,7 @@ export default function ReaderPage() {
           progressPersistTimeoutRef.current = null;
         }
         if (profileState.profiles.some((profile) => profile.id === readerProfileIdRef.current)) {
-          persistCurrentChapterProgressRef.current(true);
+          persistCurrentChapterProgress(true);
         }
         void loadReaderState();
         return;
@@ -2961,532 +1491,16 @@ export default function ReaderPage() {
       bookRef.current = null;
       unsubscribe();
     };
-  }, [loadReaderState, recomputeVisibleAnalysis]);
+  }, [loadReaderState, persistCurrentChapterProgress, recomputeVisibleAnalysis]);
 
   useEffect(() => () => {
+    analysisRunIdRef.current += 1;
     clearDeferredHandle(deferredAnalysisHandleRef.current);
     deferredAnalysisHandleRef.current = null;
-    abortReaderPrerenderControllers(chapterPrerenderControllersRef.current);
-    abortPageWindowControllers(pageWindowAnalysisControllersRef.current);
-    pageWindowContextKeyRef.current = '';
     if (bookmarkFeedbackTimeoutRef.current !== null) window.clearTimeout(bookmarkFeedbackTimeoutRef.current);
     if (layoutRestoreTimeoutRef.current !== null) window.clearTimeout(layoutRestoreTimeoutRef.current);
     if (progressPersistTimeoutRef.current !== null) window.clearTimeout(progressPersistTimeoutRef.current);
   }, []);
-
-  const recordPrerenderLayout = useCallback((
-    entry: PreparedChapterOpening,
-    direction: ReaderChapterEdge,
-    layout: ReaderPaginationLayout,
-    measuredContentRevision: number,
-  ): void => {
-    if (preparedChapterOpeningsRef.current.get(entry.chapterIndex) !== entry
-      || layout.layoutKey !== entry.layoutKey
-      || layout.chapterIndex !== entry.chapterIndex) return;
-    const pageWindow = entry.pageWindows.get(direction);
-    if (!pageWindow || measuredContentRevision !== pageWindow.contentRevision) return;
-    const requiredParagraphIndexes = paragraphIndexesForEdgeWindow(entry.chapter, layout, direction);
-    const changedCoverage = requiredParagraphIndexes.size !== pageWindow.requiredParagraphIndexes.size
-      || [...requiredParagraphIndexes].some((paragraphIndex) => !pageWindow.requiredParagraphIndexes.has(paragraphIndex));
-    if (pageWindow.layout?.signature === layout.signature && !changedCoverage
-      && pageWindow.measuredContentRevision === measuredContentRevision) return;
-    if (pageWindow.layout?.signature !== layout.signature) pageWindow.assetsLayoutSignature = null;
-    pageWindow.layout = layout;
-    pageWindow.measuredContentRevision = measuredContentRevision;
-    pageWindow.requiredParagraphIndexes = requiredParagraphIndexes;
-    pageWindow.analysisComplete = [...requiredParagraphIndexes].every((paragraphIndex) => entry.analyses.has(paragraphIndex));
-    pageWindow.cardPreloadComplete = preparedPageWindowCardsAreReady(entry, pageWindow);
-    pageWindow.previewError = null;
-    pageWindow.revision += 1;
-    setNextChapterPreloadRevision((revision) => revision + 1);
-  }, []);
-
-  const recordPrerenderCardReadiness = useCallback((
-    entry: PreparedChapterOpening,
-    direction: ReaderChapterEdge,
-    paragraphIndex: number,
-    targetKey: string,
-    ready: boolean,
-  ): void => {
-    if (preparedChapterOpeningsRef.current.get(entry.chapterIndex) !== entry) return;
-    const pageWindow = entry.pageWindows.get(direction);
-    if (!pageWindow) return;
-    const key = `${paragraphIndex}:${targetKey}`;
-    if (entry.readyCards.has(key) === ready) return;
-    entry.readyCards[ready ? 'add' : 'delete'](key);
-    if (!pageWindow.requiredParagraphIndexes.has(paragraphIndex)) return;
-    pageWindow.contentRevision += 1;
-    pageWindow.revision += 1;
-    setNextChapterPreloadRevision((revision) => revision + 1);
-  }, []);
-
-  const recordPrerenderAssetsReady = useCallback((
-    entry: PreparedChapterOpening,
-    direction: ReaderChapterEdge,
-    layout: ReaderPaginationLayout,
-  ): void => {
-    if (preparedChapterOpeningsRef.current.get(entry.chapterIndex) !== entry) return;
-    const pageWindow = entry.pageWindows.get(direction);
-    if (!pageWindow || pageWindow.layout?.signature !== layout.signature
-      || pageWindow.assetsLayoutSignature === layout.signature) return;
-    pageWindow.assetsLayoutSignature = layout.signature;
-    pageWindow.revision += 1;
-    setNextChapterPreloadRevision((revision) => revision + 1);
-  }, []);
-
-  const recordPrerenderError = useCallback((
-    entry: PreparedChapterOpening,
-    direction: ReaderChapterEdge,
-    error: Error,
-  ): void => {
-    if (preparedChapterOpeningsRef.current.get(entry.chapterIndex) !== entry) return;
-    const pageWindow = entry.pageWindows.get(direction);
-    if (!pageWindow || pageWindow.previewError?.message === error.message) return;
-    pageWindow.previewError = error;
-    pageWindow.revision += 1;
-    console.error('reader-chapter-prerender-failed', {
-      bookId: entry.bookId,
-      chapterIndex: entry.chapterIndex,
-      direction,
-      error,
-    });
-    setNextChapterPreloadRevision((revision) => revision + 1);
-  }, []);
-
-  useEffect(() => {
-    const selectedBook = bookRef.current;
-    const resources = resourcesRef.current;
-    if (!book || !selectedBook || selectedBook.id !== book.id || !resources
-      || !initialViewportReady || assistanceEnabled === false || settings.readingMode === 'page') return;
-    const currentChapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
-    const nextChapterNumber = adjacentReadingChapter(selectedBook.chapters, currentChapterNumber, 1);
-    if (nextChapterNumber === currentChapterNumber) return;
-    const chapterIndex = nextChapterNumber - 1;
-    const chapter = selectedBook.chapters[chapterIndex];
-    if (!chapter) return;
-    const profile = getActiveProfile(loadProfileState());
-    const profileKey = JSON.stringify(profile);
-    const pageHeight = Math.max(1, viewportSize.height - 136);
-    const layoutKey = readerPaginationLayoutKey(
-      selectedBook,
-      readerProfileIdRef.current,
-      chapterIndex,
-      viewportSize.width,
-      viewportSize.height,
-      pageHeight,
-      settings,
-      assistanceEnabled,
-    );
-    const retainedChapterIndexes = new Set([currentChapterNumber - 1, chapterIndex]);
-    for (const [preparedChapterIndex] of preparedChapterOpeningsRef.current) {
-      if (!retainedChapterIndexes.has(preparedChapterIndex)) {
-        preparedChapterOpeningsRef.current.delete(preparedChapterIndex);
-      }
-    }
-    for (const [preparedChapterIndex, controller] of chapterPrerenderControllersRef.current) {
-      if (!retainedChapterIndexes.has(preparedChapterIndex)) {
-        controller.abort();
-        chapterPrerenderControllersRef.current.delete(preparedChapterIndex);
-      }
-    }
-    const existing = preparedChapterOpeningsRef.current.get(chapterIndex);
-    if (existing?.layoutKey === layoutKey && existing.profileKey === profileKey && existing.analysisComplete) return;
-    const entry: PreparedChapterOpening = existing?.layoutKey === layoutKey && existing.profileKey === profileKey
-      ? existing
-      : {
-        bookId: selectedBook.id,
-        bookUpdatedAt: selectedBook.updatedAt,
-        chapterIndex,
-        chapter,
-        layoutKey,
-        settingsKey: JSON.stringify(settings),
-        profileKey,
-        analyses: new Map(),
-        scores: new Map(),
-        readyCards: new Set(),
-        analysisComplete: false,
-        cardPreloadComplete: false,
-        viewportWidth: viewportSize.width,
-        viewportHeight: viewportSize.height,
-        layout: null,
-        pageWindows: new Map(),
-        previewError: null,
-      };
-    preparedChapterOpeningsRef.current.set(chapterIndex, entry);
-    chapterPrerenderControllersRef.current.get(chapterIndex)?.abort();
-    const controller = new AbortController();
-    chapterPrerenderControllersRef.current.set(chapterIndex, controller);
-    const width = document.querySelector('[data-testid="text-column"]')?.getBoundingClientRect().width ?? viewportSize.width;
-    const charactersPerLine = Math.max(1, width / (settings.fontSize * 0.45));
-    const characterBudget = Math.min(MAX_PRELOAD_CHARACTERS, Math.ceil(2 * charactersPerLine
-      * Math.max(1, viewportSize.height / (settings.fontSize * 1.4))));
-    const targetBook: ImportedBook = {
-      ...selectedBook,
-      currentChapter: nextChapterNumber,
-      currentChapterProgress: 0,
-      location: { chapterIndex, blockIndex: 0, textOffset: 0 },
-      pagePosition: undefined,
-    };
-    const analyzer = createCachedChapterAnalyzer({
-      settings,
-      model: resources.model,
-      profile,
-      lemmaDict: resources.lemmaDict,
-      nlp: resources.nlp,
-      maxCardsPerParagraph: 1,
-      includeCards: false,
-    }, resources.lexicalAnalysisCache);
-    const previousAnalyses = new Map(entry.analyses);
-    const cardTasks: Promise<void>[] = [];
-    const preloadCard = async (analysis: ParagraphAnalysis, paragraphIndex: number, target: DefinitionTarget): Promise<void> => {
-      const targetKey = `${paragraphIndex}:${definitionTargetKey(target)}`;
-      requestAutomaticDefinition(resources, target);
-      const request = automaticDefinitionRequestsRef.current.get(normalizeToken(target.lemma));
-      if (request) await request;
-      if (controller.signal.aborted) return;
-      const rawDefinition = definitionsByLemmaRef.current.get(normalizeToken(target.lemma));
-      if (!rawDefinition) {
-        entry.readyCards.add(targetKey);
-        return;
-      }
-      const definition = resolveLexiconEntry(rawDefinition, target);
-      if (settings.wsdMode === 'none' || wordNetGlosses(definition).length <= 1) {
-        entry.readyCards.add(targetKey);
-        return;
-      }
-      const context = contextForCard(analysis, target);
-      if (!context) throw new Error(`Missing next-chapter WSD context: chapter=${nextChapterNumber} paragraph=${paragraphIndex} lemma=${target.lemma}`);
-      const scoringContext = settings.wsdContextUnit === 'sentence'
-        ? sentenceWindowForWsd(chapter.paragraphs, paragraphIndex, context, settings.wsdContextSize)
-        : paragraphWindowForWsd(chapter.paragraphs, paragraphIndex, context, settings.wsdContextSize);
-      await waitForWsdModelReady(settings.wsdMode, controller.signal);
-      const scores = await scoreWordSenses(settings.wsdMode, scoringContext, definition, 'preload', controller.signal);
-      if (controller.signal.aborted) return;
-      entry.scores.set(targetKey, {
-        key: JSON.stringify([settings.wsdMode, scoringContext, definition.word, wordNetGlosses(definition)]),
-        scores,
-      });
-      entry.readyCards.add(targetKey);
-    };
-    let active = true;
-    const handle = scheduleDeferredTask(() => {
-      void (async () => {
-        let characters = [...entry.analyses.values()].reduce((total, analysis) => total + analysis.paragraphText.length, 0);
-        let cardCount = [...entry.analyses.values()].reduce((total, analysis) => total + analysis.cardTargets.length, 0);
-        const paragraphLimit = Math.min(MAX_PRELOAD_PARAGRAPHS, chapter.paragraphs.length);
-        for (let paragraphIndex = 0; paragraphIndex < paragraphLimit && characters < characterBudget; paragraphIndex += 1) {
-          if (entry.analyses.has(paragraphIndex)) continue;
-          if (characters + chapter.paragraphs[paragraphIndex].length > MAX_PRELOAD_CHARACTERS) break;
-          await yieldForReaderPrerenderContinuation();
-          await waitForReaderScrollToSettle();
-          if (!active || controller.signal.aborted) return;
-          const analysis = buildParagraphAnalysisAtIndex(targetBook, paragraphIndex, analyzer);
-          const selected: ParagraphAnalysis = {
-            ...analysis,
-            cardTargets: deduplicateParagraphCardTargets(analysis, paragraphIndex, previousAnalyses, settings),
-          };
-          if (cardCount + selected.cardTargets.length > MAX_PRELOAD_CARDS) break;
-          previousAnalyses.set(paragraphIndex, selected);
-          entry.analyses.set(paragraphIndex, selected);
-          cardCount += selected.cardTargets.length;
-          characters += Math.max(charactersPerLine, analysis.paragraphText.length);
-          selected.cardTargets.forEach((target) => cardTasks.push(preloadCard(selected, paragraphIndex, target).catch((failure: unknown) => {
-            if (!controller.signal.aborted) {
-              console.error('next-chapter-preload-card-failed', {
-                bookId: selectedBook.id,
-                chapter: nextChapterNumber,
-                paragraphIndex,
-                lemma: target.lemma,
-                error: failure,
-              });
-              entry.readyCards.add(`${paragraphIndex}:${definitionTargetKey(target)}`);
-            }
-          })));
-        }
-        if (!active || controller.signal.aborted) return;
-        entry.analysisComplete = entry.analyses.size === chapter.paragraphs.length;
-        setNextChapterPreloadRevision((revision) => revision + 1);
-        await Promise.all(cardTasks);
-        if (!active || controller.signal.aborted) return;
-        entry.cardPreloadComplete = true;
-        setNextChapterPreloadRevision((revision) => revision + 1);
-        if (chapterPrerenderControllersRef.current.get(chapterIndex) === controller) {
-          chapterPrerenderControllersRef.current.delete(chapterIndex);
-        }
-      })().catch((failure: unknown) => {
-        if (!active || controller.signal.aborted) return;
-        console.error('next-chapter-preload-failed', {
-          bookId: selectedBook.id,
-          chapter: nextChapterNumber,
-          error: failure,
-        });
-      });
-    }, 1000);
-    return () => {
-      active = false;
-      clearDeferredHandle(handle);
-      controller.abort();
-      if (chapterPrerenderControllersRef.current.get(chapterIndex) === controller) {
-        chapterPrerenderControllersRef.current.delete(chapterIndex);
-      }
-    };
-  }, [
-    assistanceEnabled,
-    book?.currentChapter,
-    book?.id,
-    book?.updatedAt,
-    initialViewportReady,
-    requestAutomaticDefinition,
-    settings,
-    viewportSize.height,
-    viewportSize.width,
-    waitForReaderScrollToSettle,
-  ]);
-
-  useEffect(() => {
-    const selectedBook = bookRef.current;
-    const resources = resourcesRef.current;
-    const profile = getActiveProfile(loadProfileState());
-    const profileKey = JSON.stringify(profile);
-    const pageHeight = Math.max(1, viewportSize.height - (fullscreenPageMode
-      ? fullscreenTopSpacing + 36
-      : 136));
-    const contextKey = book && selectedBook?.id === book.id
-      ? JSON.stringify([
-        book.id,
-        selectedBook.updatedAt,
-        selectedBook.currentChapter,
-        profileKey,
-        settings,
-        assistanceEnabled,
-        viewportSize.width,
-        viewportSize.height,
-        pageHeight,
-      ])
-      : '';
-    if (pageWindowContextKeyRef.current !== contextKey) {
-      abortPageWindowControllers(pageWindowAnalysisControllersRef.current);
-      pageWindowContextKeyRef.current = contextKey;
-    }
-    if (!book || !selectedBook || selectedBook.id !== book.id || !resources
-      || !initialViewportReady || settings.readingMode !== 'page') return;
-
-    const currentChapterNumber = clampChapterNumber(selectedBook, selectedBook.currentChapter);
-    const plans = [
-      ...planReaderChapterPageWindows(
-        selectedBook, currentChapterNumber, -1, 'ending', preparedChapterOpeningsRef.current,
-        profileKey, readerProfileIdRef.current, viewportSize.width, viewportSize.height,
-        pageHeight, settings, assistanceEnabled,
-      ),
-      ...planReaderChapterPageWindows(
-        selectedBook, currentChapterNumber, 1, 'opening', preparedChapterOpeningsRef.current,
-        profileKey, readerProfileIdRef.current, viewportSize.width, viewportSize.height,
-        pageHeight, settings, assistanceEnabled,
-      ),
-    ];
-    const retainedChapterIndexes = new Set([currentChapterNumber - 1, ...plans.map((plan) => plan.chapterIndex)]);
-    for (const [preparedChapterIndex] of preparedChapterOpeningsRef.current) {
-      if (!retainedChapterIndexes.has(preparedChapterIndex)) {
-        preparedChapterOpeningsRef.current.delete(preparedChapterIndex);
-        chapterPrerenderControllersRef.current.get(preparedChapterIndex)?.abort();
-        chapterPrerenderControllersRef.current.delete(preparedChapterIndex);
-      }
-    }
-
-    let entriesChanged = false;
-    for (const plan of plans) {
-      const chapter = selectedBook.chapters[plan.chapterIndex];
-      if (!chapter) continue;
-      let entry = plan.entry;
-      if (!entry) {
-        entry = {
-          bookId: selectedBook.id,
-          bookUpdatedAt: selectedBook.updatedAt,
-          chapterIndex: plan.chapterIndex,
-          chapter,
-          layoutKey: plan.layoutKey,
-          settingsKey: JSON.stringify(settings),
-          profileKey,
-          analyses: new Map(),
-          scores: new Map(),
-          readyCards: new Set(),
-          analysisComplete: false,
-          cardPreloadComplete: false,
-          viewportWidth: viewportSize.width,
-          viewportHeight: viewportSize.height,
-          layout: null,
-          pageWindows: new Map(),
-          previewError: null,
-        };
-        preparedChapterOpeningsRef.current.set(plan.chapterIndex, entry);
-        entriesChanged = true;
-      }
-      let pageWindow = entry.pageWindows.get(plan.direction);
-      if (!pageWindow) {
-        pageWindow = createPreparedChapterPageWindow(plan.direction);
-        entry.pageWindows.set(plan.direction, pageWindow);
-        entriesChanged = true;
-      }
-      if (!pageWindow.layout || pageWindow.previewError) continue;
-
-      const requiredParagraphIndexes = paragraphIndexesForEdgeWindow(chapter, pageWindow.layout, plan.direction);
-      const coverageChanged = requiredParagraphIndexes.size !== pageWindow.requiredParagraphIndexes.size
-        || [...requiredParagraphIndexes].some((index) => !pageWindow.requiredParagraphIndexes.has(index));
-      if (coverageChanged) {
-        pageWindow.requiredParagraphIndexes = requiredParagraphIndexes;
-        pageWindow.analysisComplete = [...requiredParagraphIndexes].every((index) => entry.analyses.has(index));
-        pageWindow.cardPreloadComplete = preparedPageWindowCardsAreReady(entry, pageWindow);
-        pageWindow.revision += 1;
-        entriesChanged = true;
-      }
-      if (!assistanceEnabled) {
-        if (!pageWindow.analysisComplete || !pageWindow.cardPreloadComplete) {
-          pageWindow.analysisComplete = true;
-          pageWindow.cardPreloadComplete = true;
-          pageWindow.revision += 1;
-          entriesChanged = true;
-        }
-        continue;
-      }
-      if (pageWindow.analysisComplete && pageWindow.cardPreloadComplete) continue;
-
-      const taskKey = `${plan.chapterIndex}:${plan.direction}`;
-      if (pageWindowAnalysisControllersRef.current.has(taskKey)) continue;
-      const controller = new AbortController();
-      pageWindowAnalysisControllersRef.current.set(taskKey, controller);
-      const targetBook: ImportedBook = {
-        ...selectedBook,
-        currentChapter: plan.chapterNumber,
-        currentChapterProgress: 0,
-        location: { chapterIndex: plan.chapterIndex, blockIndex: 0, textOffset: 0 },
-        pagePosition: undefined,
-      };
-      const analyzer = createCachedChapterAnalyzer({
-        settings,
-        model: resources.model,
-        profile,
-        lemmaDict: resources.lemmaDict,
-        nlp: resources.nlp,
-        maxCardsPerParagraph: 1,
-        includeCards: false,
-      }, resources.lexicalAnalysisCache);
-      const previousAnalyses = new Map(entry.analyses);
-      const preloadCard = async (
-        analysis: ParagraphAnalysis,
-        paragraphIndex: number,
-        target: DefinitionTarget,
-      ): Promise<void> => {
-        const targetKey = `${paragraphIndex}:${definitionTargetKey(target)}`;
-        if (entry.readyCards.has(targetKey)) return;
-        requestAutomaticDefinition(resources, target);
-        const definitionRequest = automaticDefinitionRequestsRef.current.get(normalizeToken(target.lemma));
-        if (definitionRequest) await definitionRequest;
-        if (controller.signal.aborted) return;
-        const rawDefinition = definitionsByLemmaRef.current.get(normalizeToken(target.lemma));
-        if (!rawDefinition) {
-          entry.readyCards.add(targetKey);
-          return;
-        }
-        const definition = resolveLexiconEntry(rawDefinition, target);
-        if (settings.wsdMode === 'none' || wordNetGlosses(definition).length <= 1) {
-          entry.readyCards.add(targetKey);
-          return;
-        }
-        const context = contextForCard(analysis, target);
-        if (!context) {
-          throw new Error(`Missing edge-window WSD context: chapter=${plan.chapterNumber} paragraph=${paragraphIndex} lemma=${target.lemma}`);
-        }
-        const scoringContext = settings.wsdContextUnit === 'sentence'
-          ? sentenceWindowForWsd(chapter.paragraphs, paragraphIndex, context, settings.wsdContextSize)
-          : paragraphWindowForWsd(chapter.paragraphs, paragraphIndex, context, settings.wsdContextSize);
-        const scoreKey = JSON.stringify([
-          settings.wsdMode,
-          scoringContext,
-          definition.word,
-          wordNetGlosses(definition),
-        ]);
-        const existingScores = entry.scores.get(targetKey);
-        if (existingScores?.key === scoreKey) {
-          entry.readyCards.add(targetKey);
-          return;
-        }
-        let scores = getCachedWordSenseScores(settings.wsdMode, scoringContext, definition);
-        if (scores === null) {
-          await waitForWsdModelReady(settings.wsdMode, controller.signal);
-          scores = await scoreWordSenses(settings.wsdMode, scoringContext, definition, 'preload', controller.signal);
-        }
-        if (controller.signal.aborted) return;
-        entry.scores.set(targetKey, { key: scoreKey, scores });
-        entry.readyCards.add(targetKey);
-      };
-      void (async () => {
-        try {
-          for (const paragraphIndex of [...requiredParagraphIndexes].sort((left, right) => left - right)) {
-            let selected = entry.analyses.get(paragraphIndex);
-            if (!selected) {
-              await yieldForReaderPrerenderContinuation();
-              if (controller.signal.aborted) return;
-              const analysis = buildParagraphAnalysisAtIndex(targetBook, paragraphIndex, analyzer);
-              selected = {
-                ...analysis,
-                cardTargets: deduplicateParagraphCardTargets(analysis, paragraphIndex, previousAnalyses, settings),
-              };
-              previousAnalyses.set(paragraphIndex, selected);
-              entry.analyses.set(paragraphIndex, selected);
-            }
-          }
-          if (controller.signal.aborted) return;
-          entry.analysisComplete = entry.analyses.size === chapter.paragraphs.length;
-          pageWindow.analysisComplete = [...pageWindow.requiredParagraphIndexes]
-            .every((paragraphIndex) => entry.analyses.has(paragraphIndex));
-          const cardTasks = [...pageWindow.requiredParagraphIndexes].flatMap((paragraphIndex) => {
-            const analysis = entry.analyses.get(paragraphIndex);
-            return analysis ? analysis.cardTargets.map((target) => preloadCard(analysis, paragraphIndex, target)) : [];
-          });
-          await Promise.all(cardTasks);
-          if (controller.signal.aborted) return;
-          pageWindow.cardPreloadComplete = preparedPageWindowCardsAreReady(entry, pageWindow);
-          entry.cardPreloadComplete = [...entry.analyses].every(([paragraphIndex, analysis]) =>
-            analysis.cardTargets.every((target) => entry.readyCards.has(`${paragraphIndex}:${definitionTargetKey(target)}`)));
-          pageWindow.contentRevision += 1;
-          pageWindow.revision += 1;
-          setNextChapterPreloadRevision((revision) => revision + 1);
-        } catch (failure) {
-          if (controller.signal.aborted) return;
-          const error = failure instanceof Error ? failure : new Error(String(failure));
-          controller.abort();
-          pageWindow.previewError = error;
-          pageWindow.revision += 1;
-          console.error('reader-edge-window-preload-failed', {
-            bookId: selectedBook.id,
-            chapter: plan.chapterNumber,
-            direction: plan.direction,
-            error,
-          });
-          setNextChapterPreloadRevision((revision) => revision + 1);
-        } finally {
-          if (pageWindowAnalysisControllersRef.current.get(taskKey) === controller) {
-            pageWindowAnalysisControllersRef.current.delete(taskKey);
-          }
-        }
-      })();
-    }
-    if (entriesChanged) setNextChapterPreloadRevision((revision) => revision + 1);
-  }, [
-    assistanceEnabled,
-    book?.currentChapter,
-    book?.id,
-    book?.updatedAt,
-    fullscreenPageMode,
-    fullscreenTopSpacing,
-    initialViewportReady,
-    nextChapterPreloadRevision,
-    paginationProfileKey,
-    requestAutomaticDefinition,
-    settings,
-    viewportSize.height,
-    viewportSize.width,
-  ]);
 
   const markLemma = (lemma: string, known: boolean, sourceParagraphIndex?: number) => {
     if (typeof sourceParagraphIndex === 'number' && Number.isFinite(sourceParagraphIndex)) {
@@ -3508,18 +1522,6 @@ export default function ReaderPage() {
   }, [persistCurrentChapterProgress]);
 
   const restoreCurrentChapterProgress = useCallback((targetBook: ImportedBook) => {
-    if (settings.readingMode === 'page') {
-      const location = targetBook.location ?? readerLocationFromLegacyProgress(
-        targetBook,
-        targetBook.currentChapter,
-        targetBook.currentChapterProgress,
-      );
-      pageAnchorLocationRef.current = location;
-      currentLocationRef.current = location;
-      lastStableLocationRef.current = location;
-      pendingReaderAnchorRef.current = null;
-      return;
-    }
     if (pendingReaderAnchorRef.current) {
       document.getElementById(pendingReaderAnchorRef.current)?.scrollIntoView({ behavior: 'auto', block: 'start' });
       return;
@@ -3530,10 +1532,9 @@ export default function ReaderPage() {
     }
     const targetScrollTop = calculateScrollTopFromProgress(targetBook.currentChapterProgress);
     window.scrollTo({ top: targetScrollTop, behavior: 'auto' });
-  }, [settings.readingMode]);
+  }, []);
 
   const navigateToReaderLocation = useCallback((rawLocation: ReaderLocation, pushHistory: boolean): void => {
-    keepRevealedPageDuringRefreshRef.current = false;
     const currentBook = bookRef.current;
     if (!currentBook) return;
     const location = resolveReaderLocation(currentBook, rawLocation);
@@ -3545,8 +1546,6 @@ export default function ReaderPage() {
       returnLocationRef.current = previousLocation;
       setReturnLocation(previousLocation);
     }
-    pendingPageTurnsRef.current = 0;
-    setPendingPageTurns(0);
     setWordPopups([]);
     setNavigationOpen(false);
     const chapter = currentBook.chapters[location.chapterIndex];
@@ -3558,7 +1557,6 @@ export default function ReaderPage() {
       currentChapter: location.chapterIndex + 1,
       currentChapterProgress: chapterProgress,
       location,
-      pagePosition: undefined,
     };
     saveReaderBookProgress(nextBook);
     currentLocationRef.current = location;
@@ -3569,31 +1567,14 @@ export default function ReaderPage() {
     setReadingProgressPercent(bookProgressAtLocation(currentBook, location) * 100);
     if (location.chapterIndex + 1 !== currentBook.currentChapter) {
       pendingReaderAnchorRef.current = null;
-      pageAnchorLocationRef.current = location;
-      pendingPageAnchorRef.current = location;
-      openReaderChapter(nextBook, 'anchor');
+      openReaderChapter(nextBook);
       return;
     }
     bookRef.current = nextBook;
-    if (settings.readingMode === 'page') {
-      pageAnchorLocationRef.current = location;
-      pendingPageAnchorRef.current = location;
-      if (pagination.isReady && pagination.layout) {
-        const pageIndex = preparedPageIndexForLocation(pagination.layout.pages, location);
-        if (pageIndex !== null) {
-          const pageRefreshAnchor = pageRefreshAnchorRef.current;
-          if (pageRefreshAnchor) {
-            pageRefreshAnchorRef.current = { ...pageRefreshAnchor, location };
-          }
-          commitReaderPage(pageIndex, pagination.layout);
-        }
-      }
-      return;
-    }
     window.requestAnimationFrame(() => {
       if (readerRootRef.current) restoreReaderLocation(readerRootRef.current, location, 72);
     });
-  }, [captureCurrentReaderLocation, commitReaderPage, openReaderChapter, pagination.isReady, pagination.layout, saveReaderBookProgress, settings.readingMode]);
+  }, [captureCurrentReaderLocation, openReaderChapter, saveReaderBookProgress]);
 
   const returnToPreviousPosition = useCallback((): void => {
     const previousLocation = navigationHistoryRef.current.pop() ?? returnLocationRef.current;
@@ -3625,210 +1606,19 @@ export default function ReaderPage() {
       currentChapter: nextChapter,
       currentChapterProgress: 0,
       location: { chapterIndex: nextChapter - 1, blockIndex: 0, textOffset: 0 },
-      pagePosition: undefined,
     };
     saveReaderBookProgress(nextBook);
     currentLocationRef.current = nextBook.location ?? null;
     lastStableLocationRef.current = nextBook.location ?? null;
     canonicalAnchorCapturedRef.current = Boolean(nextBook.location);
-    pageAnchorLocationRef.current = nextBook.location ?? null;
-    pendingPageAnchorRef.current = nextBook.location ?? null;
     isBookFinishedRef.current = false;
     if (nextBook.location) {
       setCurrentLocation(nextBook.location);
       setReadingProgressPercent(bookProgressAtLocation(nextBook, nextBook.location) * 100);
     }
-    openReaderChapter(nextBook, delta < 0 ? 'last' : 'first');
+    openReaderChapter(nextBook);
     window.scrollTo({ top: 0, behavior: 'auto' });
   };
-
-  const navigatePage = useCallback((delta: -1 | 1): void => {
-    keepRevealedPageDuringRefreshRef.current = false;
-    const layout = paginationLayoutRef.current;
-    const activeChapterIndex = bookRef.current ? bookRef.current.currentChapter - 1 : -1;
-    if (pendingPageTurnsRef.current !== 0 || !pagination.isReady || !layout
-      || layout.chapterIndex !== activeChapterIndex) {
-      pendingPageTurnsRef.current += delta;
-      setPendingPageTurns(pendingPageTurnsRef.current);
-      return;
-    }
-    const targetPageIndex = currentPageIndexRef.current + delta;
-    if (targetPageIndex >= 0 && targetPageIndex < layout.pages.length) {
-      setFullscreenToolbarOpen(false);
-      const pageRefreshAnchor = pageRefreshAnchorRef.current;
-      const targetPage = layout.pages[targetPageIndex];
-      if (pageRefreshAnchor && targetPage) {
-        pageRefreshAnchorRef.current = { ...pageRefreshAnchor, location: targetPage.startLocation };
-      }
-      commitReaderPage(targetPageIndex, layout);
-      return;
-    }
-
-    const hasMorePages = delta < 0 ? layout.hasPreviousPages : layout.hasNextPages;
-    if (hasMorePages) {
-      pendingPageTurnsRef.current = delta;
-      setPendingPageTurns(delta);
-      pagination.requestBoundaryPage(delta < 0 ? 'previous' : 'next');
-      return;
-    }
-    const currentBook = bookRef.current;
-    if (!currentBook) return;
-    const currentChapterNumber = clampChapterNumber(currentBook, currentBook.currentChapter);
-    const nextChapterNumber = adjacentReadingChapter(currentBook.chapters, currentChapterNumber, delta);
-    if (nextChapterNumber === currentChapterNumber) return;
-    setFullscreenToolbarOpen(false);
-    persistCurrentChapterProgress(true);
-    const chapterIndex = nextChapterNumber - 1;
-    const location = delta < 0
-      ? lastReaderLocationInChapter(currentBook, chapterIndex)
-      : { chapterIndex, blockIndex: 0, textOffset: 0 };
-    const nextChapter = currentBook.chapters[chapterIndex];
-    const chapterProgress = nextChapter
-      ? chapterProgressAtLocation(nextChapter, location.blockIndex, location.textOffset)
-      : 0;
-    const nextBook: ImportedBook = {
-      ...currentBook,
-      currentChapter: nextChapterNumber,
-      currentChapterProgress: chapterProgress,
-      location,
-      pagePosition: undefined,
-    };
-    saveReaderBookProgress(nextBook);
-    currentLocationRef.current = location;
-    lastStableLocationRef.current = location;
-    pageAnchorLocationRef.current = location;
-    pendingPageAnchorRef.current = location;
-    canonicalAnchorCapturedRef.current = true;
-    isBookFinishedRef.current = false;
-    setCurrentLocation(location);
-    setReadingProgressPercent(bookProgressAtLocation(nextBook, location) * 100);
-    currentPageIndexRef.current = 0;
-    setCurrentPageIndex(0);
-    openReaderChapter(nextBook, delta < 0 ? 'last' : 'first');
-    window.scrollTo({ top: 0, behavior: 'auto' });
-  }, [commitReaderPage, openReaderChapter, pagination.isReady, pagination.layout, pagination.requestBoundaryPage, persistCurrentChapterProgress, saveReaderBookProgress]);
-
-  useEffect(() => {
-    const layout = paginationLayoutRef.current;
-    const requestedTurns = pendingPageTurnsRef.current;
-    if (requestedTurns === 0 || !pagination.isReady || !layout
-      || layout.chapterIndex !== currentLocation.chapterIndex) return;
-    const direction = requestedTurns < 0 ? -1 : 1;
-    const available = direction < 0 ? currentPageIndexRef.current : layout.pages.length - 1 - currentPageIndexRef.current;
-    const steps = Math.min(Math.abs(requestedTurns), available);
-    const remaining = requestedTurns - direction * steps;
-    if (steps > 0) commitReaderPage(currentPageIndexRef.current + direction * steps, layout);
-    pendingPageTurnsRef.current = remaining;
-    setPendingPageTurns(remaining);
-    if (remaining === 0) return;
-    const hasMore = direction < 0 ? layout.hasPreviousPages : layout.hasNextPages;
-    if (hasMore) {
-      pagination.requestBoundaryPage(direction < 0 ? 'previous' : 'next');
-      return;
-    }
-    pendingPageTurnsRef.current = 0;
-    setPendingPageTurns(0);
-    navigatePage(direction);
-    const carriedTurns = remaining - direction;
-    pendingPageTurnsRef.current = carriedTurns;
-    setPendingPageTurns(carriedTurns);
-  }, [pendingPageTurns, pagination.isReady, pagination.layout, pagination.requestBoundaryPage,
-    currentLocation.chapterIndex, commitReaderPage, navigatePage]);
-
-  const handlePagePointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
-    if (settings.readingMode !== 'page' || event.pointerType !== 'touch' || !event.isPrimary) return;
-    const target = event.target;
-    if (target instanceof Element && target.closest('button, a, input, textarea, select, [role="dialog"], [data-definition-card="true"]')) return;
-    pageSwipeStartRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-  };
-
-  const handlePagePointerUp = (event: ReactPointerEvent<HTMLElement>): void => {
-    const start = pageSwipeStartRef.current;
-    pageSwipeStartRef.current = null;
-    if (!start || start.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - start.x;
-    const deltaY = event.clientY - start.y;
-    if (fullscreenPageMode && fullscreenToolbarOpen
-      && deltaY < -48 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
-      setFullscreenToolbarOpen(false);
-      suppressPageSwipeClickUntilRef.current = performance.now() + 500;
-      return;
-    }
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) return;
-    suppressPageSwipeClickUntilRef.current = performance.now() + 500;
-    navigatePage(deltaX < 0 ? 1 : -1);
-  };
-
-  const handlePagePointerMove = (event: ReactPointerEvent<HTMLElement>): void => {
-    const start = pageSwipeStartRef.current;
-    if (!start || start.pointerId !== event.pointerId || !fullscreenPageMode || !fullscreenToolbarOpen) return;
-    const deltaX = event.clientX - start.x;
-    const deltaY = event.clientY - start.y;
-    if (deltaY < -48 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
-      pageSwipeStartRef.current = null;
-      setFullscreenToolbarOpen(false);
-      suppressPageSwipeClickUntilRef.current = performance.now() + 500;
-    }
-  };
-
-  const handlePagePointerCancel = (event: ReactPointerEvent<HTMLElement>): void => {
-    if (pageSwipeStartRef.current?.pointerId === event.pointerId) pageSwipeStartRef.current = null;
-  };
-
-  const handlePageScreenClick = (event: ReactMouseEvent<HTMLElement>): void => {
-    if (performance.now() <= suppressPageSwipeClickUntilRef.current) {
-      suppressPageSwipeClickUntilRef.current = 0;
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    const target = event.target;
-    const clickedHeader = target instanceof Element && target.closest('header');
-    const clickedReaderText = target instanceof Element
-      && target.closest('[data-reader-text-block], .reader-text, [data-word-popup-trigger="true"]');
-    if (fullscreenPageMode) {
-      if (fullscreenToolbarOpen) {
-        if (clickedHeader) return;
-        setFullscreenToolbarOpen(false);
-        if (clickedReaderText) return;
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (event.clientY <= fullscreenTopSpacing) {
-        setFullscreenToolbarOpen(true);
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (clickedReaderText) return;
-    }
-    if (settings.readingMode !== 'page') return;
-    if (target instanceof Element && target.closest('button, a, input, textarea, select, [role="button"], [role="dialog"], [data-definition-card="true"], [data-word-popup-index]')) return;
-    const edgeWidth = Math.min(120, Math.max(56, window.innerWidth * 0.14));
-    if (event.clientX <= edgeWidth) {
-      event.preventDefault();
-      event.stopPropagation();
-      navigatePage(-1);
-      return;
-    }
-    if (event.clientX >= window.innerWidth - edgeWidth) {
-      event.preventDefault();
-      event.stopPropagation();
-      navigatePage(1);
-    }
-  };
-
-  useEffect(() => {
-    if (!fullscreenPageMode || !fullscreenToolbarOpen) return;
-    const handleFullscreenEscape = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return;
-      setFullscreenToolbarOpen(false);
-      event.preventDefault();
-    };
-    window.addEventListener('keydown', handleFullscreenEscape);
-    return () => window.removeEventListener('keydown', handleFullscreenEscape);
-  }, [fullscreenPageMode, fullscreenToolbarOpen]);
 
   useEffect(() => {
     if (!book || isLoading) {
@@ -3924,13 +1714,12 @@ export default function ReaderPage() {
       if (isRestoringProgressRef.current) {
         return;
       }
-      const recentManualScroll = performance.now() - lastScrollActivityAtRef.current < 500;
       const capturedLocation = captureCurrentReaderLocation();
       if (capturedLocation) {
         currentLocationRef.current = capturedLocation;
         lastStableLocationRef.current = capturedLocation;
         const activeBook = bookRef.current;
-        if (activeBook && recentManualScroll && isBookFinishedRef.current
+        if (activeBook && isBookFinishedRef.current
           && !readerLocationsEqual(capturedLocation, lastLinearReaderLocation(activeBook))) {
           isBookFinishedRef.current = false;
         }
@@ -3938,6 +1727,7 @@ export default function ReaderPage() {
       const currentBook = bookRef.current;
       const lastLinearChapterIndex = currentBook?.chapters.findLastIndex((chapter) => chapter.linear !== false) ?? -1;
       const reachedDocumentBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight) <= 2;
+      const recentManualScroll = performance.now() - lastScrollActivityAtRef.current < 500;
       if (currentBook && reachedDocumentBottom && recentManualScroll
         && currentBook.currentChapter - 1 === lastLinearChapterIndex) {
         const endLocation = lastLinearReaderLocation(currentBook);
@@ -4365,166 +2155,17 @@ export default function ReaderPage() {
   }, [closeAllWordPopups, wordPopups.length]);
 
   useLayoutEffect(() => {
-    const opening = instantChapterTransitionRef.current;
-    if (!book || !opening) return;
-    instantChapterTransitionRef.current = null;
-    const chapter = book.chapters[clampChapterNumber(book, book.currentChapter) - 1];
-    const visibleParagraphs = measureVisibleReaderParagraphs(paraRefs.current, chapter.paragraphs.length, window.innerHeight);
-    const visibleCardsReady = visibleParagraphs.every((index) => {
-      const analysis = opening.analyses.get(index);
-      return analysis !== undefined && analysis.cardTargets.every((target) =>
-        opening.readyCards.has(`${index}:${definitionTargetKey(target)}`));
-    });
-    if (!visibleCardsReady) beginReaderLoading(0);
-  }, [book, beginReaderLoading]);
-
-  useLayoutEffect(() => {
-    if (previousReadingModeRef.current === settings.readingMode) return;
-    previousReadingModeRef.current = settings.readingMode;
-    if (settings.readingMode === 'page') pageModeWasRevealedRef.current = false;
-    if (!initialReaderLoadPendingRef.current) return;
-    initialViewportParagraphsRef.current = null;
-    completedInitialAnalysisRef.current = new Set();
-    setInitialAnalysisRevision((revision) => revision + 1);
-  }, [settings.readingMode]);
-
-  useLayoutEffect(() => {
-    if (settings.readingMode !== 'page' || !pagination.isReady || !pagination.layout || !book) return;
-    const currentBook = bookRef.current ?? book;
-    const layout = pagination.layout;
-    const savedPagePosition = currentBook.pagePosition;
-    const exactSavedPage = savedPagePosition?.layoutKey === layout.signature
-      && savedPagePosition.pageIndex < layout.pages.length
-      ? savedPagePosition.pageIndex
-      : null;
-    const pageRefreshAnchor = pageRefreshAnchorRef.current;
-    const anchor = pendingPageAnchorRef.current
-      ?? pageRefreshAnchor?.location
-      ?? pageAnchorLocationRef.current
-      ?? currentBook.location
-      ?? currentLocationRef.current
-      ?? readerLocationFromLegacyProgress(currentBook, currentBook.currentChapter, currentBook.currentChapterProgress);
-    const pageIndex = exactSavedPage ?? preparedPageIndexForLocation(layout.pages, anchor);
-    if (pageIndex === null) return;
-    const page = layout.pages[pageIndex];
-    if (!page) throw new Error(`Reader pagination produced no page: chapterIndex=${layout.chapterIndex}`);
-    const finishedLocation = lastLinearReaderLocation(currentBook);
-    const expectedLocation = readerLocationsEqual(page.endLocation, finishedLocation)
-      ? finishedLocation
-      : resolveReaderLocation(currentBook, page.startLocation);
-    const shouldCommit = currentPageIndexRef.current !== pageIndex
-      || currentBook.pagePosition?.layoutKey !== layout.signature
-      || currentBook.pagePosition?.pageIndex !== pageIndex
-      || !readerLocationsEqual(currentBook.location ?? currentLocationRef.current, expectedLocation);
-    if (shouldCommit) {
-      commitReaderPage(pageIndex, layout);
-    } else {
-      currentPageIndexRef.current = pageIndex;
-      setCurrentPageIndex(pageIndex);
-      pageAnchorLocationRef.current = page.startLocation;
-      pendingPageAnchorRef.current = null;
-    }
-    if (pageRefreshAnchor
-      && pagination.settledMeasurementRevision > pageRefreshAnchor.settledMeasurementRevision) {
-      pageRefreshAnchorRef.current = null;
-    }
-  }, [book, commitReaderPage, pagination.isReady, pagination.layout, pagination.settledMeasurementRevision, settings.readingMode]);
-
-  useLayoutEffect(() => {
-    const root = readerRootRef.current;
-    if (!root) return;
-    const setInert = (element: HTMLElement, inert: boolean): void => {
-      const savedState = paginationInertStateRef.current.get(element);
-      if (inert) {
-        if (!savedState) {
-          paginationInertStateRef.current.set(element, {
-            inert: element.inert,
-            ariaHidden: element.getAttribute('aria-hidden'),
-          });
-        }
-        element.inert = true;
-        element.setAttribute('aria-hidden', 'true');
-        return;
-      }
-      if (!savedState) return;
-      element.inert = savedState.inert;
-      if (savedState.ariaHidden === null) element.removeAttribute('aria-hidden');
-      else element.setAttribute('aria-hidden', savedState.ariaHidden);
-      paginationInertStateRef.current.delete(element);
-    };
-    const rows = Array.from(root.querySelectorAll<HTMLElement>('[data-reader-block-index]'));
-    if (settings.readingMode !== 'page') {
-      setInert(root, false);
-      rows.forEach((row) => {
-        setInert(row, false);
-        row.querySelectorAll<HTMLElement>('a, button, input, select, textarea, [tabindex], [contenteditable="true"], [data-definition-card="true"]')
-          .forEach((element) => setInert(element, false));
-      });
-      return;
-    }
-    setInert(root, !pageModeReady);
-    if (!pageModeReady) return;
-    const viewport = pageViewportRef.current;
-    if (!viewport) return;
-    const outerRect = viewport.getBoundingClientRect();
-    const readingRow = root.closest<HTMLElement>('[data-testid="reading-row"]');
-    const rowRect = readingRow?.getBoundingClientRect() ?? outerRect;
-    const viewportRect = {
-      top: Math.max(outerRect.top, rowRect.top),
-      bottom: Math.min(outerRect.bottom, rowRect.bottom),
-    };
-    const isOutsidePage = (element: HTMLElement): boolean => {
-      const rect = element.getBoundingClientRect();
-      return rect.bottom <= viewportRect.top || rect.top >= viewportRect.bottom;
-    };
-    const focusableSelector = 'a, button, input, select, textarea, [tabindex], [contenteditable="true"], [data-definition-card="true"]';
-    rows.forEach((row) => {
-      const fragmentTop = Number(row.dataset.readerPageFragmentTop);
-      const fragmentBottom = Number(row.dataset.readerPageFragmentBottom);
-      const hasVisibleFragment = Number.isFinite(fragmentTop)
-        && Number.isFinite(fragmentBottom)
-        && fragmentBottom > fragmentTop;
-      const visibleFragmentTop = hasVisibleFragment ? rowRect.top + fragmentTop : 0;
-      const visibleFragmentBottom = hasVisibleFragment ? rowRect.top + fragmentBottom : 0;
-      const rowOutsidePage = !hasVisibleFragment
-        || visibleFragmentBottom <= viewportRect.top
-        || visibleFragmentTop >= viewportRect.bottom;
-      setInert(row, rowOutsidePage);
-      row.querySelectorAll<HTMLElement>(focusableSelector).forEach((element) => {
-        const rect = element.getBoundingClientRect();
-        const outsideFragment = rect.bottom <= visibleFragmentTop || rect.top >= visibleFragmentBottom;
-        setInert(element, rowOutsidePage || outsideFragment || isOutsidePage(element));
-      });
-    });
-  }, [chapterAnalysis, currentPageIndex, definitionsByLemma, failedDefinitionLemmas, loadingDefinitionLemmas, pageModeReady, pagination.layout, settings.readingMode]);
-
-  useLayoutEffect(() => {
-    if (!book || isLoading || !initialReaderLoadPendingRef.current) return;
-    if (settings.readingMode === 'page') {
-      if (!displayedPage) return;
-      const current = initialViewportParagraphsRef.current;
-      const sameScope = current !== null
-        && current.length === displayedPageParagraphs.length
-        && current.every((index, position) => index === displayedPageParagraphs[position]);
-      if (!sameScope) {
-        initialViewportParagraphsRef.current = displayedPageParagraphs;
-        completedInitialAnalysisRef.current = new Set(displayedPageParagraphs.filter((index) =>
-          initialAnalysisFailedRef.current || publishedAnalysisParagraphsRef.current.has(index)));
-        setInitialAnalysisRevision((revision) => revision + 1);
-      }
-      if (!assistanceEnabledRef.current || displayedPageParagraphs.length === 0) {
-        initialReaderLoadPendingRef.current = false;
-        setInitialViewportReady(true);
-      }
-      return;
-    }
+    if (!book || isLoading || !initialReaderLoadPendingRef.current || initialViewportParagraphsRef.current !== null) return;
     const paragraphCount = book.chapters[clampChapterNumber(book, book.currentChapter) - 1]?.paragraphs.length ?? 0;
-    if (initialViewportParagraphsRef.current !== null) return;
     let firstFrame = 0;
     let secondFrame = 0;
     firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
-        const viewportParagraphs = measureVisibleReaderParagraphs(paraRefs.current, paragraphCount, window.innerHeight);
+        const viewportParagraphs = measureVisibleReaderParagraphs(
+          paraRefs.current,
+          paragraphCount,
+          window.innerHeight,
+        );
         if (viewportParagraphs.length === 0 && paragraphCount > 0) {
           viewportParagraphs.push(resolveAnalysisAnchorIndex(paragraphCount, book.currentChapterProgress));
         }
@@ -4542,22 +2183,16 @@ export default function ReaderPage() {
       window.cancelAnimationFrame(firstFrame);
       window.cancelAnimationFrame(secondFrame);
     };
-  }, [book, isLoading, initialProgressRestored, resolveAnalysisAnchorIndex, settings.readingMode, displayedPage, displayedPageParagraphs]);
+  }, [book, isLoading, initialProgressRestored, resolveAnalysisAnchorIndex]);
 
   useEffect(() => {
-    const visibleParagraphs = settings.readingMode === 'page'
-      ? displayedPageParagraphs
-      : initialViewportParagraphsRef.current;
+    const visibleParagraphs = initialViewportParagraphsRef.current;
     if (!initialReaderLoadPendingRef.current || !book || isLoading || !assistanceEnabled) return;
-    if (!visibleParagraphs || visibleParagraphs.some((index) => settings.readingMode === 'page'
-      ? pageAnalysisCompleteRunId !== analysisRunIdRef.current
-        && !publishedAnalysisParagraphsRef.current.has(index)
-        && !initialAnalysisFailedRef.current
-      : !completedInitialAnalysisRef.current.has(index))) {
+    if (!visibleParagraphs || visibleParagraphs.some((index) => !completedInitialAnalysisRef.current.has(index))) {
       setInitialLoadingMessage('Choosing difficult words...');
       return;
     }
-    if (settings.readingMode === 'scroll' && !areInitialReaderCardsReady(
+    if (!areInitialReaderCardsReady(
       visibleParagraphs,
       completedInitialAnalysisRef.current,
       chapterAnalysis,
@@ -4568,40 +2203,17 @@ export default function ReaderPage() {
       setInitialLoadingMessage('Fetching definitions...');
       return;
     }
-    const openingPage = settings.readingMode === 'page' ? displayedPage : null;
-    const openingCardKeys = openingPage ? new Set(openingPage.cardTargetKeys) : null;
-    const openingCardsReady = settings.readingMode === 'scroll' || visibleParagraphs.every((index) => {
-      if (settings.readingMode === 'page'
-        ? pageAnalysisCompleteRunId !== analysisRunIdRef.current
-          && !publishedAnalysisParagraphsRef.current.has(index)
-          && !initialAnalysisFailedRef.current
-        : !completedInitialAnalysisRef.current.has(index)) return false;
-      const analysis = chapterAnalysis[index];
-      if (!analysis) return false;
-      return analysis.cardTargets.every((target) => {
-        if (openingCardKeys && !openingCardKeys.has(readerTargetDomKey(target, index))) return true;
-        const lemma = normalizeToken(target.lemma);
-        return !loadingDefinitionLemmas.has(lemma)
-          && (definitionsByLemma.has(lemma) || failedDefinitionLemmas.has(lemma));
-      });
-    });
-    if (!openingCardsReady) {
-      setInitialLoadingMessage('Fetching definitions...');
-      return;
-    }
     const visibleCardsReady = visibleParagraphs.every((index) =>
       chapterAnalysis[index].cardTargets.every((target) =>
-        (openingCardKeys && !openingCardKeys.has(readerTargetDomKey(target, index)))
-          || readyInitialCardsRef.current.has(`${index}:${definitionTargetKey(target)}`)));
+        readyInitialCardsRef.current.has(`${index}:${definitionTargetKey(target)}`)));
     if (!visibleCardsReady) {
       setInitialLoadingMessage(settings.wsdMode === 'none' ? 'Fetching definitions...' : 'Performing WSD...');
       return;
     }
     if (!initialProgressRestored) return;
-    if (settings.readingMode === 'page'
-      && (openingPageMeasurementKey === null
-        || pagination.measuredMeasurementKey !== openingPageMeasurementKey)) return;
     const viewportCheckFrame = window.requestAnimationFrame(() => {
+      const currentBook = bookRef.current;
+      if (currentBook) restoreCurrentChapterProgress(currentBook);
       initialReaderLoadPendingRef.current = false;
       setInitialViewportReady(true);
     });
@@ -4613,17 +2225,12 @@ export default function ReaderPage() {
     chapterAnalysis,
     initialAnalysisRevision,
     initialProgressRestored,
+    restoreCurrentChapterProgress,
     definitionsByLemma,
     loadingDefinitionLemmas,
     failedDefinitionLemmas,
     activeAnalysisRunId,
     settings.wsdMode,
-    settings.readingMode,
-    openingPageMeasurementKey,
-    pagination.measuredMeasurementKey,
-    displayedPage,
-    displayedPageParagraphs,
-    pagination.settledMeasurementRevision,
   ]);
 
   const readerLoading = isLoading || (book !== null && !initialViewportReady);
@@ -4689,11 +2296,7 @@ export default function ReaderPage() {
         return;
       }
       if (event.ctrlKey || event.metaKey || event.altKey || readerSettingsOpen || navigationOpen || studyOpen || wordPopups.length > 0) return;
-      if (settings.readingMode === 'page'
-        && (event.key === 'ArrowLeft' || event.key === 'PageUp' || event.key === 'ArrowRight' || event.key === 'PageDown')) {
-        event.preventDefault();
-        navigatePage(event.key === 'ArrowLeft' || event.key === 'PageUp' ? -1 : 1);
-      } else if (event.key.toLowerCase() === 'b') {
+      if (event.key.toLowerCase() === 'b') {
         event.preventDefault();
         addCurrentBookmark();
       } else if (event.key === '[') {
@@ -4706,7 +2309,7 @@ export default function ReaderPage() {
     };
     window.addEventListener('keydown', handleReaderShortcuts);
     return () => window.removeEventListener('keydown', handleReaderShortcuts);
-  }, [addCurrentBookmark, navigationOpen, navigatePage, readerSettingsOpen, settings.readingMode, studyOpen, updateCurrentChapter, wordPopups.length]);
+  }, [addCurrentBookmark, navigationOpen, readerSettingsOpen, studyOpen, updateCurrentChapter, wordPopups.length]);
 
   useEffect(() => {
     if (!book || isLoading || !initialViewportReady) return;
@@ -4716,7 +2319,7 @@ export default function ReaderPage() {
 
   useEffect(() => {
     const root = readerRootRef.current;
-    if (!root || !book || !initialViewportReady || settings.readingMode === 'page') return;
+    if (!root || !book || !initialViewportReady) return;
     const scheduleAnchorRestore = (): void => {
       if (!canonicalAnchorCapturedRef.current) return;
       if (layoutRestoreTimeoutRef.current !== null) window.clearTimeout(layoutRestoreTimeoutRef.current);
@@ -4740,7 +2343,7 @@ export default function ReaderPage() {
         layoutRestoreTimeoutRef.current = null;
       }
     };
-  }, [book?.id, book?.currentChapter, initialViewportReady, settings.readingMode]);
+  }, [book?.id, book?.currentChapter, initialViewportReady]);
 
   useLayoutEffect(() => {
     if (!book || !initialViewportReady) return;
@@ -4753,7 +2356,6 @@ export default function ReaderPage() {
     ]);
     if (previousLayoutKeyRef.current === nextLayoutKey) return;
     previousLayoutKeyRef.current = nextLayoutKey;
-    if (settings.readingMode === 'page') return;
     if (!canonicalAnchorCapturedRef.current) return;
     const anchor = lastStableLocationRef.current;
     if (!anchor) return;
@@ -4762,20 +2364,20 @@ export default function ReaderPage() {
       if (readerRootRef.current) restoreReaderLocation(readerRootRef.current, anchor, 72);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [assistanceEnabled, book?.id, book?.currentChapter, initialViewportReady, settings.fontChoice, settings.fontSize, settings.lineSpacing, settings.pageWidth, settings.readingMode]);
+  }, [assistanceEnabled, book?.id, book?.currentChapter, initialViewportReady, settings.fontChoice, settings.fontSize, settings.lineSpacing, settings.pageWidth]);
 
   useLayoutEffect(() => {
-    if (!readerLoading && settings.readingMode !== 'page') return;
+    if (!readerLoading) return;
     const root = document.documentElement;
     const previousOverflow = root.style.overflow;
     const previousScrollbarGutter = root.style.scrollbarGutter;
-    root.style.scrollbarGutter = settings.readingMode === 'page' ? 'auto' : 'stable';
+    root.style.scrollbarGutter = 'stable';
     root.style.overflow = 'hidden';
     return () => {
       root.style.overflow = previousOverflow;
       root.style.scrollbarGutter = previousScrollbarGutter;
     };
-  }, [readerLoading, settings.readingMode]);
+  }, [readerLoading]);
 
   if (isLoading) {
     return (
@@ -4788,16 +2390,6 @@ export default function ReaderPage() {
   if (!book) {
     return <div className="min-h-screen bg-background text-foreground p-6">No books found in your library.</div>;
   }
-  const pageLayout = pagination.layout?.layoutKey === paginationLayoutKey
-    && pagination.layout.chapterIndex === paginationChapterIndex
-    ? pagination.layout
-    : null;
-  const activePage = pageLayout?.pages[currentPageIndex];
-  const pageHasOversizedSegment = activePage?.issues.length ? activePage.issues.length > 0 : false;
-  const activePageTextHeight = activePage ? activePage.textClipHeight : 0;
-  const activePagePresentationHeight = activePage && pageHasOversizedSegment
-    ? Math.max(paginationPageHeight, activePage.presentationHeight)
-    : paginationPageHeight;
   const currentChapterNumber = clampChapterNumber(book, book.currentChapter);
   const currentChapter = book.chapters[currentChapterNumber - 1];
   const chapterParagraphs = currentChapter?.paragraphs ?? [];
@@ -4805,93 +2397,7 @@ export default function ReaderPage() {
   const profileStateForRender = loadProfileState();
   const activeProfileForRender = getActiveProfile(profileStateForRender);
   const observationLabels = activeProfileForRender.observations;
-  const currentChapterNumberForPrerender = clampChapterNumber(book, book.currentChapter);
-  const prerenderPlans = initialViewportReady && settings.readingMode === 'page'
-    ? [
-      ...planReaderChapterPageWindows(
-        book, currentChapterNumberForPrerender, -1, 'ending', preparedChapterOpeningsRef.current,
-        paginationProfileKey, readerProfileIdRef.current, viewportSize.width, viewportSize.height,
-        paginationPageHeight, settings, assistanceEnabled,
-      ),
-      ...planReaderChapterPageWindows(
-        book, currentChapterNumberForPrerender, 1, 'opening', preparedChapterOpeningsRef.current,
-        paginationProfileKey, readerProfileIdRef.current, viewportSize.width, viewportSize.height,
-        paginationPageHeight, settings, assistanceEnabled,
-      ),
-    ]
-    : [];
-  const prerenderEntries = prerenderPlans.flatMap((plan) => {
-    const { entry, pageWindow } = plan;
-    if (!entry || !pageWindow || pageWindow.previewError
-      || isPreparedChapterPageWindowReady(entry, pageWindow, assistanceEnabled)) return [];
-    return [{ chapterIndex: plan.chapterIndex, layoutKey: plan.layoutKey, direction: plan.direction, entry, pageWindow }];
-  });
   const chapterReaderBlocks = readerBlocksForChapter(chapterParagraphs, currentChapter?.readerBlocks);
-  const activePageCardGroups = new Map(pageModeReady
-    ? activePage?.cardGroups.map((group) => [group.blockIndex, group]) ?? []
-    : []);
-  const activePageBlockOffsets = new Map(activePage?.blockDisplayOffsets.map((entry) => [entry.blockIndex, entry.offset]) ?? []);
-  const activePageBlockFragments = new Map(activePage?.blockFragments.map((fragment) => [fragment.blockIndex, fragment]) ?? []);
-  const readerBlockPresentation = (blockIndex: number): {
-    offset: number;
-    fragmentTop: number | undefined;
-    fragmentBottom: number | undefined;
-    clipPath: string | undefined;
-    visibility: CSSProperties['visibility'];
-  } => {
-    const fragment = activePageBlockFragments.get(blockIndex);
-    const offset = activePageBlockOffsets.get(blockIndex) ?? 0;
-    if (settings.readingMode !== 'page') {
-      return { offset: 0, fragmentTop: undefined, fragmentBottom: undefined, clipPath: undefined, visibility: undefined };
-    }
-    if (!activePage || !fragment) {
-      return { offset, fragmentTop: undefined, fragmentBottom: undefined, clipPath: undefined, visibility: activePage ? 'hidden' : undefined };
-    }
-    const topInset = Math.max(0, fragment.startY - fragment.blockTopY);
-    const bottomInset = Math.max(0, fragment.blockBottomY - fragment.endY);
-    return {
-      offset,
-      fragmentTop: fragment.startY - activePage.startY + offset,
-      fragmentBottom: fragment.endY - activePage.startY + offset,
-      clipPath: `inset(${topInset}px 0 ${bottomInset}px 0)`,
-      visibility: 'visible',
-    };
-  };
-  const renderDefinitionCard = (
-    sourceChapter: BookChapter | undefined,
-    sourceParagraphs: readonly string[],
-    preparedOpening: PreparedChapterOpening | null,
-    sourceIndex: number,
-    analysis: ParagraphAnalysis,
-    target: DefinitionTarget,
-    active: boolean,
-    onReadinessChange: PreparedCardReadinessChange,
-  ): ReactNode => {
-    return (
-      <ReaderDefinitionCardTarget
-        key={readerTargetDomKey(target, sourceIndex)}
-        sourceChapter={sourceChapter}
-        sourceParagraphs={sourceParagraphs}
-        preparedOpening={preparedOpening}
-        sourceIndex={sourceIndex}
-        analysis={analysis}
-        target={target}
-        active={active}
-        definitionsByLemma={definitionsByLemma}
-        loadingDefinitionLemmas={loadingDefinitionLemmas}
-        failedDefinitionLemmas={failedDefinitionLemmas}
-        observationLabels={observationLabels}
-        settings={settings}
-        activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
-        onReadinessChange={onReadinessChange}
-        onDefinitionWordClick={(click) => openDefinitionWordPopup(null, click, sourceIndex, contextForCard(analysis, target))}
-        onMarkKnown={() => markLemma(target.lemma, true, sourceIndex)}
-        onMarkUnknown={() => markLemma(target.lemma, false, sourceIndex)}
-        getPriorityTarget={settings.readingMode === 'scroll' || displayedPageParagraphs.includes(sourceIndex)
-          ? getParagraphElement : undefined}
-      />
-    );
-  };
   const canGoToPreviousChapter = adjacentReadingChapter(book.chapters, currentChapterNumber, -1) !== currentChapterNumber;
   const canGoToNextChapter = adjacentReadingChapter(book.chapters, currentChapterNumber, 1) !== currentChapterNumber;
   const openChapterStudy = (): void => {
@@ -4921,18 +2427,7 @@ export default function ReaderPage() {
 
   return (
     <>
-    <div
-      className="min-h-screen bg-background text-foreground"
-      style={{
-        ...(settings.readingMode === 'page' ? { touchAction: 'pan-y' } : {}),
-        ...(!initialViewportReady && settings.readingMode === 'scroll' ? { visibility: 'hidden' as const } : {}),
-      }}
-      onPointerDown={handlePagePointerDown}
-      onPointerMove={handlePagePointerMove}
-      onPointerUp={handlePagePointerUp}
-      onPointerCancel={handlePagePointerCancel}
-      onClickCapture={handlePageScreenClick}
-    >
+    <div className="min-h-screen bg-background text-foreground" style={!initialViewportReady ? { visibility: 'hidden' } : undefined}>
       {readerSettingsOpen && (
         <div
           className="fixed inset-0 z-10 bg-black/20"
@@ -4942,14 +2437,9 @@ export default function ReaderPage() {
       )}
       <header className={cn(
         'fixed top-0 inset-x-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border transition-transform duration-300',
-        fullscreenPageMode
-          ? fullscreenToolbarOpen ? 'translate-y-0 z-30 pointer-events-none' : '-translate-y-full pointer-events-none'
-          : settings.readingMode === 'page' || headerVisible ? 'translate-y-0' : '-translate-y-full'
+        headerVisible ? 'translate-y-0' : '-translate-y-full'
       )}>
-        <div className={cn(
-          'container mx-auto px-4 h-14 flex items-center justify-between [&_button]:cursor-pointer [&_a]:cursor-pointer',
-          fullscreenPageMode && fullscreenToolbarOpen && 'pointer-events-none [&_button]:pointer-events-auto [&_a]:pointer-events-auto',
-        )}>
+        <div className="container mx-auto px-4 h-14 flex items-center justify-between [&_button]:cursor-pointer [&_a]:cursor-pointer">
           <div className="flex items-center gap-0 sm:gap-1">
             <Link href="/">
               <Button
@@ -4968,21 +2458,6 @@ export default function ReaderPage() {
             {book.title} — {chapterDisplayTitle ?? `Chapter ${currentChapterNumber}`} · {Math.round(readingProgressPercent)}%
           </div>
           <div className="flex items-center gap-0 sm:gap-1">
-            {settings.readingMode === 'page' && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-muted-foreground"
-                aria-label={fullscreenPageMode ? 'Exit fullscreen reader' : 'Enter fullscreen reader'}
-                data-testid="button-reader-fullscreen"
-                onClick={() => {
-                  updateSetting('fullscreenPageMode', !settings.fullscreenPageMode);
-                  setFullscreenToolbarOpen(false);
-                }}
-              >
-                {fullscreenPageMode ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-              </Button>
-            )}
             <Button variant="ghost" size="icon" className="text-muted-foreground" aria-label="Add bookmark at current position"
               onClick={addCurrentBookmark} data-testid="button-add-bookmark">
               <BookmarkPlus size={18} />
@@ -5026,21 +2501,6 @@ export default function ReaderPage() {
                   <SheetTitle className="font-serif">Reader Settings</SheetTitle>
                 </SheetHeader>
                 <div className="space-y-8">
-                  <div className="space-y-4">
-                    <Label className="text-base font-medium">Reading Mode</Label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <Button
-                        variant={settings.readingMode === 'scroll' ? 'default' : 'outline'}
-                        onClick={() => switchReadingMode('scroll')}
-                        data-testid="reading-mode-scroll"
-                      >Scroll</Button>
-                      <Button
-                        variant={settings.readingMode === 'page' ? 'default' : 'outline'}
-                        onClick={() => switchReadingMode('page')}
-                        data-testid="reading-mode-page"
-                      >Pages</Button>
-                    </div>
-                  </div>
                   <div className="space-y-4">
                     <Label className="text-base font-medium">Font Size</Label>
                     <div className="flex items-center gap-4">
@@ -5134,63 +2594,18 @@ export default function ReaderPage() {
       />
       {bookmarkFeedback && <div role="status" aria-live="polite" className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md bg-foreground px-4 py-2 text-sm text-background">{bookmarkFeedback}</div>}
 
-      {settings.readingMode === 'scroll' && <div className="h-14" />}
+      <div className="h-14" />
 
       <main
-        ref={pageViewportRef}
-        className={cn(
-          'mx-auto px-4 sm:px-6',
-          getOuterWidthClass(),
-          settings.readingMode === 'page' && cn(
-            'reader-page-mode fixed left-0 right-0 z-10',
-            fullscreenPageMode ? 'top-0 bottom-9' : 'top-[72px] bottom-16',
-          ),
-        )}
-        style={settings.readingMode === 'page' ? {
-          ...(fullscreenPageMode ? { top: `${fullscreenTopSpacing}px` } : {}),
-          overflowX: 'clip',
-          overflowY: 'auto',
-          touchAction: 'pan-y',
-        } : undefined}
-        data-testid={settings.readingMode === 'page' ? 'reader-page-viewport' : undefined}
-        data-page-index={pageModeReady ? currentPageIndex : undefined}
-        data-page-count={pageModeReady ? pageLayout?.pages.length : undefined}
-        data-page-start={pageModeReady ? activePage?.startY : undefined}
-        data-page-end={pageModeReady ? activePage?.endY : undefined}
+        className={cn('mx-auto px-4 sm:px-6', getOuterWidthClass())}
         onClick={() => {
           scrollDirectionRef.current = 0;
           lastScrollY.current = window.scrollY;
           setHeaderVisible(true);
         }}
       >
-        <div
-          className={cn(settings.readingMode === 'page' ? 'py-0' : 'py-12 md:py-20')}
-          style={settings.readingMode === 'page' ? {
-            height: `${activePagePresentationHeight}px`,
-            overflow: 'clip',
-            position: 'relative',
-            '--reader-page-height': `${paginationPageHeight}px`,
-            '--reader-page-card-height': `${Math.min(240, paginationPageHeight * 0.35)}px`,
-          } as CSSProperties : undefined}
-          data-testid="reading-row"
-          data-reader-pagination-host=""
-        >
-          <div
-            className={settings.readingMode === 'page' ? 'reader-page-text-clip' : 'contents'}
-            style={settings.readingMode === 'page' ? {
-              height: `${Math.max(1, activePage ? activePageTextHeight : paginationPageHeight)}px`,
-              overflow: 'clip',
-            } : undefined}
-          >
-          <div
-            ref={readerRootRef}
-            className={cn('relative flex-1 min-w-0 flex flex-col', settings.readingMode === 'page' && 'reader-page-content')}
-            style={settings.readingMode === 'page' ? {
-              transform: `translateY(${-(activePage?.startY ?? 0)}px)`,
-              visibility: pageModeReady ? 'visible' : 'hidden',
-            } as CSSProperties : undefined}
-            data-testid="left-column"
-          >
+        <div className="py-12 md:py-20" data-testid="reading-row">
+          <div ref={readerRootRef} className="flex-1 min-w-0 flex flex-col" data-testid="left-column">
             {chapterDisplayTitle && <h1 className="text-3xl md:text-5xl font-medium mb-12 text-center text-foreground/90 font-serif">
               {chapterDisplayTitle}
             </h1>}
@@ -5224,216 +2639,131 @@ export default function ReaderPage() {
                 const targetLocation = { chapterIndex: targetChapter - 1, blockIndex, textOffset: 0 };
                 if (targetChapter === currentChapterNumber) {
                   navigateToReaderLocation(targetLocation, true);
-                  if (settings.readingMode === 'scroll') {
-                    window.requestAnimationFrame(() => targetElement?.scrollIntoView({ behavior: 'auto', block: 'start' }));
-                  }
+                  window.requestAnimationFrame(() => targetElement?.scrollIntoView({ behavior: 'auto', block: 'start' }));
                   return;
                 }
                 navigateToReaderLocation(targetLocation, true);
                 pendingReaderAnchorRef.current = anchor;
               }}
             >
-              <ReaderChapterBlockList
-                paragraphs={chapterParagraphs}
-                blocks={chapterReaderBlocks}
-                analyses={chapterAnalysis}
-                assistanceEnabled={assistanceEnabled}
-                pageMode={settings.readingMode === 'page'}
-                pageHeight={paginationPageHeight}
-                includeDocumentIds
-                loadingImagesEager={settings.readingMode === 'page'}
-                presentationForBlock={readerBlockPresentation}
-                renderParagraphSupplement={(sourceIndex, analysis) => settings.readingMode === 'scroll'
-                  && assistanceEnabled && analysis.cardTargets.length > 0
-                  ? (
-                    <div className="mt-3 flex flex-wrap items-start gap-3" data-testid={`mobile-card-group-${sourceIndex}`}>
-                      {analysis.cardTargets.map((target) => renderDefinitionCard(
-                        currentChapter,
-                        chapterParagraphs,
-                        activePreparedOpeningRef.current,
-                        sourceIndex,
-                        analysis,
-                        target,
-                        true,
-                        recordInitialCardReadiness,
-                      ))}
+              {chapterReaderBlocks.map((block, blockIndex) => {
+                if (block.type === 'image') {
+                  return (
+                    <figure key={`reader-image-${blockIndex}`} data-reader-block-index={blockIndex} className="my-6 w-full">
+                      {block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}
+                      <img
+                        src={block.src}
+                        alt={block.alt}
+                        title={block.title}
+                        className="mx-auto block max-w-full"
+                        style={block.style as CSSProperties | undefined}
+                        loading="lazy"
+                      />
+                    </figure>
+                  );
+                }
+                if (block.type === 'spacer') {
+                  return <div key={`reader-spacer-${blockIndex}`} data-reader-block-index={blockIndex} aria-hidden="true" style={{ height: '1em', ...block.style } as CSSProperties}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}</div>;
+                }
+                if (block.type === 'rule') {
+                  return <div key={`reader-rule-${blockIndex}`} data-reader-block-index={blockIndex}>{block.anchorIds?.map((id) => <span key={id} id={id} className="reader-anchor" />)}<hr className="my-8 border-border" style={block.style as CSSProperties | undefined} /></div>;
+                }
+                const sourceIndex = block.paragraphIndex;
+                const visibleIndex = sourceIndex;
+                const paragraphText = chapterParagraphs[sourceIndex] ?? '';
+                const analysis = chapterAnalysis[sourceIndex] ?? { paragraphText, tokens: [], cardTargets: [] };
+                return (
+                <div key={`paragraph-${sourceIndex}`} className="mb-2" data-reader-block-index={blockIndex} data-testid={`paragraph-block-${visibleIndex}`}>
+                  <ReaderParagraphText
+                    analysis={analysis}
+                    block={block}
+                    assistanceEnabled={assistanceEnabled}
+                    sourceParagraphIndex={sourceIndex}
+                    visibleParagraphIndex={visibleIndex}
+                    onElementChange={setParagraphElement}
+                    onOpenWordPopup={openRootWordPopup}
+                  />
+                  {assistanceEnabled && loadedCardParagraphs.has(sourceIndex) && analysis.cardTargets.length > 0 && (
+                    <div className="mt-3 flex flex-wrap items-start gap-3 [&>[data-definition-card]]:w-[250px]" data-testid={`mobile-card-group-${visibleIndex}`}>
+                      {analysis.cardTargets.map((target) => {
+                        const rawDefinition = definitionsByLemma.get(target.lemma)
+                          ?? createFallbackLexiconEntry(target.lemma);
+                        const definition = resolveLexiconEntry(rawDefinition, target);
+                        const definitionStatus: DefinitionLoadStatus = loadingDefinitionLemmas.has(target.lemma)
+                          || (!definitionsByLemma.has(target.lemma) && !failedDefinitionLemmas.has(target.lemma))
+                          ? 'loading'
+                          : failedDefinitionLemmas.has(target.lemma) ? 'error' : 'ready';
+                        const observation = observationLabels[target.lemma];
+                        return (
+                          <ContextualDefinitionCard
+                            key={definitionTargetKey(target)}
+                            onReadinessChange={(ready) => recordInitialCardReadiness(sourceIndex, definitionTargetKey(target), ready)}
+                            definition={definition}
+                            context={contextForCard(analysis, target)}
+                            contextParagraphs={chapterParagraphs}
+                            contextParagraphIndex={sourceIndex}
+                            wsdMode={settings.wsdMode}
+                            wsdPriority="card"
+                            getPriorityTarget={getParagraphElement}
+                            priorityTargetIndex={visibleIndex}
+                            wsdMargin={settings.wsdMode === 'none' ? 0 : marginForReductionLevel(settings.wsdReductionLevel, settings.wsdMode)}
+                            wsdContextUnit={settings.wsdContextUnit}
+                            wsdContextSize={settings.wsdContextSize}
+                            activeDefinitionSelection={wordPopups[0]?.triggerSelection ?? undefined}
+                            fontSize={settings.fontSize}
+                            definitionStatus={definitionStatus}
+                            onDefinitionWordClick={(click) => {
+                              openDefinitionWordPopup(null, click, sourceIndex, contextForCard(analysis, target));
+                            }}
+                            onMarkKnown={() => markLemma(target.lemma, true, sourceIndex)}
+                            onMarkUnknown={() => markLemma(target.lemma, false, sourceIndex)}
+                            isMarkedKnown={observation === 1}
+                            isMarkedUnknown={observation === 0}
+                            pronunciationVariant={settings.englishVariant}
+                            compact
+                          />
+                        );
+                      })}
                     </div>
-                  ) : null}
-                onElementChange={setParagraphElement}
-                onOpenWordPopup={openRootWordPopup}
-              />
+                  )}
+                </div>
+                );
+              })}
             </div>
 
-            {settings.readingMode === 'scroll' && (
-              <div className="mt-20 pt-8 border-t border-border flex justify-between items-center text-muted-foreground font-serif">
-                <Button
-                  variant="ghost"
-                  className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
-                  data-testid="button-prev-chapter"
-                  disabled={!canGoToPreviousChapter}
-                  onClick={() => void updateCurrentChapter(-1)}
-                >
-                  <ChevronLeft size={16} />
-                  <span className="sm:hidden">Previous</span>
-                  <span className="hidden sm:inline">Previous Chapter</span>
-                </Button>
-                <span className="text-xs sm:text-sm" data-testid="text-page-info">
-                  Chapter {currentChapterNumber} of {book.chapters.length}
-                </span>
-                <Button
-                  variant="ghost"
-                  className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
-                  data-testid="button-next-chapter"
-                  disabled={!canGoToNextChapter}
-                  onClick={() => void updateCurrentChapter(1)}
-                >
-                  <span className="sm:hidden">Next</span>
-                  <span className="hidden sm:inline">Next Chapter</span>
-                  <ChevronLeft size={16} className="rotate-180" />
-                </Button>
-              </div>
-            )}
-          </div>
-          </div>
-
-          {settings.readingMode === 'page' && assistanceEnabled && chapterReaderBlocks.map((block, blockIndex) => {
-            if (block.type !== 'paragraph') return null;
-            const sourceIndex = block.paragraphIndex;
-            const analysis = chapterAnalysis[sourceIndex];
-            if (!analysis || analysis.cardTargets.length === 0) return null;
-            const group = activePageCardGroups.get(blockIndex);
-            const groupIsActive = pageModeReady && group !== undefined;
-            const activeKeys = new Set(group?.targetKeys ?? []);
-            return (
-              <div
-                key={`page-card-group-${blockIndex}`}
-                className={cn(
-                  'absolute inset-x-0 flex flex-wrap items-start gap-3 px-1',
-                  groupIsActive
-                    ? 'reader-page-card-group z-10 bg-background/95'
-                    : 'reader-page-card-measurements',
-                )}
-                style={{
-                  top: `${group?.topOffset ?? 0}px`,
-                  visibility: groupIsActive ? 'visible' : 'hidden',
-                  pointerEvents: groupIsActive ? 'auto' : 'none',
-                } as CSSProperties}
-                aria-hidden={!groupIsActive}
-                inert={!groupIsActive}
-                data-testid={`reader-page-card-group-${blockIndex}`}
+            <div className="mt-20 pt-8 border-t border-border flex justify-between items-center text-muted-foreground font-serif">
+              <Button
+                variant="ghost"
+                className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
+                data-testid="button-prev-chapter"
+                disabled={!canGoToPreviousChapter}
+                onClick={() => void updateCurrentChapter(-1)}
               >
-                {analysis.cardTargets.map((target) => renderDefinitionCard(
-                  currentChapter,
-                  chapterParagraphs,
-                  activePreparedOpeningRef.current,
-                  sourceIndex,
-                  analysis,
-                  target,
-                  groupIsActive && activeKeys.has(readerTargetDomKey(target, sourceIndex)),
-                  recordInitialCardReadiness,
-                ))}
-              </div>
-            );
-          })}
+                <ChevronLeft size={16} />
+                <span className="sm:hidden">Previous</span>
+                <span className="hidden sm:inline">Previous Chapter</span>
+              </Button>
+              <span className="text-xs sm:text-sm" data-testid="text-page-info">
+                Chapter {currentChapterNumber} of {book.chapters.length}
+              </span>
+              <Button
+                variant="ghost"
+                className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
+                data-testid="button-next-chapter"
+                disabled={!canGoToNextChapter}
+                onClick={() => void updateCurrentChapter(1)}
+              >
+                <span className="sm:hidden">Next</span>
+                <span className="hidden sm:inline">Next Chapter</span>
+                <ChevronLeft size={16} className="rotate-180" />
+              </Button>
+            </div>
+          </div>
 
         </div>
-        {settings.readingMode === 'page' && !pageModeReady && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/95 p-6 text-center text-foreground">
-            {paginationErrorMessage ? (
-              <div role="alert" data-testid="reader-pagination-status" className="max-w-md space-y-4">
-                <p>Pages could not be prepared: {paginationErrorMessage}</p>
-                <Button variant="outline" onClick={() => switchReadingMode('scroll')}>
-                  Switch to scroll mode
-                </Button>
-              </div>
-            ) : (
-              <span role="status" aria-live="polite" data-testid="reader-pagination-status">
-                Preparing the page...
-              </span>
-            )}
-          </div>
-        )}
       </main>
-      {prerenderEntries.map(({ entry, pageWindow, direction, layoutKey }) => (
-        <ReaderChapterPrerender
-          key={`${entry.chapterIndex}:${direction}:${layoutKey}`}
-          entry={entry}
-          pageWindow={pageWindow}
-          direction={direction}
-          layoutKey={layoutKey}
-          pageHeight={paginationPageHeight}
-          pageWidthClass={getOuterWidthClass()}
-          textFontClass={getTextFontClasses()}
-          settings={settings}
-          assistanceEnabled={assistanceEnabled}
-          definitionsByLemma={definitionsByLemma}
-          loadingDefinitionLemmas={loadingDefinitionLemmas}
-          failedDefinitionLemmas={failedDefinitionLemmas}
-          observationLabels={observationLabels}
-          onLayoutReady={recordPrerenderLayout}
-          onAssetsReady={recordPrerenderAssetsReady}
-          onCardReadinessChange={recordPrerenderCardReadiness}
-          onError={recordPrerenderError}
-        />
-      ))}
-      {settings.readingMode === 'page' && (
-        <footer className={cn(
-          'fixed inset-x-0 bottom-0 z-20',
-          fullscreenPageMode ? 'h-9' : 'h-16 border-t border-border bg-background/95 backdrop-blur-sm',
-        )}>
-          <div className={cn(
-            'mx-auto flex h-full items-center px-4 sm:px-6',
-            getOuterWidthClass(),
-            fullscreenPageMode ? 'justify-center pointer-events-none' : 'justify-between',
-          )}>
-            {!fullscreenPageMode && <>
-            <Button
-              variant="ghost"
-              className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
-              aria-label="Previous page"
-              data-testid="button-prev-page"
-              disabled={currentPageIndex === 0 && !pageLayout?.hasPreviousPages && !canGoToPreviousChapter}
-              onClick={() => navigatePage(-1)}
-            >
-              <ChevronLeft size={16} />
-              <span>Previous</span>
-            </Button>
-            <span className="text-center text-xs text-muted-foreground sm:text-sm" data-testid="text-page-info">
-              {pageModeReady && pageLayout
-                ? pageLayout.hasPreviousPages || pageLayout.hasNextPages
-                  ? `Chapter ${currentChapterNumber} · ${Math.round(readingProgressPercent)}% of book`
-                  : `Chapter ${currentChapterNumber} · Page ${currentPageIndex + 1} of ${pageLayout.pages.length}`
-                : `Chapter ${currentChapterNumber} · ${Math.round(readingProgressPercent)}% of book`}
-            </span>
-            <Button
-              variant="ghost"
-              className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
-              aria-label="Next page"
-              data-testid="button-next-page"
-              disabled={currentPageIndex >= (pageLayout?.pages.length ?? 1) - 1 && !pageLayout?.hasNextPages && !canGoToNextChapter}
-              onClick={() => navigatePage(1)}
-            >
-              <span>Next</span>
-              <ChevronLeft size={16} className="rotate-180" />
-            </Button>
-            </>}
-            {fullscreenPageMode && (
-              <span className="rounded-full bg-background/75 px-3 py-1 text-center text-[11px] text-muted-foreground backdrop-blur-sm" data-testid="text-page-info">
-                {pageModeReady && pageLayout
-                  ? pageLayout.hasPreviousPages || pageLayout.hasNextPages
-                    ? `Ch. ${currentChapterNumber} · ${Math.round(readingProgressPercent)}%`
-                    : `Ch. ${currentChapterNumber} · ${currentPageIndex + 1}/${pageLayout.pages.length}`
-                  : `Ch. ${currentChapterNumber} · ${Math.round(readingProgressPercent)}%`}
-              </span>
-            )}
-          </div>
-        </footer>
-      )}
       {activeAnalysisRunId !== null && (
-        <div className={cn(
-          'pointer-events-none fixed right-4 z-30 text-muted-foreground',
-          settings.readingMode === 'page' && !fullscreenPageMode ? 'bottom-20' : 'bottom-4',
-        )}>
+        <div className="pointer-events-none fixed bottom-4 right-4 z-30 text-muted-foreground">
           <ReaderActivityIndicator
             ariaLabel="Analyzing text"
             testId="reader-analysis-indicator"
@@ -5540,7 +2870,7 @@ export default function ReaderPage() {
       )}
     </div>
     <ReaderVocabularyTestOnboarding readerReady={initialViewportReady} />
-    {!initialViewportReady && settings.readingMode === 'scroll' && (
+    {!initialViewportReady && (
       <div
         className="fixed inset-0 z-[100] flex min-h-screen items-center justify-center overscroll-none bg-background p-6 text-foreground"
         onWheel={(event) => event.preventDefault()}

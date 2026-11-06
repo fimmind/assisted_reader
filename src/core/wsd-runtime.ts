@@ -12,7 +12,7 @@ export interface WsdModelStatus {
   message: string;
 }
 
-export type WsdRequestPriority = 'card' | 'visible-card' | 'popup' | 'preload';
+export type WsdRequestPriority = 'card' | 'visible-card' | 'popup';
 
 interface ScoreSubscriber {
   resolve: (scores: number[]) => void;
@@ -36,8 +36,6 @@ const listeners = new Set<(status: WsdModelStatus) => void>();
 const jobsByKey = new Map<string, ScoreJob>();
 const queuedJobs: ScoreJob[] = [];
 const scoreCache = new Map<string, number[]>();
-// Keep the next opening's scores from being evicted by the rest of the current chapter.
-const preloadedScoreCache = new Map<string, number[]>();
 const MAX_CACHED_SCORES = 100;
 const PERSISTED_SCORE_CACHE_KEY = 'easeword-wsd-score-cache-v1';
 const MODEL_CACHE_IDENTITIES: Record<ActiveWsdMode, string> = {
@@ -181,10 +179,9 @@ function touchCachedScores(cache: Map<string, number[]>, key: string, scores: nu
 export function getCachedWordSenseScores(mode: ActiveWsdMode, context: WsdContext, entry: LexiconEntry): number[] | null {
   const glosses = wordNetGlosses(entry);
   const key = scoreCacheKey(mode, context, entry, glosses, wordNetDefinitionIds(entry));
-  const memoryCache = preloadedScoreCache.has(key) ? preloadedScoreCache : scoreCache;
-  const memoryScores = memoryCache.get(key);
+  const memoryScores = scoreCache.get(key);
   if (memoryScores) {
-    touchCachedScores(memoryCache, key, memoryScores);
+    touchCachedScores(scoreCache, key, memoryScores);
     return memoryScores.length === glosses.length ? memoryScores : null;
   }
   const persisted = getPersistedScoreCache().get(key);
@@ -198,7 +195,7 @@ export function getCachedWordSenseScores(mode: ActiveWsdMode, context: WsdContex
   const persistentCache = getPersistedScoreCache();
   persistentCache.delete(key);
   persistentCache.set(key, persisted);
-  touchCachedScores(memoryCache, key, persisted.scores);
+  touchCachedScores(scoreCache, key, persisted.scores);
   return persisted.scores;
 }
 
@@ -259,7 +256,6 @@ function failWorker(error: Error): void {
   terminateWorker();
   rejectAllJobs(error);
   scoreCache.clear();
-  preloadedScoreCache.clear();
   publishStatus({ mode: activeMode, phase: 'error', downloadedBytes: 0, totalBytes: 0, message: error.message });
 }
 
@@ -269,8 +265,7 @@ function dispatchNextJob(): void {
   }
   const popupIndex = queuedJobs.findIndex((job) => job.priority === 'popup');
   const visibleIndex = queuedJobs.findIndex((job) => job.priority === 'visible-card');
-  const preloadIndex = queuedJobs.findIndex((job) => job.priority === 'preload');
-  const index = popupIndex >= 0 ? popupIndex : visibleIndex >= 0 ? visibleIndex : preloadIndex >= 0 ? preloadIndex : 0;
+  const index = popupIndex >= 0 ? popupIndex : visibleIndex >= 0 ? visibleIndex : 0;
   const [job] = queuedJobs.splice(index, 1);
   if (!job || !worker) {
     failWorker(new Error('WSD worker is missing while a score request is queued.'));
@@ -302,12 +297,11 @@ function handleScoreResponse(message: Record<string, unknown>): void {
     && message.scores.length === job.glosses.length
     && message.scores.every((score) => typeof score === 'number' && Number.isFinite(score))) {
     const scores = message.scores as number[];
-    const cache = job.priority === 'preload' ? preloadedScoreCache : scoreCache;
-    cache.set(job.key, scores);
-    if (cache.size > MAX_CACHED_SCORES) {
-      const oldest = cache.keys().next().value;
+    scoreCache.set(job.key, scores);
+    if (scoreCache.size > MAX_CACHED_SCORES) {
+      const oldest = scoreCache.keys().next().value;
       if (typeof oldest === 'string') {
-        cache.delete(oldest);
+        scoreCache.delete(oldest);
       }
     }
     try {
@@ -461,7 +455,6 @@ export function startWsdModel(mode: ActiveWsdMode): void {
   terminateWorker();
   rejectAllJobs(new DOMException('WSD model changed.', 'AbortError'));
   scoreCache.clear();
-  preloadedScoreCache.clear();
   activeMode = mode;
   publishStatus({ mode, phase: 'loading', downloadedBytes: 0, totalBytes: 0, message: 'Checking model files' });
   try {
@@ -475,7 +468,6 @@ export function stopWsdModel(): void {
   terminateWorker();
   rejectAllJobs(new DOMException('WSD was disabled.', 'AbortError'));
   scoreCache.clear();
-  preloadedScoreCache.clear();
   activeMode = 'none';
   publishStatus({ mode: 'none', phase: 'idle', downloadedBytes: 0, totalBytes: 0, message: 'Model not loaded' });
 }
@@ -486,7 +478,7 @@ export function promoteWsdWordSenses(context: WsdContext, entry: LexiconEntry): 
   }
   const key = scoreCacheKey(activeMode, context, entry, wordNetGlosses(entry), wordNetDefinitionIds(entry));
   const job = jobsByKey.get(key);
-  if (job && (job.priority === 'card' || job.priority === 'preload')) {
+  if (job && job.priority === 'card') {
     job.priority = 'visible-card';
   }
 }
@@ -516,8 +508,7 @@ export function scoreWordSenses(
     job = { id: ++requestId, key, context, glosses, word: entry.word, senseIds, priority, subscribers: new Set<ScoreSubscriber>() };
     jobsByKey.set(key, job);
     queuedJobs.push(job);
-  } else if (priority === 'popup' || (priority === 'visible-card' && job.priority !== 'popup')
-    || (priority === 'preload' && job.priority === 'card')) {
+  } else if (priority === 'popup' || (priority === 'visible-card' && job.priority !== 'popup')) {
     job.priority = priority;
   }
   const active = job;
