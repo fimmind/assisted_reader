@@ -8,6 +8,7 @@ import type {
 } from '../core/book-histogram-worker-protocol';
 import type { BookLemmaHistogramSegment } from '../core/reader-analysis';
 import type { BookChapter, VocabularyModel } from '../core/types';
+import { withLemmaInflectionIndex } from '../core/types';
 
 interface WorkerScope {
   onmessage: ((event: MessageEvent<BookHistogramWorkerCommand>) => void) | null;
@@ -49,7 +50,7 @@ function handleInitialize(command: Extract<BookHistogramWorkerCommand, { type: '
   }
   activeRunId = command.runId;
   model = command.model;
-  lemmaDict = command.lemmaDict;
+  lemmaDict = withLemmaInflectionIndex(command.lemmaDict, command.lemmaInflectionIndex);
   lemmaCandidateCache = new Map<string, string[]>();
   workerScope.postMessage({ type: 'ready', runId: command.runId });
 }

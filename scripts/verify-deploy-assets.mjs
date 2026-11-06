@@ -21,6 +21,7 @@ const requiredFiles = [
   'data/lemma_dict.json',
   'data/hitchhikers_guide.epub',
   'data/lexicon/index.json',
+  'data/lexicon/inflection-index.json',
   'data/wordnet/index.json',
   'data/wordnet/LICENSE',
   'wsd/availability.json',

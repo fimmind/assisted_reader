@@ -5,11 +5,13 @@ import {
   WORD_TOKEN_RE,
 } from './constants';
 import { isWordToken, normalizeToken, orderedUnique } from './math';
-import type {
-  DeinflectionResult,
-  PartOfSpeech,
-  TaggedSentence,
-  TaggedTerm,
+import {
+  LEMMA_INFLECTION_INDEX,
+  type DeinflectionResult,
+  type LemmaDictionary,
+  type PartOfSpeech,
+  type TaggedSentence,
+  type TaggedTerm,
 } from './types';
 
 export interface SentenceSpan {
@@ -90,7 +92,7 @@ const NEGATIVE_CONTRACTION_LEMMA_OVERRIDES: Record<string, string> = {
   were: 'be',
 };
 
-export const LEXICAL_ANALYSIS_VERSION = 2;
+export const LEXICAL_ANALYSIS_VERSION = 3;
 
 const ARTICLES = new Set<string>(['a', 'an', 'the']);
 
@@ -1050,7 +1052,7 @@ export function makeLemmaCandidates(
 
 function resolveKnownDictionaryLemma(
   normalizedToken: string,
-  lemmaDict: Record<string, string>,
+  lemmaDict: LemmaDictionary,
   lowerToIdx: Map<string, number>,
 ): string | null {
   if (!Object.prototype.hasOwnProperty.call(lemmaDict, normalizedToken)) {
@@ -1064,12 +1066,66 @@ function resolveKnownDictionaryLemma(
   ) {
     return null;
   }
+  const index = lemmaDict[LEMMA_INFLECTION_INDEX];
+  const sourceEvidence = index?.entries[normalizedToken];
+  if (!sourceEvidence || (sourceEvidence.lemmas[lemma] ?? 0) === 0) {
+    return null;
+  }
   return lemma;
+}
+
+function hasLemmaInflectionEvidence(
+  source: string,
+  lemma: string,
+  partOfSpeech: PartOfSpeech | null,
+  lemmaDict: LemmaDictionary,
+): boolean {
+  const index = lemmaDict[LEMMA_INFLECTION_INDEX];
+  const sourceEvidence = index?.entries[source];
+  const targetEvidence = index?.entries[lemma];
+  const relationMask = sourceEvidence?.lemmas[lemma] ?? 0;
+  const targetMask = targetEvidence?.pos ?? 0;
+  if (relationMask === 0 || targetMask === 0) {
+    return false;
+  }
+  if (partOfSpeech === null) {
+    return true;
+  }
+  const partIndex = index?.positions.indexOf(partOfSpeech) ?? -1;
+  if (partIndex < 0) {
+    return false;
+  }
+  const expectedMask = 2 ** partIndex;
+  return (relationMask & expectedMask) !== 0 && (targetMask & expectedMask) !== 0;
+}
+
+function resolveDictionaryPartOfSpeech(
+  normalizedToken: string,
+  lemmaDict: LemmaDictionary,
+  inferredPartOfSpeech: PartOfSpeech | null,
+): PartOfSpeech | null {
+  const index = lemmaDict[LEMMA_INFLECTION_INDEX];
+  const sourceMask = index?.entries[normalizedToken]?.pos ?? 0;
+  if (sourceMask === 0 || !index) {
+    return inferredPartOfSpeech;
+  }
+  if (inferredPartOfSpeech) {
+    const inferredIndex = index.positions.indexOf(inferredPartOfSpeech);
+    if (inferredIndex >= 0 && (sourceMask & (2 ** inferredIndex)) !== 0) {
+      return inferredPartOfSpeech;
+    }
+  }
+  const lexicalParts = ['noun', 'verb', 'adjective', 'adverb'] as const;
+  const matches = lexicalParts.filter((part) => {
+    const positionIndex = index.positions.indexOf(part);
+    return positionIndex >= 0 && (sourceMask & (2 ** positionIndex)) !== 0;
+  });
+  return matches.length === 1 ? matches[0] : inferredPartOfSpeech;
 }
 
 export function contextualDeinflectTaggedTerms(
   terms: TaggedTerm[],
-  lemmaDict: Record<string, string>,
+  lemmaDict: LemmaDictionary,
   lowerToIdx: Map<string, number>,
   properNounLexicon: Set<string>,
   excludeProperNouns: boolean,
@@ -1103,7 +1159,11 @@ export function contextualDeinflectTaggedTerms(
       previous,
       next,
       dictionaryLemma,
-      inferredPartsOfSpeech[index],
+      resolveDictionaryPartOfSpeech(
+        normalized,
+        lemmaDict,
+        inferredPartsOfSpeech[index],
+      ),
     );
     properFlags.push(properByLexicon);
     partsOfSpeech.push(
@@ -1122,10 +1182,21 @@ export function contextualDeinflectTaggedTerms(
       contextualPartOfSpeech,
       lemmaCandidateCache,
     );
-    const selectedFromVocab = candidates.find((candidate) =>
+    const apostropheCandidates = buildApostropheLemmaCandidates(normalized);
+    const supportedCandidates = candidates.filter((candidate) =>
+      candidate === normalized || (
+        apostropheCandidates.includes(candidate) && lowerToIdx.has(candidate)
+      ) || hasLemmaInflectionEvidence(
+        normalized,
+        candidate,
+        contextualPartOfSpeech,
+        lemmaDict,
+      ),
+    );
+    const selectedFromVocab = supportedCandidates.find((candidate) =>
       lowerToIdx.has(candidate),
     );
-    const selected = selectedFromVocab ?? candidates[0] ?? normalized;
+    const selected = selectedFromVocab ?? normalized;
 
     tokens.push(selected);
   }

@@ -62,11 +62,17 @@ function runLexiconBuild() {
 function main() {
   if (hasValidLexiconArtifacts()) {
     console.log('lexicon-artifacts-ready', { indexPath: LEXICON_INDEX_PATH });
-    return;
+  } else {
+    console.log('lexicon-artifacts-missing-or-invalid', { indexPath: LEXICON_INDEX_PATH });
+    runLexiconBuild();
   }
-
-  console.log('lexicon-artifacts-missing-or-invalid', { indexPath: LEXICON_INDEX_PATH });
-  runLexiconBuild();
+  const result = spawnSync('node', ['scripts/build-lemma-pos-index.mjs'], {
+    cwd: ROOT_DIR,
+    stdio: 'inherit',
+  });
+  if (result.status !== 0) {
+    throw new Error(`Failed to generate inflection index: exitCode=${String(result.status)} signal=${String(result.signal)} error=${String(result.error)}`);
+  }
 }
 
 try {

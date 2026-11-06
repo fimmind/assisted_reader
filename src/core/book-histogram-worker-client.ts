@@ -11,6 +11,7 @@ import type {
   BookLemmaHistogramSegment,
 } from './reader-analysis';
 import type { BookChapter, VocabularyModel } from './types';
+import { LEMMA_INFLECTION_INDEX, type LemmaDictionary } from './types';
 
 export interface BookHistogramWorkerHooks {
   bookId: string;
@@ -412,6 +413,7 @@ async function initializeWorkers(
     runId: run.runId,
     model,
     lemmaDict,
+    lemmaInflectionIndex: (lemmaDict as LemmaDictionary)[LEMMA_INFLECTION_INDEX],
   };
   for (const state of run.workers) {
     postCommand(run, state, initialize);

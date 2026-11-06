@@ -205,6 +205,34 @@ export type PartOfSpeech =
   | 'symbol'
   | 'other';
 
+export const LEMMA_INFLECTION_INDEX = Symbol('lemmaInflectionIndex');
+
+export interface LemmaInflectionEvidence {
+  pos: number;
+  lemmas: Record<string, number>;
+}
+
+export interface LemmaInflectionIndex {
+  schemaVersion: 1;
+  positions: string[];
+  entries: Record<string, LemmaInflectionEvidence>;
+}
+
+export type LemmaDictionary = Record<string, string> & {
+  [LEMMA_INFLECTION_INDEX]?: LemmaInflectionIndex;
+};
+
+export function withLemmaInflectionIndex(
+  lemmaDictionary: Record<string, string>,
+  inflectionIndex: LemmaInflectionIndex | undefined,
+): LemmaDictionary {
+  const output = Object.assign(Object.create(null), lemmaDictionary) as LemmaDictionary;
+  if (inflectionIndex) {
+    output[LEMMA_INFLECTION_INDEX] = inflectionIndex;
+  }
+  return output;
+}
+
 export interface LexiconSense {
   partOfSpeech: PartOfSpeech;
   ipa: string;

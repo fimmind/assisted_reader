@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import nlp from 'compromise';
 import {
   buildTaggedSentences,
@@ -29,6 +30,7 @@ import {
 } from '../src/core/definition-target.js';
 import { normalizeToken } from '../src/core/math.js';
 import type {
+  LemmaInflectionIndex,
   LexiconEntry,
   PartOfSpeech,
   ReaderSettings,
@@ -37,7 +39,12 @@ import type {
   UserProfile,
   VocabularyModel,
 } from '../src/core/types.js';
+import { withLemmaInflectionIndex } from '../src/core/types.js';
 import type { BookLemmaHistogramSegment } from '../src/core/reader-analysis.js';
+
+const lemmaInflectionIndex = JSON.parse(
+  readFileSync('data/lexicon/inflection-index.json', 'utf8'),
+) as LemmaInflectionIndex;
 
 function cloneableNlpDocument(document: Omit<NlpDocumentLike, 'clone'>): NlpDocumentLike {
   const clone = (): NlpDocumentLike => cloneableNlpDocument(document);
@@ -186,7 +193,7 @@ function assertSentenceDeinflection(
   const nlp = createLemmaNlp(formsByToken);
   const result = contextualDeinflectTaggedTerms(
     terms,
-    {},
+    withLemmaInflectionIndex({}, lemmaInflectionIndex),
     lowerToIdx,
     new Set<string>(),
     false,
@@ -237,7 +244,7 @@ function assertSentenceDeinflectionWithCompromiseRuntime(
   const lowerToIdx = buildLowerToIdxForExpectedLemmas(terms, expectedPairs);
   const result = contextualDeinflectTaggedTerms(
     terms,
-    {},
+    withLemmaInflectionIndex({}, lemmaInflectionIndex),
     lowerToIdx,
     new Set<string>(),
     false,
@@ -463,7 +470,7 @@ test('contextual deinflection corrects slung to sling as a verb', () => {
   ]);
   const result = contextualDeinflectTaggedTerms(
     terms,
-    { slung: 'sling' },
+    withLemmaInflectionIndex({ slung: 'sling' }, lemmaInflectionIndex),
     lowerToIdx,
     new Set<string>(),
     false,
@@ -521,7 +528,7 @@ test('contextual POS beats conflicting dictionary lemmas for homographs', () => 
     const lowerToIdx = new Map(candidates.map((word, index) => [word, index]));
     const result = contextualDeinflectTaggedTerms(
       terms,
-      sample.dictionary,
+      withLemmaInflectionIndex(sample.dictionary, lemmaInflectionIndex),
       lowerToIdx,
       new Set<string>(),
       false,
@@ -672,6 +679,84 @@ test('heuristic capitalization stays lexicon-gated to avoid over-filtering', () 
   );
   assert.deepEqual(withLexicon.tokens, ['']);
   assert.deepEqual(withLexicon.properFlags, [true]);
+});
+
+test('dictionary inflection relationships reject unsupported compromise lemmas', () => {
+  const terms = [
+    createTaggedTerm('terrier', true),
+    createTaggedTerm('happier', false),
+    createTaggedTerm('ran', false),
+  ];
+  const result = contextualDeinflectTaggedTerms(
+    terms,
+    withLemmaInflectionIndex({}, lemmaInflectionIndex),
+    new Map<string, number>([
+      ['terrier', 0], ['terry', 1], ['happier', 2], ['happy', 3], ['ran', 4], ['run', 5],
+    ]),
+    new Set<string>(),
+    false,
+    createLemmaNlp({
+      terrier: { verbInfinitive: '', nounSingular: 'terry', adjectiveBase: '' },
+      happier: { verbInfinitive: '', nounSingular: '', adjectiveBase: 'happy' },
+      ran: { verbInfinitive: 'run', nounSingular: '', adjectiveBase: '' },
+    }),
+  );
+
+  assert.deepEqual(result.tokens, ['terrier', 'happy', 'run']);
+  assert.equal(result.partsOfSpeech[0], 'noun');
+});
+
+test('real compromise tags retain terrier and dictionary metadata survives worker transfer', () => {
+  const terms = tagSentenceTerms('The terrier waited by the door.', nlp);
+  const transferPayload = structuredClone({
+    lemmaDict: {} as Record<string, string>,
+    lemmaInflectionIndex,
+  });
+  const dictionary = withLemmaInflectionIndex(
+    transferPayload.lemmaDict,
+    transferPayload.lemmaInflectionIndex,
+  );
+  const result = contextualDeinflectTaggedTerms(
+    terms,
+    dictionary,
+    new Map<string, number>([['terrier', 0], ['terry', 1], ['wait', 2], ['door', 3]]),
+    new Set<string>(),
+    false,
+    nlp,
+  );
+  const terrierIndex = terms.findIndex((term) => term.normalized === 'terrier');
+
+  assert.notEqual(terrierIndex, -1);
+  assert.equal(result.tokens[terrierIndex], 'terrier');
+  assert.equal(result.partsOfSpeech[terrierIndex], 'noun');
+  assert.ok(['article', 'determiner'].includes(result.partsOfSpeech[0] ?? ''));
+});
+
+test('missing dictionary relationship evidence keeps the source form', () => {
+  const result = contextualDeinflectTaggedTerms(
+    [createTaggedTerm('ran', true)],
+    {},
+    new Map<string, number>([['ran', 0], ['run', 1]]),
+    new Set<string>(),
+    false,
+    createLemmaNlp({
+      ran: { verbInfinitive: 'run', nounSingular: '', adjectiveBase: '' },
+    }),
+  );
+
+  assert.deepEqual(result.tokens, ['ran']);
+
+  const absentSourceResult = contextualDeinflectTaggedTerms(
+    [createTaggedTerm('dogeared', true)],
+    withLemmaInflectionIndex({}, lemmaInflectionIndex),
+    new Map<string, number>([['terry', 0]]),
+    new Set<string>(),
+    false,
+    createLemmaNlp({
+      dogeared: { verbInfinitive: '', nounSingular: 'terry', adjectiveBase: '' },
+    }),
+  );
+  assert.deepEqual(absentSourceResult.tokens, ['dogeared']);
 });
 
 test('fallback shape detection excludes USA, England, and James Legge without NLP tags', () => {

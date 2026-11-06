@@ -1,11 +1,12 @@
 import type { BookLemmaHistogram, BookLemmaHistogramSegment } from './reader-analysis';
-import type { BookChapter, VocabularyModel } from './types';
+import type { BookChapter, LemmaInflectionIndex, VocabularyModel } from './types';
 
 export interface BookHistogramWorkerInitializeMessage {
   type: 'initialize';
   runId: number;
   model: VocabularyModel;
   lemmaDict: Record<string, string>;
+  lemmaInflectionIndex?: LemmaInflectionIndex;
 }
 
 export interface BookHistogramWorkerChapterMessage {
