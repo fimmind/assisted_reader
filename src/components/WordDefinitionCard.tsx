@@ -450,11 +450,6 @@ export function WordDefinitionCard({
     ? definition.senses.reduce((count, sense) => count + sense.definitions.length, 0)
     : 0;
   const heightLimited = definitionCount > 1;
-  const cardMetadata = {
-    'data-definition-card': 'true',
-    'data-definition-count': definitionCount,
-    'data-definition-height-limited': heightLimited ? 'true' : undefined,
-  } as const;
   if (compact) {
     const content = compactCardDefinitionContent(
       definition,
@@ -466,7 +461,7 @@ export function WordDefinitionCard({
     return (
       <div
         ref={cardRef}
-        {...cardMetadata}
+        data-definition-card="true"
         className={cn(
           'inline-flex flex-col bg-popover border border-vocabulary-card-border rounded-md shadow-sm dark:shadow-md px-3 pt-2.5 pb-3 mx-2 my-1 max-w-[250px] align-middle',
           heightLimited && 'min-h-0 max-h-[70vh]',
@@ -499,7 +494,7 @@ export function WordDefinitionCard({
   return (
     <div
       ref={cardRef}
-      {...cardMetadata}
+      data-definition-card="true"
       className={cn(
         'bg-popover border border-vocabulary-card-border rounded-lg shadow-sm dark:shadow-md p-5 w-[300px]',
         heightLimited && 'min-h-0 flex flex-col',

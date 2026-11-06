@@ -57,14 +57,12 @@ import type {
   ImportedBook,
   LexiconEntry,
   ParagraphAnalysis,
-  PartOfSpeech,
   ReaderInlineMark,
   ReaderBookmark,
   ReaderParagraphBlock,
   ReaderLocation,
   ReaderSettings,
   ReaderTextRun,
-  UserProfile,
   VocabularyModel,
 } from '@/core/types';
 
