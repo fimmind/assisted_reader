@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 import { QuizModal } from '@/components/QuizModal';
 import { VocabularyTestInvitation } from '@/components/VocabularyTestInvitation';
 import { deferVocabularyTest } from '@/core/profile-store';
+import { shouldShowVocabularyTestReminder } from '@/core/vocabulary-test';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 
 interface VocabularyTestOnboardingProps {
@@ -45,7 +46,7 @@ export function VocabularyTestOnboarding({ quizOpen, onQuizOpenChange }: Vocabul
 
 export function VocabularyTestReminder(): ReactElement | null {
   const profile = useActiveProfile();
-  if (profile.vocabularyTestStatus === 'pending' || profile.vocabularyTestStatus === 'completed') {
+  if (!shouldShowVocabularyTestReminder(profile)) {
     return null;
   }
 
