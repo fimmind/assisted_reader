@@ -3,19 +3,18 @@ import { Link } from 'wouter';
 import { ChevronLeft, Trash2, Upload, Download, Plus, RotateCcw, Pencil } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useSettings } from '../hooks/useSettings';
+import { useWsdStatus } from '@/hooks/useWsdStatus';
 import { Button } from '@/components/ui/button';
 import { VocabularyTestOnboarding } from '@/components/VocabularyTestOnboarding';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
+import { WsdSettings } from '@/components/WsdSettings';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
 import { estimateKnownWordCount, loadVocabularyModel } from '@/core/model';
 import type { UserProfile, VocabularyModel } from '@/core/types';
-import { getWsdModelStatus, startWsdModel, stopWsdModel, subscribeWsdModelStatus } from '@/core/wsd-runtime';
-import { failedWsdAsset, loadWsdAvailability, uncheckedWsdAvailability } from '@/core/wsd-assets';
-import type { FailedWsdAsset } from '@/core/wsd-assets';
+import { startWsdModel, stopWsdModel } from '@/core/wsd-runtime';
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -25,12 +24,8 @@ export default function SettingsPage() {
   const [quizOpen, setQuizOpen] = useState(false);
   const [vocabularyModel, setVocabularyModel] = useState<VocabularyModel | null>(null);
   const [vocabularyUnavailable, setVocabularyUnavailable] = useState(false);
-  const [wsdStatus, setWsdStatus] = useState(getWsdModelStatus);
-  const [wsdAvailability, setWsdAvailability] = useState(uncheckedWsdAvailability);
-  const [failedAsset, setFailedAsset] = useState<FailedWsdAsset | null>(null);
+  const { wsdStatus, wsdAvailability } = useWsdStatus();
   const selectedWsdAvailable = settings.wsdMode === 'none' || wsdAvailability[settings.wsdMode].available;
-
-  useEffect(() => subscribeWsdModelStatus(setWsdStatus), []);
 
   useEffect(() => {
     let active = true;
@@ -44,33 +39,6 @@ export default function SettingsPage() {
     });
     return () => { active = false; };
   }, []);
-
-  useEffect(() => {
-    const failed = failedWsdAsset(wsdStatus.mode, wsdStatus.phase, wsdStatus.message);
-    if (failed) setFailedAsset(failed);
-  }, [wsdStatus.mode, wsdStatus.phase, wsdStatus.message]);
-
-  useEffect(() => {
-    let controller: AbortController | null = null;
-    const refresh = (): void => {
-      controller?.abort();
-      const active = new AbortController();
-      controller = active;
-      void loadWsdAvailability(failedAsset, active.signal).then((availability) => {
-        if (!active.signal.aborted) setWsdAvailability(availability);
-      }).catch((error: unknown) => {
-        if (!active.signal.aborted) console.error('wsd-availability-check-failed', { error });
-      });
-    };
-    refresh();
-    window.addEventListener('focus', refresh);
-    const timer = window.setInterval(refresh, 15_000);
-    return () => {
-      controller?.abort();
-      window.removeEventListener('focus', refresh);
-      window.clearInterval(timer);
-    };
-  }, [failedAsset]);
 
   useEffect(() => {
     if (settings.wsdMode !== 'none' && selectedWsdAvailable) {
@@ -309,101 +277,15 @@ export default function SettingsPage() {
               </p>
             </div>
 
-            <div className="space-y-3">
-              <Label>Word Sense Disambiguation</Label>
-              <div className="flex flex-wrap gap-3" role="group" aria-label="Word Sense Disambiguation">
-                {(['none', 'sayedshaun', 'glite-lens'] as const).map((mode) => (
-                  <Button
-                    key={mode}
-                    variant={settings.wsdMode === mode ? 'default' : 'outline'}
-                    aria-pressed={settings.wsdMode === mode}
-                    disabled={mode !== 'none' && !wsdAvailability[mode].available}
-                    title={mode === 'none' ? undefined : wsdAvailability[mode].reason}
-                    onClick={() => updateSetting('wsdMode', mode)}
-                    className="min-w-[100px]"
-                  >
-                    {mode === 'none' ? 'None' : mode === 'sayedshaun' ? 'Light' : 'Heavier'}
-                    {mode !== 'none' && wsdAvailability[mode].checked && !wsdAvailability[mode].available && ' (Unavailable)'}
-                  </Button>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Light uses SayedShaun WSD (DistilBERT) for faster lookups and a smaller model download. Heavier uses Glite LENS for stronger sense ranking with a larger model download.
-              </p>
-              {settings.wsdMode !== 'none' && wsdAvailability[settings.wsdMode].available && (
-                <div className="space-y-2" role="status" aria-live="polite">
-                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                    <span>{wsdStatus.phase === 'error' ? `Model error: ${wsdStatus.message}` : wsdStatus.message}</span>
-                    {wsdStatus.totalBytes > 0 && wsdStatus.phase === 'downloading' && (
-                      <span>{Math.round(100 * wsdStatus.downloadedBytes / wsdStatus.totalBytes)}%</span>
-                    )}
-                  </div>
-                  {wsdStatus.phase === 'downloading' && wsdStatus.totalBytes > 0 && (
-                    <Progress value={100 * wsdStatus.downloadedBytes / wsdStatus.totalBytes} />
-                  )}
-                  {wsdStatus.phase === 'error' && (
-                    <Button variant="outline" size="sm" onClick={() => {
-                      if (settings.wsdMode !== 'none') {
-                        startWsdModel(settings.wsdMode);
-                      }
-                    }}>Retry download</Button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {settings.wsdMode !== 'none' && (
-              <div className="space-y-2">
-                <Label>Reduction level</Label>
-                <Slider
-                  value={[settings.wsdReductionLevel]}
-                  min={0}
-                  max={10}
-                  step={1}
-                  onValueChange={([level]) => updateSetting('wsdReductionLevel', level)}
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Retain more</span><span>Hide more</span>
-                </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Each model has its own single-sentence calibration. Zero retained every correct calibration sense; higher levels target 1–10% misses. Actual misses can differ, especially with more context.
-                </p>
-              </div>
-            )}
-
-            {settings.wsdMode !== 'none' && (
-              <div className="space-y-3">
-                <Label>Context unit</Label>
-                <div className="flex flex-wrap gap-3">
-                  {(['sentence', 'paragraph'] as const).map((unit) => (
-                    <Button
-                      key={unit}
-                      variant={settings.wsdContextUnit === unit ? 'default' : 'outline'}
-                      onClick={() => updateSetting('wsdContextUnit', unit)}
-                      className="min-w-[100px]"
-                    >
-                      {unit === 'sentence' ? 'Sentences' : 'Paragraphs'}
-                    </Button>
-                  ))}
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <Label>Context size</Label>
-                  <span className="text-muted-foreground text-sm font-medium">
-                    {settings.wsdContextSize} {settings.wsdContextUnit}{settings.wsdContextSize === 1 ? '' : 's'}
-                  </span>
-                </div>
-                <Slider
-                  value={[settings.wsdContextSize]}
-                  min={1}
-                  max={3}
-                  step={1}
-                  onValueChange={([size]) => updateSetting('wsdContextSize', size)}
-                />
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Includes the word’s sentence or paragraph and nearby text. More context may help or hurt and can take longer to process.
-                </p>
-              </div>
-            )}
+            <WsdSettings
+              settings={settings}
+              updateSetting={updateSetting}
+              availability={wsdAvailability}
+              status={wsdStatus}
+              onRetry={() => {
+                if (settings.wsdMode !== 'none') startWsdModel(settings.wsdMode);
+              }}
+            />
           </div>
         </section>
 

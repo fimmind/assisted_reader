@@ -9,7 +9,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { WsdSettings } from '@/components/WsdSettings';
 import { useSettings } from '@/hooks/useSettings';
+import { useWsdStatus } from '@/hooks/useWsdStatus';
 import { useTheme } from '@/components/ThemeProvider';
 import { ContextualDefinitionCard } from '@/components/ContextualDefinitionCard';
 import { StudyFlow } from '@/components/StudyFlow';
@@ -848,6 +850,7 @@ export default function ReaderPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [initialViewportReady, setInitialViewportReady] = useState(false);
   const [initialLoadingMessage, setInitialLoadingMessage] = useState<string>('Loading reader...');
+  const { wsdStatus, wsdAvailability } = useWsdStatus();
   const [initialProgressRestored, setInitialProgressRestored] = useState(false);
   const [initialAnalysisRevision, setInitialAnalysisRevision] = useState(0);
   const [studyOpen, setStudyOpen] = useState(false);
@@ -2553,6 +2556,15 @@ export default function ReaderPage() {
                       ))}
                     </div>
                   </div>
+                  <WsdSettings
+                    settings={settings}
+                    updateSetting={updateSetting}
+                    availability={wsdAvailability}
+                    status={wsdStatus}
+                    onRetry={() => {
+                      if (settings.wsdMode !== 'none') startWsdModel(settings.wsdMode);
+                    }}
+                  />
                 </div>
               </SheetContent>
             </Sheet>
