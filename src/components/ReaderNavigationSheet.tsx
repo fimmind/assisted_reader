@@ -395,7 +395,9 @@ export function ReaderNavigationSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" showCloseButton={false} aria-describedby={undefined} onEscapeKeyDown={(event) => {
+      <SheetContent side="right" onSwipeDismiss={() => {
+        if (commitBookmarkEditor()) onOpenChange(false);
+      }} showCloseButton={false} aria-describedby={undefined} onEscapeKeyDown={(event) => {
         if (editingBookmarkId !== null) event.preventDefault();
       }} onPointerDownOutside={(event) => {
         if (!commitBookmarkEditor()) event.preventDefault();

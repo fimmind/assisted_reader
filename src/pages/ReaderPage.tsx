@@ -2529,7 +2529,7 @@ export default function ReaderPage() {
                   <Type size={18} />
                 </Button>
               </SheetTrigger>
-              <SheetContent side="right" disableAnimation className="w-[300px] sm:w-[400px] overflow-y-auto">
+              <SheetContent side="right" onSwipeDismiss={() => setReaderSettingsOpen(false)} disableAnimation className="w-[300px] sm:w-[400px] overflow-y-auto">
                 <SheetHeader className="mb-6">
                   <SheetTitle className="font-serif">Reader Settings</SheetTitle>
                 </SheetHeader>

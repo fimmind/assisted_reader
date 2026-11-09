@@ -54,37 +54,127 @@ interface SheetContentProps
     VariantProps<typeof sheetVariants> {
   disableAnimation?: boolean;
   showCloseButton?: boolean;
+  onSwipeDismiss?: () => void;
 }
 
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, disableAnimation, showCloseButton, ...props }, ref) => (
-  <SheetPortal>
-    <SheetOverlay
-      className={cn(
-        disableAnimation && "data-[state=open]:animate-none data-[state=closed]:animate-none transition-none duration-0"
-      )}
-    />
-    <SheetPrimitive.Content
-      ref={ref}
-      className={cn(
-        sheetVariants({ side }),
-        disableAnimation && "data-[state=open]:animate-none data-[state=closed]:animate-none data-[state=open]:duration-0 data-[state=closed]:duration-0 transition-none",
-        className
-      )}
-      {...props}
-    >
-      {showCloseButton !== false && (
-        <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </SheetPrimitive.Close>
-      )}
-      {children}
-    </SheetPrimitive.Content>
-  </SheetPortal>
-))
+>(({ side = "right", className, children, disableAnimation, showCloseButton, onSwipeDismiss, onTouchStartCapture, onTouchMoveCapture, onTouchEndCapture, onTouchCancelCapture, onClickCapture, ...props }, ref) => {
+  const touchStartRef = React.useRef<{ x: number; y: number; direction: "horizontal" | "vertical" | null } | null>(null);
+  const suppressClickRef = React.useRef(false);
+  const suppressClickTimerRef = React.useRef<number | null>(null);
+
+  React.useEffect(() => () => {
+    if (suppressClickTimerRef.current !== null) window.clearTimeout(suppressClickTimerRef.current);
+  }, []);
+
+  const handleTouchStartCapture = (event: React.TouchEvent<HTMLDivElement>): void => {
+    onTouchStartCapture?.(event);
+    if (event.defaultPrevented) return;
+    if (suppressClickTimerRef.current !== null) window.clearTimeout(suppressClickTimerRef.current);
+    suppressClickTimerRef.current = null;
+    suppressClickRef.current = false;
+    touchStartRef.current = null;
+    if (!onSwipeDismiss || side !== "right" || event.touches.length !== 1) return;
+
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest('input, textarea, select, [contenteditable], [role="slider"], [role="combobox"], .touch-none')) return;
+
+    const touch = event.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY, direction: null };
+  };
+
+  const handleTouchMoveCapture = (event: React.TouchEvent<HTMLDivElement>): void => {
+    onTouchMoveCapture?.(event);
+    if (event.defaultPrevented) return;
+    const touchStart = touchStartRef.current;
+    if (!touchStart) return;
+    if (event.touches.length !== 1) {
+      touchStartRef.current = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - touchStart.x;
+    const deltaY = touch.clientY - touchStart.y;
+    if (touchStart.direction === null && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= 10) {
+      touchStart.direction = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+    }
+  };
+
+  const handleTouchEndCapture = (event: React.TouchEvent<HTMLDivElement>): void => {
+    onTouchEndCapture?.(event);
+    if (event.defaultPrevented) {
+      touchStartRef.current = null;
+      return;
+    }
+    const touchStart = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!touchStart || !onSwipeDismiss || touchStart.direction !== "horizontal" || event.changedTouches.length !== 1) return;
+
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - touchStart.x;
+    const deltaY = touch.clientY - touchStart.y;
+    if (deltaX < 60 || deltaX <= Math.abs(deltaY) * 1.2) return;
+
+    suppressClickRef.current = true;
+    suppressClickTimerRef.current = window.setTimeout(() => {
+      suppressClickRef.current = false;
+      suppressClickTimerRef.current = null;
+    }, 400);
+    onSwipeDismiss();
+  };
+
+  const handleTouchCancelCapture = (event: React.TouchEvent<HTMLDivElement>): void => {
+    onTouchCancelCapture?.(event);
+    touchStartRef.current = null;
+  };
+
+  const handleClickCapture = (event: React.MouseEvent<HTMLDivElement>): void => {
+    if (suppressClickRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClickRef.current = false;
+      if (suppressClickTimerRef.current !== null) window.clearTimeout(suppressClickTimerRef.current);
+      suppressClickTimerRef.current = null;
+      return;
+    }
+    onClickCapture?.(event);
+  };
+
+  return (
+    <SheetPortal>
+      <SheetOverlay
+        className={cn(
+          disableAnimation && "data-[state=open]:animate-none data-[state=closed]:animate-none transition-none duration-0"
+        )}
+      />
+      <SheetPrimitive.Content
+        ref={ref}
+        className={cn(
+          sheetVariants({ side }),
+          disableAnimation && "data-[state=open]:animate-none data-[state=closed]:animate-none data-[state=open]:duration-0 data-[state=closed]:duration-0 transition-none",
+          className
+        )}
+        onTouchStartCapture={handleTouchStartCapture}
+        onTouchMoveCapture={handleTouchMoveCapture}
+        onTouchEndCapture={handleTouchEndCapture}
+        onTouchCancelCapture={handleTouchCancelCapture}
+        onClickCapture={handleClickCapture}
+        {...props}
+      >
+        {showCloseButton !== false && (
+          <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </SheetPrimitive.Close>
+        )}
+        {children}
+      </SheetPrimitive.Content>
+    </SheetPortal>
+  );
+})
 SheetContent.displayName = SheetPrimitive.Content.displayName
 
 const SheetHeader = ({
