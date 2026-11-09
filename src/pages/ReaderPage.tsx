@@ -832,6 +832,7 @@ export default function ReaderPage() {
   const [book, setBook] = useState<ImportedBook | null>(null);
   const [assistanceEnabled, setAssistanceEnabled] = useState(true);
   const [headerVisible, setHeaderVisible] = useState(true);
+  const [documentBottomVisible, setDocumentBottomVisible] = useState(false);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [navigationSearchRequested, setNavigationSearchRequested] = useState(false);
@@ -1711,6 +1712,8 @@ export default function ReaderPage() {
       const y = window.scrollY;
       const previousY = lastScrollY.current;
       lastScrollY.current = y;
+      const reachedDocumentBottom = document.documentElement.scrollHeight - (y + window.innerHeight) <= 2;
+      setDocumentBottomVisible(reachedDocumentBottom);
       if (y <= 1) setHeaderVisible(true);
       if (isRestoringProgressRef.current) {
         return;
@@ -1727,7 +1730,6 @@ export default function ReaderPage() {
       }
       const currentBook = bookRef.current;
       const lastLinearChapterIndex = currentBook?.chapters.findLastIndex((chapter) => chapter.linear !== false) ?? -1;
-      const reachedDocumentBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight) <= 2;
       const recentManualScroll = performance.now() - lastScrollActivityAtRef.current < 500;
       if (currentBook && reachedDocumentBottom && recentManualScroll
         && currentBook.currentChapter - 1 === lastLinearChapterIndex) {
@@ -1775,6 +1777,23 @@ export default function ReaderPage() {
       window.removeEventListener('scroll', handleScroll);
     };
   }, [captureCurrentReaderLocation, saveReaderBookProgress, scheduleChapterProgressPersist]);
+
+  useEffect(() => {
+    const updateDocumentBottomVisibility = (): void => {
+      setDocumentBottomVisible(
+        document.documentElement.scrollHeight - (window.scrollY + window.innerHeight) <= 2,
+      );
+    };
+    updateDocumentBottomVisibility();
+    window.addEventListener('resize', updateDocumentBottomVisibility);
+    const resizeObserver = new ResizeObserver(updateDocumentBottomVisibility);
+    resizeObserver.observe(document.documentElement);
+    if (document.body) resizeObserver.observe(document.body);
+    return () => {
+      window.removeEventListener('resize', updateDocumentBottomVisibility);
+      resizeObserver.disconnect();
+    };
+  }, [book?.id, book?.currentChapter, isLoading]);
 
   useEffect(() => () => {
     if (progressPersistTimeoutRef.current !== null) {
@@ -2607,7 +2626,7 @@ export default function ReaderPage() {
       <div className="h-14" />
 
       <main
-        className={cn('mx-auto px-4 sm:px-6', getOuterWidthClass())}
+        className={cn('mx-auto px-4 pb-24 sm:px-6', getOuterWidthClass())}
         onClick={() => {
           scrollDirectionRef.current = 0;
           lastScrollY.current = window.scrollY;
@@ -2740,38 +2759,44 @@ export default function ReaderPage() {
                 );
               })}
             </div>
-
-            <div className="mt-20 pt-8 border-t border-border flex justify-between items-center text-muted-foreground font-serif">
-              <Button
-                variant="ghost"
-                className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
-                data-testid="button-prev-chapter"
-                disabled={!canGoToPreviousChapter}
-                onClick={() => void updateCurrentChapter(-1)}
-              >
-                <ChevronLeft size={16} />
-                <span className="sm:hidden">Previous</span>
-                <span className="hidden sm:inline">Previous Chapter</span>
-              </Button>
-              <span className="text-xs sm:text-sm" data-testid="text-page-info">
-                Chapter {currentChapterNumber} of {book.chapters.length}
-              </span>
-              <Button
-                variant="ghost"
-                className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
-                data-testid="button-next-chapter"
-                disabled={!canGoToNextChapter}
-                onClick={() => void updateCurrentChapter(1)}
-              >
-                <span className="sm:hidden">Next</span>
-                <span className="hidden sm:inline">Next Chapter</span>
-                <ChevronLeft size={16} className="rotate-180" />
-              </Button>
-            </div>
           </div>
 
         </div>
       </main>
+      <div
+        className={cn(
+          'fixed bottom-0 inset-x-0 z-20 bg-background/95 backdrop-blur-sm border-t border-border transition-transform duration-300',
+          headerVisible || documentBottomVisible ? 'translate-y-0' : 'translate-y-full',
+        )}
+      >
+        <div className="container mx-auto px-4 h-14 flex justify-between items-center text-muted-foreground font-serif [&_button]:cursor-pointer">
+          <Button
+            variant="ghost"
+            className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
+            data-testid="button-prev-chapter"
+            disabled={!canGoToPreviousChapter}
+            onClick={() => void updateCurrentChapter(-1)}
+          >
+            <ChevronLeft size={16} />
+            <span className="sm:hidden">Previous</span>
+            <span className="hidden sm:inline">Previous Chapter</span>
+          </Button>
+          <span className="text-xs sm:text-sm" data-testid="text-page-info">
+            Chapter {currentChapterNumber} of {book.chapters.length}
+          </span>
+          <Button
+            variant="ghost"
+            className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm"
+            data-testid="button-next-chapter"
+            disabled={!canGoToNextChapter}
+            onClick={() => void updateCurrentChapter(1)}
+          >
+            <span className="sm:hidden">Next</span>
+            <span className="hidden sm:inline">Next Chapter</span>
+            <ChevronLeft size={16} className="rotate-180" />
+          </Button>
+        </div>
+      </div>
       {activeAnalysisRunId !== null && (
         <div className="pointer-events-none fixed bottom-4 right-4 z-30 text-muted-foreground">
           <ReaderActivityIndicator
