@@ -4,7 +4,7 @@ import {
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useParams, Link, useLocation } from 'wouter';
 import { ChevronLeft, Type, Eye, EyeOff, GraduationCap, MoreHorizontal, Trash2, List, BookmarkPlus, CornerUpLeft } from 'lucide-react';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
@@ -2529,10 +2529,8 @@ export default function ReaderPage() {
                   <Type size={18} />
                 </Button>
               </SheetTrigger>
-              <SheetContent side="right" onSwipeDismiss={() => setReaderSettingsOpen(false)} disableAnimation className="w-[300px] sm:w-[400px] overflow-y-auto">
-                <SheetHeader className="mb-6">
-                  <SheetTitle className="font-serif">Reader Settings</SheetTitle>
-                </SheetHeader>
+              <SheetContent side="right" onSwipeDismiss={() => setReaderSettingsOpen(false)} disableAnimation showCloseButton={false} className="w-[300px] sm:w-[400px] overflow-y-auto">
+                <SheetTitle className="sr-only">Reader Settings</SheetTitle>
                 <div className="space-y-8">
                   <div className="space-y-4">
                     <Label className="text-base font-medium">Font Size</Label>
