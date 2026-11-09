@@ -1592,7 +1592,7 @@ export default function ReaderPage() {
     navigateToReaderLocation(lastLinearReaderLocation(currentBook), true);
   }, [navigateToReaderLocation]);
 
-  const updateCurrentChapter = async (delta: -1 | 1) => {
+  const updateCurrentChapter = useCallback(async (delta: -1 | 1): Promise<void> => {
     if (!book) {
       return;
     }
@@ -1620,7 +1620,7 @@ export default function ReaderPage() {
     }
     openReaderChapter(nextBook);
     window.scrollTo({ top: 0, behavior: 'auto' });
-  };
+  }, [book, openReaderChapter, persistCurrentChapterProgress, saveReaderBookProgress]);
 
   useEffect(() => {
     if (!book || isLoading) {
@@ -2316,6 +2316,19 @@ export default function ReaderPage() {
         return;
       }
       if (event.ctrlKey || event.metaKey || event.altKey || readerSettingsOpen || navigationOpen || studyOpen || wordPopups.length > 0) return;
+      if (event.key === ' ' || event.key === 'ArrowDown') {
+        const target = event.target instanceof Element ? event.target : null;
+        const isInteractiveTarget = target?.closest(
+          'button, a[href], [role="button"], [role="link"], [role="dialog"], [role="menu"], [role="listbox"], [data-word-popup-index], [data-radix-popper-content-wrapper]',
+        );
+        const isAtDocumentBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight) <= 2;
+        if (event.defaultPrevented || event.repeat || event.shiftKey || isInteractiveTarget
+          || isLoading || !initialViewportReady || !initialProgressRestored
+          || initialReaderLoadPendingRef.current || isRestoringProgressRef.current || !isAtDocumentBottom) return;
+        event.preventDefault();
+        void updateCurrentChapter(1);
+        return;
+      }
       if (event.key.toLowerCase() === 'b') {
         event.preventDefault();
         addCurrentBookmark();
@@ -2329,7 +2342,7 @@ export default function ReaderPage() {
     };
     window.addEventListener('keydown', handleReaderShortcuts);
     return () => window.removeEventListener('keydown', handleReaderShortcuts);
-  }, [addCurrentBookmark, navigationOpen, readerSettingsOpen, studyOpen, updateCurrentChapter, wordPopups.length]);
+  }, [addCurrentBookmark, initialProgressRestored, initialViewportReady, isLoading, navigationOpen, readerSettingsOpen, studyOpen, updateCurrentChapter, wordPopups.length]);
 
   useEffect(() => {
     if (!book || isLoading || !initialViewportReady) return;
