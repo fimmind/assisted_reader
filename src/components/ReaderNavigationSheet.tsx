@@ -394,8 +394,8 @@ export function ReaderNavigationSheet({
   const noMatches = didSearch && !isSearching && matches.length === 0 && !searchError;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" onSwipeDismiss={() => {
+    <Sheet modal={false} open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" disableAnimation onSwipeDismiss={() => {
         if (commitBookmarkEditor()) onOpenChange(false);
       }} showCloseButton={false} aria-describedby={undefined} onEscapeKeyDown={(event) => {
         if (editingBookmarkId !== null) event.preventDefault();

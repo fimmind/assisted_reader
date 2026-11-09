@@ -2461,7 +2461,7 @@ export default function ReaderPage() {
   return (
     <>
     <div className="min-h-screen bg-background text-foreground" style={!initialViewportReady ? { visibility: 'hidden' } : undefined}>
-      {readerSettingsOpen && (
+      {(readerSettingsOpen || navigationOpen) && (
         <div
           className="fixed inset-0 z-10 bg-black/20"
           aria-hidden="true"
