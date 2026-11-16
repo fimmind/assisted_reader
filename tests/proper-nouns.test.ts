@@ -1793,6 +1793,64 @@ test('reader analysis keeps separate automatic targets for noun and verb usages'
   ]);
 });
 
+test('reader analysis displays selected targets in first text order after frequency ranking', () => {
+  const words = ['alpha', 'beta'];
+  const model: VocabularyModel = {
+    modelKey: 'card-order-test',
+    modelName: 'card-order-test',
+    words,
+    accuracy: [0.4, 0.4],
+    difficulties: [0, 0],
+    wordToIdx: new Map<string, number>(words.map((word, index) => [word, index])),
+    candidatePool: [],
+    candidatePositions: new Map<string, number>(),
+  };
+  const profile: UserProfile = {
+    id: 'card-order-profile',
+    name: 'Test',
+    observations: {},
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  const settings: ReaderSettings = {
+    fontSize: 18,
+    lineSpacing: 'Normal',
+    fontChoice: 'Serif',
+    pageWidth: 'Normal',
+    maxWordsPerParagraph: 2,
+    deduplicationRadius: 0,
+    knowledgeThreshold: 0.6,
+    englishVariant: 'US',
+    wsdMode: 'none',
+    wsdReductionLevel: 0,
+    wsdContextUnit: 'sentence',
+    wsdContextSize: 1,
+  };
+
+  const input = {
+    chapter: { title: 'Card order', paragraphs: ['Alpha beta beta beta.'] },
+    settings,
+    model,
+    profile,
+    lemmaDict: {},
+    nlp: null,
+    maxCardsPerParagraph: 2,
+  };
+  const analysis = analyzeChapter(input)[0];
+  const oneCardAnalysis = analyzeChapter({ ...input, maxCardsPerParagraph: 1 })[0];
+
+  assert.deepEqual(rankParagraphCardTargets(analysis.tokens, settings.knowledgeThreshold), [
+    { lemma: 'beta', partOfSpeech: null },
+    { lemma: 'alpha', partOfSpeech: null },
+  ]);
+  assert.deepEqual(analysis.cardTargets, [
+    { lemma: 'alpha', partOfSpeech: null },
+    { lemma: 'beta', partOfSpeech: null },
+  ]);
+  assert.deepEqual(oneCardAnalysis.cardTargets, [
+    { lemma: 'beta', partOfSpeech: null },
+  ]);
+});
+
 test('automatic card candidates exclude function words and leave unknown tokens available', () => {
   const words = ['they', 'wander', 'around', 'and', 'about', 'the', 'garden', 'because', 'of', 'rain'];
   const model: VocabularyModel = {

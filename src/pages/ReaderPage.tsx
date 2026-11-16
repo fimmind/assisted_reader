@@ -49,7 +49,7 @@ import { loadVocabularyModel } from '@/core/model';
 import { loadLemmaDict } from '@/core/lemma';
 import { loadCompromise } from '@/core/external';
 import type { NlpLike } from '@/core/nlp';
-import { analyzeChapter, createCachedChapterAnalyzer, getSessionBookLexicalCache, rankParagraphCardTargets } from '@/core/reader-analysis';
+import { analyzeChapter, createCachedChapterAnalyzer, getSessionBookLexicalCache, orderDefinitionTargetsByText, rankParagraphCardTargets } from '@/core/reader-analysis';
 import { getActiveProfile, listenStateUpdated, loadProfileState, upsertObservation } from '@/core/profile-store';
 import type { LazyLexicon } from '@/core/lexicon';
 import type { DefinitionLookupCandidate } from '@/core/definition-target';
@@ -801,7 +801,7 @@ function selectDeduplicatedCardTargets(
     }
     selected.push(target);
   }
-  return selected;
+  return orderDefinitionTargetsByText(tokens, selected);
 }
 
 function deduplicateParagraphCardTargets(

@@ -416,6 +416,32 @@ export function rankParagraphCardTargets(tokens: ParagraphToken[], threshold: nu
   return scored.map((entry) => entry.target);
 }
 
+export function orderDefinitionTargetsByText(
+  tokens: ParagraphToken[],
+  targets: DefinitionTarget[],
+): DefinitionTarget[] {
+  const firstIndexByTarget = new Map<string, number>();
+  tokens.forEach((token, index) => {
+    const key = definitionTargetKey(createDefinitionTarget(token.lemma, token.partOfSpeech));
+    if (!firstIndexByTarget.has(key)) {
+      firstIndexByTarget.set(key, index);
+    }
+  });
+
+  return targets
+    .map((target) => {
+      const firstIndex = firstIndexByTarget.get(definitionTargetKey(target));
+      if (firstIndex === undefined) {
+        throw new RangeError(
+          `Cannot order definition target '${target.lemma}' (${target.partOfSpeech ?? 'unknown POS'}): no matching paragraph token.`,
+        );
+      }
+      return { target, firstIndex };
+    })
+    .sort((left, right) => left.firstIndex - right.firstIndex)
+    .map(({ target }) => target);
+}
+
 export function createLexicalAnalysisCache(): LexicalAnalysisCache {
   return {
     taggedSentencesByText: new Map<string, TaggedSentence[]>(),
@@ -532,7 +558,10 @@ function analyzeChapterWithContext(
         selectedTargets.push(target);
         nearbyShownTargetKeys.add(key);
       }
-      selectedCardTargetsByParagraph.push(selectedTargets);
+      selectedCardTargetsByParagraph.push(orderDefinitionTargetsByText(
+        paragraphTokens[paragraphIndex] ?? [],
+        selectedTargets,
+      ));
     }
   } else {
     for (let paragraphIndex = 0; paragraphIndex < paragraphTokens.length; paragraphIndex += 1) {
