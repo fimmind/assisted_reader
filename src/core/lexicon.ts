@@ -1,3 +1,4 @@
+import { getDictionaryResourceGeneration, readDictionaryResource } from './offline-dictionaries';
 import { normalizeToken, orderedUnique } from './math';
 import type {
   DefinitionTarget,
@@ -97,6 +98,7 @@ export function resolveLexiconPronunciations(
 const LEXICON_BUCKET_ALGORITHM = 'fnv1a-32';
 const LEXICON_BUCKET_COUNT = 1024;
 const LEXICON_FETCH_ATTEMPTS = 3;
+const MAX_CACHED_BUCKETS = 32;
 let lexicon: LazyLexicon | null = null;
 let wiktionaryLexicon: LazyLexicon | null = null;
 let wordNetLexicon: LazyWordNet | null = null;
@@ -287,25 +289,10 @@ function buildEntryMap(entries: LexiconEntry[]): Map<string, LexiconEntry> {
 }
 
 async function fetchJsonWithRetries(relativeUrl: string, baseUrl: string): Promise<unknown> {
-  const url = `${baseUrl}${relativeUrl}`;
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= LEXICON_FETCH_ATTEMPTS; attempt += 1) {
     try {
-      const response = await fetch(url);
-      const body = await response.text();
-      if (!response.ok) {
-        throw new Error(
-          `Dictionary request failed: url=${url} status=${response.status} body=${body.slice(0, 500)}`,
-        );
-      }
-      try {
-        return JSON.parse(body) as unknown;
-      } catch (error) {
-        throw new SyntaxError(
-          `Invalid dictionary JSON: url=${url} status=${response.status} body=${body.slice(0, 500)}`,
-          { cause: error },
-        );
-      }
+      return await readDictionaryResource(relativeUrl, baseUrl);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       console.warn('lexicon-fetch-attempt-failed', {
@@ -369,16 +356,18 @@ export function resolveLexiconBucketFileName(word: string): string {
 
 export function createLazyWiktionaryLexicon(baseUrl: string): LazyLexicon {
   let indexPromise: Promise<LexiconIndexPayload> | null = null;
+  let generation = getDictionaryResourceGeneration();
   const bucketPromises = new Map<string, Promise<Map<string, LexiconEntry>>>();
 
   const loadIndex = (): Promise<LexiconIndexPayload> => {
     if (!indexPromise) {
-      indexPromise = fetchJsonWithRetries(LEXICON_INDEX_URL, baseUrl)
+      const pending = fetchJsonWithRetries(LEXICON_INDEX_URL, baseUrl)
         .then((payload) => parseLexiconIndex(payload))
         .catch((error: unknown) => {
-          indexPromise = null;
+          if (indexPromise === pending) indexPromise = null;
           throw error;
         });
+      indexPromise = pending;
     }
     return indexPromise;
   };
@@ -386,13 +375,19 @@ export function createLazyWiktionaryLexicon(baseUrl: string): LazyLexicon {
   const loadBucket = (fileName: string): Promise<Map<string, LexiconEntry>> => {
     const existing = bucketPromises.get(fileName);
     if (existing) {
+      bucketPromises.delete(fileName);
+      bucketPromises.set(fileName, existing);
       return existing;
     }
     const pending = loadChunk(fileName, baseUrl).catch((error: unknown) => {
-      bucketPromises.delete(fileName);
+      if (bucketPromises.get(fileName) === pending) bucketPromises.delete(fileName);
       throw error;
     });
     bucketPromises.set(fileName, pending);
+    if (bucketPromises.size > MAX_CACHED_BUCKETS) {
+      const oldest = bucketPromises.keys().next().value;
+      if (oldest !== undefined) bucketPromises.delete(oldest);
+    }
     return pending;
   };
 
@@ -402,10 +397,19 @@ export function createLazyWiktionaryLexicon(baseUrl: string): LazyLexicon {
       if (word.length === 0) {
         return null;
       }
-      await loadIndex();
-      const fileName = resolveLexiconBucketFileName(word);
-      const bucket = await loadBucket(fileName);
-      return bucket.get(word) ?? null;
+      while (true) {
+        const currentGeneration = getDictionaryResourceGeneration();
+        if (generation !== currentGeneration) {
+          generation = currentGeneration;
+          indexPromise = null;
+          bucketPromises.clear();
+        }
+        await loadIndex();
+        if (currentGeneration !== getDictionaryResourceGeneration()) continue;
+        const fileName = resolveLexiconBucketFileName(word);
+        const bucket = await loadBucket(fileName);
+        if (currentGeneration === getDictionaryResourceGeneration()) return bucket.get(word) ?? null;
+      }
     },
   };
 }
@@ -419,16 +423,18 @@ export function loadWiktionaryLexicon(): LazyLexicon {
 
 export function createLazyWordNet(baseUrl: string): LazyWordNet {
   let indexPromise: Promise<WordNetIndexPayload> | null = null;
+  let generation = getDictionaryResourceGeneration();
   const bucketPromises = new Map<string, Promise<Map<string, WordNetEntry>>>();
 
   const loadIndex = (): Promise<WordNetIndexPayload> => {
     if (!indexPromise) {
-      indexPromise = fetchJsonWithRetries(WORDNET_INDEX_URL, baseUrl)
+      const pending = fetchJsonWithRetries(WORDNET_INDEX_URL, baseUrl)
         .then((payload) => parseWordNetIndex(payload))
         .catch((error: unknown) => {
-          indexPromise = null;
+          if (indexPromise === pending) indexPromise = null;
           throw error;
         });
+      indexPromise = pending;
     }
     return indexPromise;
   };
@@ -436,13 +442,19 @@ export function createLazyWordNet(baseUrl: string): LazyWordNet {
   const loadBucket = (fileName: string): Promise<Map<string, WordNetEntry>> => {
     const existing = bucketPromises.get(fileName);
     if (existing) {
+      bucketPromises.delete(fileName);
+      bucketPromises.set(fileName, existing);
       return existing;
     }
     const pending = loadWordNetChunk(fileName, baseUrl).catch((error: unknown) => {
-      bucketPromises.delete(fileName);
+      if (bucketPromises.get(fileName) === pending) bucketPromises.delete(fileName);
       throw error;
     });
     bucketPromises.set(fileName, pending);
+    if (bucketPromises.size > MAX_CACHED_BUCKETS) {
+      const oldest = bucketPromises.keys().next().value;
+      if (oldest !== undefined) bucketPromises.delete(oldest);
+    }
     return pending;
   };
 
@@ -452,10 +464,19 @@ export function createLazyWordNet(baseUrl: string): LazyWordNet {
       if (word.length === 0) {
         return null;
       }
-      await loadIndex();
-      const fileName = resolveLexiconBucketFileName(word);
-      const bucket = await loadBucket(fileName);
-      return bucket.get(word) ?? null;
+      while (true) {
+        const currentGeneration = getDictionaryResourceGeneration();
+        if (generation !== currentGeneration) {
+          generation = currentGeneration;
+          indexPromise = null;
+          bucketPromises.clear();
+        }
+        await loadIndex();
+        if (currentGeneration !== getDictionaryResourceGeneration()) continue;
+        const fileName = resolveLexiconBucketFileName(word);
+        const bucket = await loadBucket(fileName);
+        if (currentGeneration === getDictionaryResourceGeneration()) return bucket.get(word) ?? null;
+      }
     },
   };
 }

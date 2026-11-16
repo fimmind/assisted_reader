@@ -4,6 +4,7 @@ import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { verifyWordNetAssets } from './verify-wordnet-assets.mjs';
+import { verifyOfflineDictionaryAssets } from './build-offline-dictionaries.mjs';
 import {
   CANONICAL_PARTS_OF_SPEECH,
   LEXICON_BUCKET_ALGORITHM,
@@ -24,6 +25,7 @@ const requiredFiles = [
   'data/lexicon/inflection-index.json',
   'data/wordnet/index.json',
   'data/wordnet/LICENSE',
+  'data/offline-dictionaries/manifest.json',
   'wsd/availability.json',
   ...(!allowMissingWsd ? [
     'wsd/sayedshaun-wsd/manifest.json',
@@ -344,6 +346,10 @@ async function main() {
   await verifyLexiconChunks();
   await verifyWordNetAssets(path.join(DIST_DIR, 'data/wordnet'));
   await verifyDictionaryCopies();
+  verifyOfflineDictionaryAssets(
+    path.join(DIST_DIR, 'data/offline-dictionaries'),
+    path.resolve('data'),
+  );
   await verifySeedBook();
   if (availability.sayedshaun.available) {
     await verifyWsdAssets('wsd/sayedshaun-wsd', '54e41c09c61ae8bd60c62e40bf483141c49ce0d3', ['tokenizer.json', 'tokenizer_config.json']);

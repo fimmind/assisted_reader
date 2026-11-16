@@ -1,9 +1,11 @@
+import { getDictionaryResourceGeneration, readDictionaryResource } from './offline-dictionaries';
 import {
   type LemmaInflectionIndex,
   withLemmaInflectionIndex,
 } from './types';
 
 let lemmaDictPromise: Promise<Record<string, string>> | null = null;
+let lemmaGeneration = getDictionaryResourceGeneration();
 
 const LEMMA_URL = 'data/lemma_dict.json';
 const INFLECTION_INDEX_URL = 'data/lexicon/inflection-index.json';
@@ -19,11 +21,23 @@ function toSafeLemmaDict(payload: Record<string, unknown>): Record<string, strin
 }
 
 export async function loadLemmaDict(): Promise<Record<string, string>> {
+  const generation = getDictionaryResourceGeneration();
+  if (generation !== lemmaGeneration) {
+    lemmaGeneration = generation;
+    lemmaDictPromise = null;
+  }
   if (lemmaDictPromise) {
     return lemmaDictPromise;
   }
 
-  lemmaDictPromise = loadLemmaResources();
+  const pending = loadLemmaResources().then((result) => {
+    if (generation !== getDictionaryResourceGeneration()) return loadLemmaDict();
+    return result;
+  }).catch((error: unknown) => {
+    if (lemmaDictPromise === pending) lemmaDictPromise = null;
+    throw error;
+  });
+  lemmaDictPromise = pending;
   return lemmaDictPromise;
 }
 
@@ -31,24 +45,17 @@ async function loadLemmaResources(): Promise<Record<string, string>> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const [lemmaResponse, indexResponse] = await Promise.all([
-        fetch(`${import.meta.env.BASE_URL}${LEMMA_URL}`),
-        fetch(`${import.meta.env.BASE_URL}${INFLECTION_INDEX_URL}`),
-      ]);
-      if (!lemmaResponse.ok) {
-        throw new Error(`Lemma dictionary request failed: url=${LEMMA_URL} status=${lemmaResponse.status} body=${await lemmaResponse.text()}`);
-      }
-      if (!indexResponse.ok) {
-        throw new Error(`Lemma inflection index request failed: url=${INFLECTION_INDEX_URL} status=${indexResponse.status} body=${await indexResponse.text()}`);
-      }
       const [lemmaPayload, indexPayload] = await Promise.all([
-        lemmaResponse.json() as Promise<Record<string, unknown>>,
-        indexResponse.json() as Promise<LemmaInflectionIndex>,
+        readDictionaryResource(LEMMA_URL, import.meta.env.BASE_URL),
+        readDictionaryResource(INFLECTION_INDEX_URL, import.meta.env.BASE_URL),
       ]);
-      if (!isSafeInflectionIndex(indexPayload)) {
+      if (!lemmaPayload || typeof lemmaPayload !== 'object' || Array.isArray(lemmaPayload)) {
+        throw new TypeError('Lemma dictionary payload is invalid.');
+      }
+      if (!isSafeInflectionIndex(indexPayload as LemmaInflectionIndex)) {
         throw new TypeError('Lemma inflection index payload is invalid.');
       }
-      return withLemmaInflectionIndex(toSafeLemmaDict(lemmaPayload), indexPayload);
+      return withLemmaInflectionIndex(toSafeLemmaDict(lemmaPayload as Record<string, unknown>), indexPayload as LemmaInflectionIndex);
     } catch (error) {
       lastError = error;
       console.warn('lemma-dict-load-attempt-failed', { attempt, lemmaUrl: LEMMA_URL, inflectionUrl: INFLECTION_INDEX_URL, error });

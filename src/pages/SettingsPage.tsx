@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
 import { WsdSettings } from '@/components/WsdSettings';
+import { OfflineDictionarySettings } from '@/components/OfflineDictionarySettings';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { createProfile, deleteProfile, listenStateUpdated, loadProfileState, renameProfile, resetProfileObservations, setActiveProfile } from '@/core/profile-store';
 import { estimateKnownWordCount, loadVocabularyModel } from '@/core/model';
@@ -286,6 +287,8 @@ export default function SettingsPage() {
                 if (settings.wsdMode !== 'none') startWsdModel(settings.wsdMode);
               }}
             />
+
+            <OfflineDictionarySettings />
           </div>
         </section>
 

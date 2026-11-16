@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -10,3 +11,4 @@ cpSync(source, destination, {
   recursive: true,
   filter: (sourcePath) => sourcePath !== resolve(source, 'hitchhikers_guide.txt'),
 });
+execFileSync(process.execPath, [resolve('scripts/build-offline-dictionaries.mjs')], { stdio: 'inherit' });
