@@ -161,40 +161,7 @@ export function WsdSettings({ settings, updateSetting, availability, status, onR
             <span>Retain more</span><span>Hide more</span>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Each model has its own single-sentence calibration. Zero retained every correct calibration sense; higher levels target 1–10% misses. Actual misses can differ, especially with more context.
-          </p>
-        </div>
-      )}
-      {settings.wsdMode !== 'none' && (
-        <div className="space-y-3">
-          <Label className="text-base font-medium">Context unit</Label>
-          <div className="flex flex-wrap gap-3">
-            {(['sentence', 'paragraph'] as const).map((unit) => (
-              <Button
-                key={unit}
-                variant={settings.wsdContextUnit === unit ? 'default' : 'outline'}
-                onClick={() => updateSetting('wsdContextUnit', unit)}
-                className="min-w-[100px]"
-              >
-                {unit === 'sentence' ? 'Sentences' : 'Paragraphs'}
-              </Button>
-            ))}
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <Label>Context size</Label>
-            <span className="text-muted-foreground text-sm font-medium">
-              {settings.wsdContextSize} {settings.wsdContextUnit}{settings.wsdContextSize === 1 ? '' : 's'}
-            </span>
-          </div>
-          <Slider
-            value={[settings.wsdContextSize]}
-            min={1}
-            max={3}
-            step={1}
-            onValueChange={([size]) => updateSetting('wsdContextSize', size)}
-          />
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Includes the word’s sentence or paragraph and nearby text. More context may help or hurt and can take longer to process.
+            Each model has its own single-sentence calibration. Zero retained every correct calibration sense; higher levels target 1–10% misses. Actual misses can differ.
           </p>
         </div>
       )}

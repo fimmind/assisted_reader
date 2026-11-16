@@ -10,6 +10,7 @@ import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { WsdSettings } from '@/components/WsdSettings';
+import { OfflineDictionarySettings } from '@/components/OfflineDictionarySettings';
 import { useSettings } from '@/hooks/useSettings';
 import { useWsdStatus } from '@/hooks/useWsdStatus';
 import { useTheme } from '@/components/ThemeProvider';
@@ -2595,6 +2596,7 @@ export default function ReaderPage() {
                       if (settings.wsdMode !== 'none') startWsdModel(settings.wsdMode);
                     }}
                   />
+                  <OfflineDictionarySettings />
                 </div>
               </SheetContent>
             </Sheet>
