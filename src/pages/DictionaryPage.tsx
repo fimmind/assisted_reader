@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ChevronLeft, X } from 'lucide-react';
 import { Link } from 'wouter';
@@ -10,6 +10,50 @@ type SearchState =
   | { status: 'loading' }
   | { status: 'ready'; entries: Awaited<ReturnType<typeof searchDictionary>>; query: string }
   | { status: 'error' };
+
+type DictionaryEntry = Awaited<ReturnType<typeof searchDictionary>>[number];
+
+function DictionarySenseResult({ sense, word }: { sense: DictionaryEntry['senses'][number]; word: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const definitionsId = useId();
+  const definitions = expanded ? sense.definitions : sense.definitions.slice(0, 3);
+
+  return (
+    <section className="py-3">
+      <h3 className="mb-1 text-sm text-muted-foreground">{sense.partOfSpeech} · {sense.source}</h3>
+      <ol id={definitionsId} className="list-decimal space-y-1 pl-5 leading-relaxed marker:text-muted-foreground">
+        {definitions.map((definition, index) => (
+          <li key={index}>{definition}</li>
+        ))}
+      </ol>
+      {sense.definitions.length > 3 && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={definitionsId}
+          className="mt-1 py-0.5 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? 'Show less...' : 'Show more...'}
+          <span className="sr-only"> for {word}, {sense.partOfSpeech}, {sense.source}</span>
+        </button>
+      )}
+    </section>
+  );
+}
+
+function DictionaryEntryResult({ entry }: { entry: DictionaryEntry }) {
+  return (
+    <article className="pt-6 pb-3 break-words">
+      <h2 className="font-serif text-2xl font-medium">{entry.word}</h2>
+      <div className="mt-2 divide-y divide-border">
+        {entry.senses.map((sense) => (
+          <DictionarySenseResult key={`${sense.partOfSpeech}-${sense.source}`} sense={sense} word={entry.word} />
+        ))}
+      </div>
+    </article>
+  );
+}
 
 export default function DictionaryPage() {
   const [query, setQuery] = useState('');
@@ -94,21 +138,7 @@ export default function DictionaryPage() {
 
         <div className="divide-y divide-border">
           {entries.map((entry) => (
-            <article key={entry.word} className="pt-6 pb-3 break-words">
-              <h2 className="font-serif text-2xl font-medium">{entry.word}</h2>
-              <div className="mt-2 divide-y divide-border">
-                {entry.senses.map((sense) => (
-                  <section key={`${sense.partOfSpeech}-${sense.source}`} className="py-3">
-                    <h3 className="mb-1 text-sm text-muted-foreground">{sense.partOfSpeech} · {sense.source}</h3>
-                    <ol className="list-decimal space-y-1 pl-5 leading-relaxed marker:text-muted-foreground">
-                      {sense.definitions.map((definition, index) => (
-                        <li key={index}>{definition}</li>
-                      ))}
-                    </ol>
-                  </section>
-                ))}
-              </div>
-            </article>
+            <DictionaryEntryResult key={entry.word} entry={entry} />
           ))}
         </div>
       </main>
