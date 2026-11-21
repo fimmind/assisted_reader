@@ -1,10 +1,11 @@
 import { getDictionaryResourceGeneration, readDictionaryResource } from './offline-dictionaries';
 import {
   type LemmaInflectionIndex,
+  type LemmaDictionary,
   withLemmaInflectionIndex,
 } from './types';
 
-let lemmaDictPromise: Promise<Record<string, string>> | null = null;
+let lemmaDictPromise: Promise<LemmaDictionary> | null = null;
 let lemmaGeneration = getDictionaryResourceGeneration();
 
 const LEMMA_URL = 'data/lemma_dict.json';
@@ -20,7 +21,7 @@ function toSafeLemmaDict(payload: Record<string, unknown>): Record<string, strin
   return safeDict;
 }
 
-export async function loadLemmaDict(): Promise<Record<string, string>> {
+export async function loadLemmaDict(): Promise<LemmaDictionary> {
   const generation = getDictionaryResourceGeneration();
   if (generation !== lemmaGeneration) {
     lemmaGeneration = generation;
@@ -41,7 +42,7 @@ export async function loadLemmaDict(): Promise<Record<string, string>> {
   return lemmaDictPromise;
 }
 
-async function loadLemmaResources(): Promise<Record<string, string>> {
+async function loadLemmaResources(): Promise<LemmaDictionary> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {

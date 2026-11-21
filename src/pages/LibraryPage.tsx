@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link } from 'wouter';
-import { Moon, Sun, Settings, Upload, GraduationCap } from 'lucide-react';
+import { BookOpen, Moon, Sun, Settings, Upload, GraduationCap } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { Button } from '../components/ui/button';
 import { BookCard } from '../components/BookCard';
@@ -551,10 +551,16 @@ export default function LibraryPage() {
           <div className="font-serif text-xl lg:text-2xl font-bold tracking-tight text-primary">Easeword</div>
 
           <div className="flex items-center gap-1.5 md:gap-2.5 lg:gap-4">
+            <Button asChild variant="ghost" size="sm" className="gap-2 px-2 text-muted-foreground hover:text-foreground sm:px-3">
+              <Link href="/dictionary" aria-label="Dictionary" title="Dictionary">
+                <BookOpen size={18} />
+                <span className="hidden sm:inline">Dictionary</span>
+              </Link>
+            </Button>
             <Button
               variant="ghost"
               size="sm"
-              className="flex gap-2 text-muted-foreground hover:text-foreground"
+              className="flex gap-2 px-2 text-muted-foreground hover:text-foreground sm:px-3"
               onClick={triggerImport}
               disabled={isImporting}
               aria-label="Import book (TXT, EPUB, FB2, or PDF)"
@@ -564,7 +570,7 @@ export default function LibraryPage() {
               <span className="hidden sm:inline">{isImporting ? 'Importing...' : 'Import Book'}</span>
             </Button>
 
-            <Button variant="ghost" size="sm" onClick={() => setQuizOpen(true)} className="gap-2 text-primary hover:bg-primary hover:text-primary-foreground transition-colors">
+            <Button variant="ghost" size="sm" onClick={() => setQuizOpen(true)} className="gap-2 px-2 text-primary hover:bg-primary hover:text-primary-foreground transition-colors sm:px-3">
               <GraduationCap size={18} />
               <span className="hidden sm:inline">Quiz</span>
             </Button>
