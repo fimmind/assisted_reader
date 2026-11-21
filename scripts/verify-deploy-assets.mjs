@@ -22,6 +22,7 @@ const requiredFiles = [
   'data/lemma_dict.json',
   'data/hitchhikers_guide.epub',
   'data/lexicon/index.json',
+  'data/lexicon/headwords.json',
   'data/lexicon/inflection-index.json',
   'data/wordnet/index.json',
   'data/wordnet/LICENSE',
@@ -129,6 +130,7 @@ async function verifyDictionaryCopies() {
   for (const source of ['lexicon', 'wordnet']) {
     const files = [
       'index.json',
+      ...(source === 'lexicon' ? ['headwords.json'] : []),
       ...Array.from({ length: LEXICON_BUCKET_COUNT }, (_, bucketId) => resolveLexiconBucketFileName(bucketId)),
       ...(source === 'wordnet' ? ['LICENSE'] : []),
     ];

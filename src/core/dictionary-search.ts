@@ -1,4 +1,5 @@
 import { loadLemmaDict } from './lemma';
+import { loadDictionaryHeadwords } from './dictionary-headwords';
 import { loadWiktionaryLexicon, loadWordNet } from './lexicon';
 import type { WordNetEntry } from './lexicon';
 import { normalizeToken } from './math';
@@ -13,10 +14,17 @@ interface DictionarySenseGroup {
   definitions: string[];
 }
 
-interface DictionaryResult {
+export interface DictionaryResult {
   word: string;
   senses: DictionarySenseGroup[];
 }
+
+interface DictionarySearchPage {
+  entries: DictionaryResult[];
+  nextOffset: number | null;
+}
+
+const SEARCH_PAGE_SIZE = 20;
 
 interface HeadwordLookup {
   word: string;
@@ -65,39 +73,53 @@ function groupDefinitions({ word, wordNet, wiktionary }: HeadwordLookup, omitted
   };
 }
 
-export async function searchDictionary(query: string): Promise<DictionaryResult[]> {
+export async function searchDictionary(query: string, offset: number): Promise<DictionarySearchPage> {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new RangeError(`Invalid dictionary search offset: offset=${offset}`);
+  }
   const word = normalizeToken(query.trim());
-  if (!word) return [];
+  if (!word) return { entries: [], nextOffset: null };
 
-  const lemmaDict = await loadLemmaDict();
+  const [lemmaDict, vocabulary] = await Promise.all([loadLemmaDict(), loadDictionaryHeadwords()]);
   const index = lemmaDict[LEMMA_INFLECTION_INDEX];
   const evidence = index && Object.hasOwn(index.entries, word) ? index.entries[word] : undefined;
   const headwords = new Set([word, ...Object.keys(evidence?.lemmas ?? {})]);
   const curatedLemma = lemmaDict[word];
   if (curatedLemma) headwords.add(normalizeToken(curatedLemma));
 
-  const [original, ...baseForms] = await Promise.all(Array.from(headwords, lookupHeadword));
-  // The WordNet export includes inflection aliases that reuse the base form's synset IDs.
-  const baseSynsetIds = new Set(baseForms.flatMap(({ wordNet }) =>
-    (wordNet?.senses ?? []).flatMap((sense) => sense.definitions.map((definition) => definition.id)),
+  const completions = vocabulary.filter((candidate) => candidate.startsWith(word) && !headwords.has(candidate));
+  completions.sort((left, right) => left.length - right.length || left.localeCompare(right));
+  const candidates = [...headwords, ...completions];
+  const selectedWords = candidates.slice(offset, offset + SEARCH_PAGE_SIZE);
+  const lookups = await Promise.all(selectedWords.map(lookupHeadword));
+  const baseWords = new Set(lookups.flatMap((entry) =>
+    Object.keys(index?.entries[entry.word]?.lemmas ?? {}).filter((lemma) => lemma !== entry.word),
   ));
-  const results = [
-    groupDefinitions(original, baseSynsetIds),
-    ...baseForms.map((entry) => {
-      const result = groupDefinitions(entry, new Set<string>());
-      const relationMask = evidence?.lemmas[entry.word] ?? 0;
-      if (!relationMask || !index) return result;
-
-      const preferredPartsOfSpeech = new Set(index.positions.filter(
-        (_, position) => (relationMask & 2 ** position) !== 0,
-      ));
-      return {
-        ...result,
-        senses: [...result.senses].sort((left, right) =>
-          Number(preferredPartsOfSpeech.has(right.partOfSpeech)) - Number(preferredPartsOfSpeech.has(left.partOfSpeech)),
-        ),
-      };
-    }),
-  ];
-  return results.filter((result) => result.senses.length > 0);
+  const relatedWords = [...baseWords].filter((lemma) => candidates.includes(lemma) && !selectedWords.includes(lemma));
+  const relatedLookups = await Promise.all(relatedWords.map(lookupHeadword));
+  const entriesByWord = new Map([...lookups, ...relatedLookups].map((entry) => [entry.word, entry]));
+  // The WordNet export includes inflection aliases that reuse the base form's synset IDs.
+  const results = lookups.map((entry) => {
+    const baseSynsetIds = new Set(Object.keys(index?.entries[entry.word]?.lemmas ?? {})
+      .filter((lemma) => lemma !== entry.word)
+      .flatMap((lemma) => (entriesByWord.get(lemma)?.wordNet?.senses ?? [])
+        .flatMap((sense) => sense.definitions.map((definition) => definition.id))));
+    const result = groupDefinitions(entry, baseSynsetIds);
+    const relationMask = evidence?.lemmas[entry.word] ?? 0;
+    if (!relationMask || !index) return result;
+    const preferredPartsOfSpeech = new Set(index.positions.filter(
+      (_, position) => (relationMask & 2 ** position) !== 0,
+    ));
+    return {
+      ...result,
+      senses: [...result.senses].sort((left, right) =>
+        Number(preferredPartsOfSpeech.has(right.partOfSpeech)) - Number(preferredPartsOfSpeech.has(left.partOfSpeech)),
+      ),
+    };
+  });
+  const nextOffset = offset + selectedWords.length;
+  return {
+    entries: results.filter((result) => result.senses.length > 0),
+    nextOffset: nextOffset < candidates.length ? nextOffset : null,
+  };
 }

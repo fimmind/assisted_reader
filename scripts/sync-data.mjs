@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const source = resolve('data');
 const destination = resolve('public/data');
 
+execFileSync(process.execPath, [resolve('scripts/build-dictionary-headwords.mjs')], { stdio: 'inherit' });
 rmSync(destination, { recursive: true, force: true });
 mkdirSync(destination, { recursive: true });
 cpSync(source, destination, {

@@ -38,6 +38,7 @@ interface StoredFile {
 const DATABASE_NAME = 'easeword-offline-dictionaries';
 const STATE_KEY = 'state';
 const MANIFEST_PATH = 'data/offline-dictionaries/manifest.json';
+const HEADWORDS_PATH = 'data/lexicon/headwords.json';
 const DOWNLOAD_CONCURRENCY = 4;
 const FETCH_ATTEMPTS = 3;
 const listeners = new Set<(status: OfflineDictionaryStatus) => void>();
@@ -174,6 +175,69 @@ function validateManifest(candidate: unknown): DictionaryManifest {
   return { schemaVersion: 1, version: value.version, totalBytes, files };
 }
 
+async function hasCompleteDownload(manifest: DictionaryManifest): Promise<boolean> {
+  const database = await openDatabase();
+  try {
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const request = database.transaction('files', 'readonly').objectStore('files').getAllKeys();
+      request.onsuccess = (): void => resolve(request.result);
+      request.onerror = (): void => reject(request.error ?? new Error('Could not inspect downloaded dictionary files.'));
+    });
+    const paths = new Set(keys);
+    return manifest.files.every((file) => paths.has(file.path));
+  } finally {
+    database.close();
+  }
+}
+
+async function migrateOfflineHeadwords(manifest: DictionaryManifest, startingRevision: number): Promise<DictionaryManifest> {
+  const headwords = new Set<string>();
+  for (const file of manifest.files) {
+    if (startingRevision !== revision) return manifest;
+    const saved = await readRecord<StoredFile>('files', file.path);
+    if (!saved || saved.sha256 !== file.sha256 || !(saved.bytes instanceof ArrayBuffer)
+      || saved.bytes.byteLength !== file.compressedBytes || await hashBytes(saved.bytes) !== file.sha256) {
+      throw new Error(`Cannot update dictionary search index: downloaded file is missing or invalid: path=${file.path}`);
+    }
+    if (!/^data\/(lexicon|wordnet)\/\d{4}\.json$/.test(file.path)) continue;
+    const stream = new Blob([saved.bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    const bytes = await new Response(stream).arrayBuffer();
+    if (bytes.byteLength !== file.uncompressedBytes) {
+      throw new Error(`Cannot update dictionary search index: decompressed size mismatch: path=${file.path}`);
+    }
+    const entries: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!Array.isArray(entries)) throw new TypeError(`Invalid dictionary bucket: path=${file.path}`);
+    for (const entry of entries as Array<{ word: string; senses: Array<{ definitions: Array<string | { gloss: string }> }> }>) {
+      if (entry.senses.some((sense) => sense.definitions.some((definition) =>
+        (typeof definition === 'string' ? definition : definition.gloss).trim().length > 0,
+      ))) headwords.add(entry.word);
+    }
+  }
+  const rawBytes = new TextEncoder().encode(JSON.stringify([...headwords].sort()));
+  const compressed = new Blob([rawBytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  const bytes = await new Response(compressed).arrayBuffer();
+  const sha256 = await hashBytes(bytes);
+  const file: DictionaryFile = {
+    path: HEADWORDS_PATH,
+    asset: 'data/offline-dictionaries/lexicon/headwords.json.bin',
+    compressedBytes: bytes.byteLength,
+    uncompressedBytes: rawBytes.byteLength,
+    sha256,
+  };
+  const files = [...manifest.files, file];
+  const nextManifest: DictionaryManifest = {
+    ...manifest,
+    version: await hashBytes(new TextEncoder().encode(JSON.stringify(files)).buffer),
+    totalBytes: manifest.totalBytes + file.compressedBytes,
+    files,
+  };
+  if (startingRevision !== revision) return manifest;
+  await writeRecord('files', { path: HEADWORDS_PATH, sha256, bytes }, null);
+  if (startingRevision !== revision) return manifest;
+  await writeRecord('metadata', { enabled: true, ready: true, manifest: nextManifest }, STATE_KEY);
+  return nextManifest;
+}
+
 function initialize(): Promise<void> {
   if (!initialization) {
     const startingRevision = revision;
@@ -193,7 +257,15 @@ function initialize(): Promise<void> {
       }
       publish({ ...status, enabled: true });
       installedManifest = state.manifest ? validateManifest(state.manifest) : null;
-      const ready = state.ready && installedManifest !== null;
+      let ready = state.ready && installedManifest !== null;
+      if (installedManifest && !installedManifest.files.some((file) => file.path === HEADWORDS_PATH)
+        && (ready || await hasCompleteDownload(installedManifest))) {
+        publish({ ...status, phase: 'checking', message: 'Preparing dictionary search index.' });
+        const migratedManifest = await migrateOfflineHeadwords(installedManifest, startingRevision);
+        if (startingRevision !== revision) return;
+        installedManifest = migratedManifest;
+        ready = true;
+      }
       publish({ enabled: true, phase: requestedEnabled === false ? 'deleting' : ready ? 'ready' : requestedEnabled === true ? 'checking' : 'error', downloadedBytes: ready ? installedManifest?.totalBytes ?? 0 : 0, totalBytes: installedManifest?.totalBytes ?? 0, message: ready || requestedEnabled !== null ? null : 'Dictionary download was interrupted. Retry to continue.' });
     })().catch((error: unknown) => {
       initialization = null;
@@ -302,7 +374,7 @@ export function enableOfflineDictionaries(baseUrl: string): Promise<void> {
         installedManifest = validateManifest(await response.json() as unknown);
         await writeRecord('metadata', { enabled: true, ready: false, manifest: installedManifest }, STATE_KEY);
       }
-      const manifest = installedManifest;
+      let manifest = installedManifest;
       let downloadedBytes = 0;
       let nextFile = 0;
       publish({ enabled: true, phase: 'downloading', downloadedBytes, totalBytes: manifest.totalBytes, message: null });
@@ -320,6 +392,11 @@ export function enableOfflineDictionaries(baseUrl: string): Promise<void> {
       const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected' && !(result.reason instanceof DOMException && result.reason.name === 'AbortError'));
       if (failed) throw failed.reason;
       if (activeController.signal.aborted || currentRevision !== revision) return;
+      if (!manifest.files.some((file) => file.path === HEADWORDS_PATH)) {
+        manifest = await migrateOfflineHeadwords(manifest, currentRevision);
+        if (currentRevision !== revision) return;
+        installedManifest = manifest;
+      }
       await writeRecord('metadata', { enabled: true, ready: true, manifest }, STATE_KEY);
       if (currentRevision === revision) {
         publish({ enabled: true, phase: 'ready', downloadedBytes: manifest.totalBytes, totalBytes: manifest.totalBytes, message: null });
@@ -384,7 +461,7 @@ export async function readDictionaryResource(relativePath: string, baseUrl: stri
   const readRevision = revision;
   try {
     const file = installedManifest.files.find((entry) => entry.path === relativePath);
-    if (!file) throw new Error(`Offline dictionary resource is missing from manifest: path=${relativePath}`);
+    if (!file) throw new Error(`Offline dictionary resource is missing from manifest: path=${relativePath}. Disable and re-enable offline dictionaries in Settings to update the download.`);
     const saved = await readRecord<StoredFile>('files', relativePath);
     if (!saved || saved.sha256 !== file.sha256 || !(saved.bytes instanceof ArrayBuffer) || saved.bytes.byteLength !== file.compressedBytes || await hashBytes(saved.bytes) !== file.sha256) {
       throw new Error(`Offline dictionary resource is missing or invalid: path=${relativePath}`);

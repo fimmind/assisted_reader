@@ -5,13 +5,14 @@ import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { searchDictionary } from '@/core/dictionary-search';
+import type { DictionaryResult } from '@/core/dictionary-search';
 
 type SearchState =
   | { status: 'loading' }
-  | { status: 'ready'; entries: Awaited<ReturnType<typeof searchDictionary>>; query: string }
+  | { status: 'ready'; entries: DictionaryResult[]; nextOffset: number | null; query: string }
   | { status: 'error' };
 
-type DictionaryEntry = Awaited<ReturnType<typeof searchDictionary>>[number];
+type DictionaryEntry = DictionaryResult;
 
 function DictionarySenseResult({ sense, word }: { sense: DictionaryEntry['senses'][number]; word: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -58,6 +59,7 @@ function DictionaryEntryResult({ entry }: { entry: DictionaryEntry }) {
 export default function DictionaryPage() {
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState<SearchState | null>(null);
+  const [moreStatus, setMoreStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const searchInput = useRef<HTMLInputElement>(null);
   const latestRequest = useRef(0);
 
@@ -67,13 +69,29 @@ export default function DictionaryPage() {
     if (!word) return;
 
     const request = ++latestRequest.current;
+    setMoreStatus('idle');
     setSearch({ status: 'loading' });
     try {
-      const entries = await searchDictionary(word);
-      if (request === latestRequest.current) setSearch({ status: 'ready', entries, query: word });
+      const page = await searchDictionary(word, 0);
+      if (request === latestRequest.current) setSearch({ status: 'ready', ...page, query: word });
     } catch (error: unknown) {
       console.error('dictionary-search-failed', { word, error });
       if (request === latestRequest.current) setSearch({ status: 'error' });
+    }
+  };
+
+  const loadMoreResults = async (): Promise<void> => {
+    if (search?.status !== 'ready' || search.nextOffset === null || moreStatus === 'loading') return;
+    const request = ++latestRequest.current;
+    setMoreStatus('loading');
+    try {
+      const page = await searchDictionary(search.query, search.nextOffset);
+      if (request !== latestRequest.current) return;
+      setSearch({ ...search, entries: [...search.entries, ...page.entries], nextOffset: page.nextOffset });
+      setMoreStatus('idle');
+    } catch (error: unknown) {
+      console.error('dictionary-more-results-failed', { word: search.query, offset: search.nextOffset, error });
+      if (request === latestRequest.current) setMoreStatus('error');
     }
   };
 
@@ -141,6 +159,19 @@ export default function DictionaryPage() {
             <DictionaryEntryResult key={entry.word} entry={entry} />
           ))}
         </div>
+        {search?.status === 'ready' && search.nextOffset !== null && (
+          <div className="py-3">
+            {moreStatus === 'error' && <p role="alert" className="text-sm text-muted-foreground">Couldn’t load more results. Try again.</p>}
+            <button
+              type="button"
+              disabled={moreStatus === 'loading'}
+              onClick={loadMoreResults}
+              className="py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+            >
+              {moreStatus === 'loading' ? 'Loading…' : 'Show more results...'}
+            </button>
+          </div>
+        )}
       </main>
     </div>
   );

@@ -39,6 +39,7 @@ function sourcePaths(sourceDirectory) {
   return [
     ...buckets.filter((file) => file.startsWith('lexicon/')),
     'lexicon/index.json',
+    'lexicon/headwords.json',
     'lexicon/inflection-index.json',
     ...buckets.filter((file) => file.startsWith('wordnet/')),
     'wordnet/index.json',
