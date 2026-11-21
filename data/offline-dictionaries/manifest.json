@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "f0917f68019d578019a4a7aef79339e1bb3b2b25884629376b732a23764465de",
-  "totalBytes": 44143101,
+  "version": "a62fd58523c992a606831a29953a6cbb36f63f4f49d2b686509ce4161128f767",
+  "totalBytes": 47114497,
   "files": [
     {
       "path": "data/lexicon/0000.json",
@@ -7177,6 +7177,13 @@
       "compressedBytes": 94,
       "uncompressedBytes": 88,
       "sha256": "a52dcd89c605128e13f372e8f3758e1617832cb9ebf0dbe990e237fae4a1da08"
+    },
+    {
+      "path": "data/lexicon/headwords.json",
+      "asset": "data/offline-dictionaries/lexicon/headwords.json.bin",
+      "compressedBytes": 2971396,
+      "uncompressedBytes": 12979047,
+      "sha256": "a2709eb476357d7c27a44b865c61c0b7c82c3575eb8ca0f277881be109fa1c9e"
     },
     {
       "path": "data/lexicon/inflection-index.json",
