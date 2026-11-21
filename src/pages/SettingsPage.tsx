@@ -226,7 +226,7 @@ export default function SettingsPage() {
             <p className="text-sm text-muted-foreground mt-1">Control how intrusive the inline help is.</p>
           </div>
 
-          <div className="space-y-6 max-w-md">
+          <div className="space-y-6">
             <div className="flex justify-between">
               <Label>Max highlighted words per paragraph</Label>
               <span className="text-muted-foreground text-sm font-medium">{settings.maxWordsPerParagraph}</span>
